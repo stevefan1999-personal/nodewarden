@@ -4,16 +4,14 @@ import { and, count, eq } from 'drizzle-orm';
 import { chunkRows, columnCount, getOrm } from '../db/client';
 import { attachments, backupRestoreRows, ciphers, folders, organizations, sends } from '../db/schema';
 import { bound, coalesce, jsonExtract } from '../db/sql';
-import type { Env, User } from '../types';
+import type { Env } from '../types';
 import { KV_MAX_OBJECT_BYTES, deleteBlobObject, getBlobStorageKind, putBlobObject } from './blob-store';
-import { BACKUP_SETTINGS_CONFIG_KEY, normalizeImportedBackupSettingsValue } from './backup-config';
-import { YUBICO_BOOTSTRAP_CLAIM_CONFIG_KEY } from './yubico-config';
 import {
   BACKUP_TABLE_NAMES,
   BACKUP_TABLES,
+  INSTANCE_LOCAL_CONFIG_KEYS,
   archivedFiles,
   backupColumns,
-  externalFiles,
   type ArchivedFile,
   type BackupPayload,
   type BackupTableName,
@@ -98,73 +96,31 @@ async function collectCurrentBlobKeys(db: D1Database): Promise<Set<string>> {
 
 const KV_BLOB_SKIP_REASON = 'Cloudflare KV object size limit (25 MB)';
 const BLOB_STORAGE_UNAVAILABLE_SKIP_REASON = 'Attachment storage is not configured';
-const REMOTE_FILES_UNAVAILABLE_REASON = 'Some remote attachments were unavailable and were skipped';
 const FILE_RESTORE_FAILED_REASON = 'Some attachments could not be restored and were skipped';
-
-interface RemoteAttachmentSource {
-  loadAttachment(blobName: string): Promise<Uint8Array | null>;
-}
-
-export interface BackupRestoreProgressEvent {
-  source: 'local' | 'remote';
-  step: string;
-  fileName: string;
-  stageTitle: string;
-  stageDetail: string;
-  replaceExisting: boolean;
-  done?: boolean;
-  ok?: boolean;
-  error?: string | null;
-}
-
-export type BackupRestoreProgressReporter = (event: BackupRestoreProgressEvent) => Promise<void> | void;
-
-function upsertConfigRow(rows: SqlRow[], key: string, value: string): SqlRow[] {
-  let replaced = false;
-  const nextRows = rows.map((row) => {
-    if (String(row.key || '').trim() !== key) return { ...row };
-    replaced = true;
-    return { ...row, key, value };
-  });
-  if (!replaced) {
-    nextRows.push({ key, value });
-  }
-  return nextRows;
-}
 
 export async function importBackupArchiveBytes(
   archiveBytes: Uint8Array,
   env: Env,
   actorUserId: string,
   replaceExisting: boolean,
-  source: RemoteAttachmentSource | null = null,
-  progress?: BackupRestoreProgressReporter,
-  fileName: string = 'nodewarden_backup.zip',
 ): Promise<BackupImportExecutionResult> {
-  // A local archive carries every file inline and validates as-is. A remote one keeps its files at the
-  // destination, so its file-owning rows are fitted to what that source supplies before validation.
-  const restoreSource = source ? 'remote' : 'local';
-  const parsed = parseBackupArchive(archiveBytes, { allowExternalAttachmentBlobs: !!source });
-  if (!source) validateBackupPayloadContents(parsed.payload, parsed.files);
-  const external = source
-    ? externalFiles(parsed.payload.manifest)
-    : new Map<string, { blobName: string; sizeBytes: number }>();
+  const parsed = parseBackupArchive(archiveBytes);
+  validateBackupPayloadContents(parsed.payload, parsed.files);
   const storageKind = getBlobStorageKind(env);
   const describe = (file: ArchivedFile) => {
     const inline = parsed.files[`attachments/${file.key}.bin`];
-    const ref = external.get(file.key);
     const item: SkippedFile = {
       kind: file.table === 'sends' ? 'send' : 'attachment',
-      path: ref ? `attachments/${ref.blobName}` : `attachments/${file.key}.bin`,
-      sizeBytes: inline?.byteLength ?? ref?.sizeBytes ?? file.sizeBytes,
+      path: `attachments/${file.key}.bin`,
+      sizeBytes: inline?.byteLength ?? file.sizeBytes,
     };
-    return { inline, ref, item };
+    return { inline, item };
   };
   // Fit the files to this instance's blob storage: R2 takes every file, KV only files within its object
   // size limit, and without storage no file-owning row restores. A row whose file does not fit is left out.
   const unfit = archivedFiles(parsed.payload.db).filter((file) => {
-    const { inline, ref, item } = describe(file);
-    return !(inline || ref) || !storageKind || (storageKind === 'kv' && item.sizeBytes > KV_MAX_OBJECT_BYTES);
+    const { inline, item } = describe(file);
+    return !inline || !storageKind || (storageKind === 'kv' && item.sizeBytes > KV_MAX_OBJECT_BYTES);
   });
   const unfitRows = new Set(unfit.map(({ row }) => row));
   const prepared = {
@@ -177,29 +133,8 @@ export async function importBackupArchiveBytes(
       },
     },
     skipped: unfit.map((file) => describe(file).item),
-    reason: !unfit.length
-      ? null
-      : source
-        ? REMOTE_FILES_UNAVAILABLE_REASON
-        : storageKind
-          ? KV_BLOB_SKIP_REASON
-          : BLOB_STORAGE_UNAVAILABLE_SKIP_REASON,
+    reason: !unfit.length ? null : storageKind ? KV_BLOB_SKIP_REASON : BLOB_STORAGE_UNAVAILABLE_SKIP_REASON,
   };
-  if (source) validateBackupPayloadContents(prepared.payload, parsed.files, { allowExternalAttachmentBlobs: true });
-  const report = (
-    step: string,
-    stage: string,
-    outcome: Pick<BackupRestoreProgressEvent, 'done' | 'ok' | 'error'> = {},
-  ) =>
-    progress?.({
-      source: restoreSource,
-      step: `${restoreSource}_${step}`,
-      fileName,
-      stageTitle: `txt_backup_restore_progress_${restoreSource}_${stage}_title`,
-      stageDetail: `txt_backup_restore_progress_${restoreSource}_${stage}_detail`,
-      replaceExisting,
-      ...outcome,
-    });
   const orm = getOrm(env.DB);
 
   try {
@@ -223,26 +158,14 @@ export async function importBackupArchiveBytes(
   await orm.delete(backupRestoreRows);
   const previousBlobKeys = replaceExisting ? await collectCurrentBlobKeys(env.DB) : new Set<string>();
   try {
-    await report('import_data', 'data');
-    let configRows = prepared.payload.db.config.filter(
-      (row) => String(row.key || '').trim() !== YUBICO_BOOTSTRAP_CLAIM_CONFIG_KEY,
-    );
-    const rawBackupSettings = configRows.find((row) => String(row.key || '').trim() === BACKUP_SETTINGS_CONFIG_KEY);
-    const normalizedBackupSettings = await normalizeImportedBackupSettingsValue(
-      typeof rawBackupSettings?.value === 'string' ? rawBackupSettings.value : null,
-      env,
-      prepared.payload.db.users.map((row) => ({
-        id: String(row.id || '').trim(),
-        publicKey: typeof row.public_key === 'string' ? row.public_key : null,
-        role: String(row.role || '').trim() as User['role'],
-        status: String(row.status || '').trim() as User['status'],
-      })),
-      'UTC',
-    );
-    if (normalizedBackupSettings !== null) {
-      configRows = upsertConfigRow(configRows, BACKUP_SETTINGS_CONFIG_KEY, normalizedBackupSettings);
-    }
-    configRows = upsertConfigRow(configRows, 'registered', 'true');
+    // A restored instance counts as registered, whatever the archive says.
+    const configRows: SqlRow[] = [
+      ...prepared.payload.db.config.filter((row) => {
+        const key = String(row.key || '').trim();
+        return key !== 'registered' && !INSTANCE_LOCAL_CONFIG_KEYS.has(key);
+      }),
+      { key: 'registered', value: 'true' },
+    ];
     const db: BackupPayload['db'] = {
       ...prepared.payload.db,
       config: configRows,
@@ -280,15 +203,14 @@ export async function importBackupArchiveBytes(
     const stagedCounts = Object.fromEntries(BACKUP_TABLE_NAMES.map((name) => [name, db[name].length]));
     await validateStagedCounts(env.DB, stagedCounts);
 
-    await report('restore_files', 'files');
     // Store each file under its blob key. A row whose file is missing or cannot be stored leaves the staging
     // table and is reported as skipped; a failed drop is left to the count validation below.
     const files = archivedFiles(db);
     const failedRows = new Set<SqlRow>();
     for (const file of files) {
-      const { inline, ref } = describe(file);
+      const { inline } = describe(file);
       try {
-        const bytes = inline ?? (ref && source ? await source.loadAttachment(ref.blobName) : null);
+        const bytes = inline;
         if (!bytes) throw new Error('Backup file is unavailable');
         await putBlobObject(env, file.key, bytes, { size: bytes.byteLength, contentType: 'application/octet-stream' });
       } catch {
@@ -312,7 +234,6 @@ export async function importBackupArchiveBytes(
       attachments: restored('attachments').rows,
       sends: restored('sends').rows,
     });
-    await report('finalize', 'finalize');
     // Commit by replacing every live table from the staged rows in one batch, so the live data changes only if
     // all of it applies. Live constraints check the archive here: a missing required value, a duplicate key or a
     // dangling reference rolls the batch back. Columns are copied by name, as a live table's physical column
@@ -360,7 +281,6 @@ export async function importBackupArchiveBytes(
       }
     }
 
-    await report('complete', 'finalize', { done: true, ok: true });
     const skippedItems = [...prepared.skipped, ...failed.map((file) => describe(file).item)];
     return {
       auditActorUserId: db.users.some((row) => String(row.id || '').trim() === actorUserId) ? actorUserId : null,
@@ -388,11 +308,6 @@ export async function importBackupArchiveBytes(
       },
     };
   } catch (error) {
-    await report('failed', 'finalize', {
-      done: true,
-      ok: false,
-      error: error instanceof Error ? error.message : String(error),
-    });
     await orm.delete(backupRestoreRows).catch(() => undefined);
     throw error;
   }

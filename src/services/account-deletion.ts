@@ -15,7 +15,6 @@ import {
 import { scalar, unmapped } from '../db/sql';
 import type { Env } from '../types';
 import { AuthService } from './auth';
-import { normalizeImportedBackupSettings } from './backup-config';
 import { syncVaultAdminRoles } from './vault-admin-role';
 import { auditEventStatement, writeAuditEvent, type AuditEventInput } from './audit-events';
 import { deleteBlobObjects, getAttachmentObjectKey, getSendFileObjectKey } from './blob-store';
@@ -140,7 +139,6 @@ export async function setUserStatus(
   } else {
     await syncVaultAdminRoles(env);
   }
-  if (user.role === 'admin') await normalizeImportedBackupSettings(env.DB, env);
   return { kind: 'updated' };
 }
 

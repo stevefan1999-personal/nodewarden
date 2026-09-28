@@ -70,6 +70,7 @@ registerHooks({
       : nextResolve(specifier, context),
 });
 const { default: worker } = await import('../../index');
+const { BackupTransferRunner } = await import('../../durable/backup-transfer-runner');
 
 const executionContext = { waitUntil, passThroughOnException: () => {} } as unknown as ExecutionContext;
 
@@ -88,19 +89,40 @@ await worker.fetch(new Request(`${TEST_ORIGIN}/api/alive`), await createTestEnv(
 export async function createTestEnv(overrides: Partial<Env> = {}): Promise<Env> {
   cachedResponses.clear();
   rateLimitCounts.clear();
-  return {
+  const env = {
     DB: await createSqliteD1(),
     JWT_SECRET: TEST_JWT_SECRET,
     NOTIFICATIONS_HUB: acceptingDurableObjectNamespace,
+    BACKUPS: memoryR2().binding,
     ...rateLimitBindings,
     ...overrides,
   } as Env;
+  // The deployment's one backup runner, its lease kept in Durable Object storage held in memory.
+  if (!env.BACKUP_TRANSFER_RUNNER) {
+    const stored = new Map<string, unknown>();
+    const storage = {
+      get: async (key: string) => stored.get(key),
+      put: async (key: string, value: unknown) => void stored.set(key, value),
+      delete: async (key: string) => stored.delete(key),
+    };
+    const runner = new BackupTransferRunner({ storage } as unknown as DurableObjectState, env);
+    env.BACKUP_TRANSFER_RUNNER = {
+      idFromName: (name: string) => name,
+      get: () => runner,
+    } as unknown as Env['BACKUP_TRANSFER_RUNNER'];
+  }
+  return env;
 }
 
 export function memoryKv(): { binding: KVNamespace; values: Map<string, string> } {
   const values = new Map<string, string>();
   const binding = {
     get: async (key: string) => values.get(key) ?? null,
+    // Blob reads ask for bytes, which a restore may have stored as a Uint8Array; the metadata a put carries is not kept.
+    getWithMetadata: async (key: string) => {
+      const value = values.get(key);
+      return { value: value === undefined ? null : await new Response(value).arrayBuffer(), metadata: null };
+    },
     put: async (key: string, value: string) => {
       values.set(key, value);
     },
@@ -109,6 +131,65 @@ export function memoryKv(): { binding: KVNamespace; values: Map<string, string> 
     },
   } as KVNamespace;
   return { binding, values };
+}
+
+export interface StoredR2Object {
+  bytes: Uint8Array;
+  uploaded: Date;
+  contentType: string | undefined;
+}
+
+// An R2 bucket in memory with the calls backups make, listing keys in order a page at a time as R2 does.
+export function memoryR2(): { binding: R2Bucket; objects: Map<string, StoredR2Object> } {
+  const LIST_PAGE_KEYS = 1000;
+  const objects = new Map<string, StoredR2Object>();
+  const describe = (key: string, { bytes, uploaded, contentType }: StoredR2Object) => ({
+    key,
+    size: bytes.byteLength,
+    uploaded,
+    httpMetadata: { contentType },
+  });
+  const binding = {
+    async put(key: string, value: BodyInit, options?: R2PutOptions) {
+      const httpMetadata = options?.httpMetadata;
+      const stored = {
+        bytes: new Uint8Array(await new Response(value).arrayBuffer()),
+        uploaded: new Date(),
+        contentType: httpMetadata instanceof Headers ? undefined : httpMetadata?.contentType,
+      };
+      objects.set(key, stored);
+      return describe(key, stored);
+    },
+    async get(key: string) {
+      const stored = objects.get(key);
+      if (!stored) return null;
+      return {
+        ...describe(key, stored),
+        body: new Response(stored.bytes).body,
+        arrayBuffer: async () => stored.bytes.slice().buffer,
+      };
+    },
+    async head(key: string) {
+      const stored = objects.get(key);
+      return stored ? describe(key, stored) : null;
+    },
+    async list(options: R2ListOptions = {}) {
+      const keys = [...objects.keys()].filter((key) => key.startsWith(options.prefix ?? '')).toSorted();
+      const start = Number(options.cursor ?? 0);
+      const page = keys.slice(start, start + (options.limit ?? LIST_PAGE_KEYS));
+      const next = start + page.length;
+      return {
+        objects: page.map((key) => describe(key, objects.get(key)!)),
+        truncated: next < keys.length,
+        cursor: String(next),
+        delimitedPrefixes: [],
+      };
+    },
+    async delete(keys: string | string[]) {
+      for (const key of [keys].flat()) objects.delete(key);
+    },
+  } as unknown as R2Bucket;
+  return { binding, objects };
 }
 
 export async function seedUser(env: Env, overrides: Partial<User> = {}): Promise<User> {

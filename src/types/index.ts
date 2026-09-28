@@ -21,6 +21,8 @@ export interface Env {
   ATTACHMENTS?: R2Bucket;
   // Optional fallback for attachment/send file storage (no credit card required).
   ATTACHMENTS_KV?: KVNamespace;
+  // Instance backup archives, in both storage modes. Without it backups are unavailable.
+  BACKUPS?: R2Bucket;
   CACHE_KV?: KVNamespace;
   EMAIL?: import('../services/mail').SendEmailBinding;
   ADMIN_EMAILS?: string;
@@ -570,8 +572,6 @@ export interface TokenResponse {
   ResetMasterPassword: boolean;
   scope: string;
   unofficialServer: boolean;
-  UserVerificationToken?: string;
-  userVerificationToken?: string;
   MasterPasswordPolicy?: {
     minComplexity: number;
     minLength: number;

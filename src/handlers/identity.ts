@@ -39,7 +39,6 @@ import {
   buildTwoFactorPasskeyAssertionOptions,
 } from './account-passkeys';
 import { isAuthRequestLoginApproved } from '../services/storage-auth-request-repo';
-import { createPasskeyUserVerificationToken } from '../utils/user-verification-token';
 import { verifyApiKey } from '../utils/api-key';
 import { userYubiKeyPublicIds, verifyYubicoOtp, yubiKeyPublicIdFromOtp } from '../utils/yubico-otp';
 import { getYubicoCredentials, initializeYubicoCredentialsOnce } from '../services/yubico-config';
@@ -370,8 +369,6 @@ interface TokenResponseExtras {
   twoFactorToken?: string;
   // Password grant approved through an auth request: the key the approving device wrapped.
   key?: string | null;
-  // Passkey grant: proves user verification to the settings that require it.
-  userVerificationToken?: string;
   prfOption?: Parameters<typeof buildUserDecryptionOptions>[1];
 }
 
@@ -407,9 +404,6 @@ function tokenResponse(
     ApiUseKeyConnector: false,
     scope: 'api offline_access',
     unofficialServer: true,
-    ...(extras.userVerificationToken === undefined
-      ? {}
-      : { UserVerificationToken: extras.userVerificationToken, userVerificationToken: extras.userVerificationToken }),
     UserDecryptionOptions: userDecryptionOptions,
     userDecryptionOptions: userDecryptionOptions,
   };
@@ -926,12 +920,11 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
 
     await rateLimit.clearLoginAttempts(loginIdentifier);
 
-    const userVerificationToken = await createPasskeyUserVerificationToken(env, user.id, 'backup.settings.repair');
     return completeLogin(
       request,
       env,
       { user, body, deviceInfo, deviceSession, grantType },
-      { userVerificationToken, prfOption: buildAccountPasskeyTokenUserDecryptionOption(credential) },
+      { prfOption: buildAccountPasskeyTokenUserDecryptionOption(credential) },
       { action: 'auth.passkey.login.success', targetType: 'accountPasskey', targetId: credential.id },
     );
   } else if (body.grant_type === 'client_credentials') {

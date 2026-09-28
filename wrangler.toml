@@ -101,6 +101,11 @@ class_name = "BackupTransferRunner"
 binding = "ATTACHMENTS"
 bucket_name = "nodewarden-attachments"
 
+# Instance backup archives.
+[[r2_buckets]]
+binding = "BACKUPS"
+bucket_name = "nodewarden-backups"
+
 # Per-minute budgets for RateLimitService.consumeBudget, one per distinct limit in src/config/limits.ts:
 # 30 refresh per session, 60 public, 120 public read, 200 authenticated API, 300 refresh per IP, 500 icons.
 [[ratelimits]]

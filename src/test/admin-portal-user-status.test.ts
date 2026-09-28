@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import { subtle } from 'node:crypto';
 import test from 'node:test';
 import { eq, like } from 'drizzle-orm';
 
@@ -11,8 +10,6 @@ import { jsonSet } from '../db/sql';
 import { upsertCredentialAccount } from '../services/auth-accounts';
 import { hashPassword } from '../services/auth-password';
 import { setUserStatus } from '../services/account-deletion';
-import { BACKUP_SETTINGS_CONFIG_KEY, getDefaultBackupSettings, saveBackupSettings } from '../services/backup-config';
-import { parseBackupSettingsEnvelope } from '../services/backup-settings-crypto';
 import {
   authedFetch,
   createTestEnv,
@@ -23,7 +20,6 @@ import {
   signInToAdminPortal,
 } from './support/env';
 import * as sessionRepo from '../services/storage-session-repo';
-import * as configRepo from '../services/storage-config-repo';
 import * as deviceRepo from '../services/storage-device-repo';
 import * as userRepo from '../services/storage-user-repo';
 
@@ -154,29 +150,6 @@ test('both admin surfaces refuse the last active vault administrator; stale user
     401,
   );
   assert.deepEqual(await setUserStatus(env, 'missing', 'active', audit), { kind: 'not-found' });
-  await drainWaitUntil();
-});
-
-test('disabling an administrator re-wraps backup settings without their key, and enabling restores it', async () => {
-  const env = await createTestEnv();
-  const { publicKey } = await subtle.generateKey(
-    { name: 'RSA-OAEP', modulusLength: 2048, publicExponent: Uint8Array.of(1, 0, 1), hash: 'SHA-1' },
-    true,
-    ['encrypt', 'decrypt'],
-  );
-  const spki = Buffer.from(await subtle.exportKey('spki', publicKey)).toString('base64');
-  const admin = await seedUser(env, { role: 'admin', publicKey: spki });
-  const target = await seedUser(env, { role: 'admin', publicKey: spki });
-  await saveBackupSettings(env.DB, env, getDefaultBackupSettings());
-  const wraps = async () =>
-    parseBackupSettingsEnvelope(await configRepo.getConfigValue(env.DB, BACKUP_SETTINGS_CONFIG_KEY))!
-      .portable.wraps.map((wrap) => wrap.userId)
-      .sort();
-  assert.deepEqual(await wraps(), [admin.id, target.id].sort());
-  assert.deepEqual(await setUserStatus(env, target.id, 'banned', audit), { kind: 'updated' });
-  assert.deepEqual(await wraps(), [admin.id]);
-  assert.deepEqual(await setUserStatus(env, target.id, 'active', audit), { kind: 'updated' });
-  assert.deepEqual(await wraps(), [admin.id, target.id].sort());
   await drainWaitUntil();
 });
 

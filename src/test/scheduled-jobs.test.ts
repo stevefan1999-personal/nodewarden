@@ -14,7 +14,7 @@ const controller = { cron: '*/5 * * * *', scheduledTime: Date.now(), noRetry() {
 test('a failed scheduled job fails the cron invocation by name while the other jobs still run', async (t) => {
   t.mock.method(console, 'error', () => {});
   const env = await createTestEnv({
-    // A runner with no destinations configured, as a real one finds on an instance without backups.
+    // A runner with no backup due, as a real one finds on an instance whose schedule is off.
     BACKUP_TRANSFER_RUNNER: {
       idFromName: (name: string) => name,
       get: () => ({ runScheduledBackups: async () => {} }),

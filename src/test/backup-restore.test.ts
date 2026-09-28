@@ -53,7 +53,8 @@ const rowsOf = (db: D1Database, table: SQLiteTable, orderBy: SQLiteColumn) =>
 const byKey = (key: string) => (left: Row, right: Row) => (String(left[key]) < String(right[key]) ? -1 : 1);
 
 test('backup restore brings back every archived value, fills legacy defaults and keeps runtime-only columns empty', async () => {
-  const source = await createTestEnv();
+  const blobs = memoryKv();
+  const source = await createTestEnv({ ATTACHMENTS_KV: blobs.binding });
   const owner = await seedUser(source, {
     apiKey: 'runtime-api-key',
     kdfMemory: 64,
@@ -153,6 +154,8 @@ test('backup restore brings back every archived value, fills legacy defaults and
     updatedAt: 'u7',
   });
 
+  await blobs.binding.put('cipher-1/att-1', 'blob-1');
+  await blobs.binding.put('cipher-1/att-2', 'blob-2');
   const archive = await buildBackupArchive(source, new Date(), { includeAttachments: true });
   const files = unzipSync(archive.bytes);
   const archived = JSON.parse(new TextDecoder().decode(files['db.json'])) as Record<string, Row[]>;
@@ -165,20 +168,16 @@ test('backup restore brings back every archived value, fills legacy defaults and
 
   const kv = memoryKv();
   const restored = await createTestEnv({ ATTACHMENTS_KV: kv.binding });
-  // The remote source can still supply only one of the two attachment blobs.
-  const outcome = await importBackupArchiveBytes(zipSync(files), restored, owner.id, false, {
-    loadAttachment: async (blobName) => (blobName === 'cipher-1/att-1' ? new TextEncoder().encode('blob') : null),
-  });
-  assert.equal(outcome.result.imported.attachments, 1);
-  assert.equal(outcome.result.skipped.attachments, 1);
-  assert.deepEqual([...kv.values.keys()], ['cipher-1/att-1']);
+  const outcome = await importBackupArchiveBytes(zipSync(files), restored, owner.id, false);
+  assert.equal(outcome.result.imported.attachments, 2);
+  assert.equal(outcome.result.skipped.attachments, 0);
+  assert.deepEqual([...kv.values.keys()], ['cipher-1/att-1', 'cipher-1/att-2']);
 
   const expected: Record<string, Row[]> = {
     ...archived,
     domain_settings: archived.domain_settings.map((row) =>
       row.user_id === owner.id ? { ...row, custom_equivalent_domains: '[]' } : row,
     ),
-    attachments: archived.attachments.filter((row) => row.id === 'att-1'),
   };
   for (const [table, orderBy] of RESTORED_TABLES) {
     const name = getTableName(table);
@@ -359,8 +358,10 @@ test('backup restore without replace refuses an instance that already has an org
 });
 
 test('file Sends travel with their files the way attachments do', async () => {
-  const source = await createTestEnv();
+  const blobs = memoryKv();
+  const source = await createTestEnv({ ATTACHMENTS_KV: blobs.binding });
   const owner = await seedUser(source);
+  await blobs.binding.put('sends/file-send/file-1', 'file');
   const send = (id: string, type: SendType, data: object) => ({
     id,
     userId: owner.id,
@@ -387,13 +388,12 @@ test('file Sends travel with their files the way attachments do', async () => {
   assert.deepEqual(archive.manifest.sendFileBlobs, [
     { sendId: 'file-send', fileId: 'file-1', blobName: 'sends/file-send/file-1', sizeBytes: 4 },
   ]);
-  const files = unzipSync(archive.bytes);
-  files['attachments/sends/file-send/file-1.bin'] = Buffer.from('file');
+  assert.equal(new TextDecoder().decode(unzipSync(archive.bytes)['attachments/sends/file-send/file-1.bin']), 'file');
 
-  // A local archive carries the file inline; restore stores it under the Send's blob key.
+  // The archive carries the file inline; restore stores it under the Send's blob key.
   const local = memoryKv();
   const restored = await importBackupArchiveBytes(
-    zipSync(files),
+    archive.bytes,
     await createTestEnv({ ATTACHMENTS_KV: local.binding }),
     owner.id,
     false,
@@ -401,24 +401,9 @@ test('file Sends travel with their files the way attachments do', async () => {
   assert.deepEqual([restored.result.imported.sends, restored.result.imported.sendFiles], [2, 1]);
   assert.deepEqual([...local.values.keys()], ['sends/file-send/file-1']);
 
-  // A remote destination supplies it by blob name instead.
-  const remote = memoryKv();
-  const requested: string[] = [];
-  await importBackupArchiveBytes(
-    archive.bytes,
-    await createTestEnv({ ATTACHMENTS_KV: remote.binding }),
-    owner.id,
-    false,
-    {
-      loadAttachment: async (blobName) => (requested.push(blobName), Buffer.from('file')),
-    },
-  );
-  assert.deepEqual(requested, ['sends/file-send/file-1']);
-  assert.deepEqual([...remote.values.keys()], ['sends/file-send/file-1']);
-
   // Without blob storage the file Send cannot restore; it is left out and reported.
   const noStorage = await createTestEnv();
-  const skipped = await importBackupArchiveBytes(zipSync(files), noStorage, owner.id, false);
+  const skipped = await importBackupArchiveBytes(archive.bytes, noStorage, owner.id, false);
   assert.deepEqual(skipped.result.skipped.items, [
     { kind: 'send', path: 'attachments/sends/file-send/file-1.bin', sizeBytes: 4 },
   ]);

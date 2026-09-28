@@ -48,10 +48,9 @@ import {
 import { unmapped } from '../db/sql';
 import { SendType, type Env } from '../types';
 import { APP_VERSION } from '../../shared/app-version';
-import { BACKUP_SETTINGS_CONFIG_KEY } from './backup-config';
+import { BACKUP_STATUS_CONFIG_KEY, RETIRED_BACKUP_CONFIG_KEYS } from './backup-config';
 import { YUBICO_BOOTSTRAP_CLAIM_CONFIG_KEY } from './yubico-config';
-import { exportPortableBackupSettingsEnvelope } from './backup-settings-crypto';
-import { getAttachmentObjectKey, getBlobStorageKind, getSendFileObjectKey } from './blob-store';
+import { getAttachmentObjectKey, getBlobObject, getBlobStorageKind, getSendFileObjectKey } from './blob-store';
 import { jsonText } from './org-types';
 
 // CONTRACT:
@@ -66,13 +65,19 @@ import { jsonText } from './org-types';
 // - Runtime authentication state (devices, sessions, auth requests, remembered
 //   2FA devices, and one-time tokens) must never enter an instance backup.
 // - users.api_key is intentionally not exported.
-// - backup.settings.v1 is exported as portable-only; the current server runtime
-//   envelope must not leave the instance.
+// - Config rows in INSTANCE_LOCAL_CONFIG_KEYS never leave the instance, and
+//   restore never writes them.
 type SqlRow = Record<string, string | number | null>;
 
 // Format 2 added organizations, Sends, Secrets Manager, emergency access and event history.
 const BACKUP_FORMAT_VERSION = 2;
-const BACKUP_RUNNER_LOCK_CONFIG_KEY = 'backup.runner.lock.v1';
+// Config rows that stay with their instance: the Yubico bootstrap claim, the backup status and the rows of the
+// WebDAV-era backup destinations.
+export const INSTANCE_LOCAL_CONFIG_KEYS: ReadonlySet<string> = new Set([
+  YUBICO_BOOTSTRAP_CLAIM_CONFIG_KEY,
+  BACKUP_STATUS_CONFIG_KEY,
+  ...RETIRED_BACKUP_CONFIG_KEYS,
+]);
 const BACKUP_FILE_HASH_PREFIX_LENGTH = 5;
 // Worker-side backup export must stay well below Cloudflare CPU limits.
 // Prefer store-only ZIP entries over heavier compression to keep exports reliable.
@@ -311,24 +316,6 @@ export function archivedFiles(db: Pick<BackupPayload['db'], 'attachments' | 'sen
   ];
 }
 
-// The files a remote destination keeps for an archive, by blob storage key, with the name to fetch each by.
-export function externalFiles(
-  manifest: BackupPayload['manifest'],
-): Map<string, { blobName: string; sizeBytes: number }> {
-  return new Map(
-    [
-      ...manifest.attachmentBlobs.map(
-        ({ cipherId, attachmentId, blobName, sizeBytes }) =>
-          [getAttachmentObjectKey(cipherId, attachmentId), { blobName, sizeBytes }] as const,
-      ),
-      ...manifest.sendFileBlobs.map(
-        ({ sendId, fileId, blobName, sizeBytes }) =>
-          [getSendFileObjectKey(sendId, fileId), { blobName, sizeBytes }] as const,
-      ),
-    ].filter(([key, { blobName }]) => isSafeBackupBlobName(key) && isSafeBackupBlobName(blobName)),
-  );
-}
-
 function validateBackupEntryName(name: string): void {
   const normalized = String(name || '').trim();
   if (normalized !== name || !normalized) {
@@ -352,14 +339,7 @@ function validateBackupEntryName(name: string): void {
   }
 }
 
-export interface ParseBackupArchiveOptions {
-  allowExternalAttachmentBlobs?: boolean;
-}
-
-export function parseBackupArchive(
-  bytes: Uint8Array,
-  options: ParseBackupArchiveOptions = {},
-): { payload: BackupPayload; files: Record<string, Uint8Array> } {
+export function parseBackupArchive(bytes: Uint8Array): { payload: BackupPayload; files: Record<string, Uint8Array> } {
   if (bytes.byteLength > MAX_BACKUP_ARCHIVE_BYTES) {
     throw new Error(
       `Backup archive is too large. The current restore limit is ${MAX_BACKUP_ARCHIVE_BYTES / BYTES_PER_MIB} MiB`,
@@ -439,10 +419,9 @@ export function parseBackupArchive(
   const payload = parsed.data;
 
   // A file with an unsafe key is reported by validateBackupPayloadContents() as an invalid row.
-  const external = options.allowExternalAttachmentBlobs ? externalFiles(payload.manifest) : new Map();
   for (const { key } of archivedFiles(payload.db)) {
     const entry = `attachments/${key}.bin`;
-    if (isSafeBackupBlobName(key) && !external.has(key) && !zipped[entry]) {
+    if (isSafeBackupBlobName(key) && !zipped[entry]) {
       throw new Error(`Backup archive is missing required file: ${entry}`);
     }
   }
@@ -453,15 +432,7 @@ export function parseBackupArchive(
   };
 }
 
-export interface ValidateBackupPayloadOptions {
-  allowExternalAttachmentBlobs?: boolean;
-}
-
-export function validateBackupPayloadContents(
-  payload: BackupPayload,
-  files: Record<string, Uint8Array>,
-  options: ValidateBackupPayloadOptions = {},
-): void {
+export function validateBackupPayloadContents(payload: BackupPayload, files: Record<string, Uint8Array>): void {
   const {
     config: configRows,
     users: userRows,
@@ -472,7 +443,6 @@ export function validateBackupPayloadContents(
     attachments: attachmentRows,
     webauthn_credentials: accountPasskeyRows,
   } = payload.db;
-  const external = options.allowExternalAttachmentBlobs ? externalFiles(payload.manifest) : new Map();
 
   const userIds = new Set<string>();
   for (const row of userRows) {
@@ -541,7 +511,7 @@ export function validateBackupPayloadContents(
     ) {
       throw new Error('Backup archive contains an invalid attachment row');
     }
-    if (!files[`attachments/${cipherId}/${id}.bin`] && !external.has(`${cipherId}/${id}`)) {
+    if (!files[`attachments/${cipherId}/${id}.bin`]) {
       throw new Error(`Backup archive is missing required file: attachments/${cipherId}/${id}.bin`);
     }
   }
@@ -550,7 +520,7 @@ export function validateBackupPayloadContents(
   for (const { table, key } of archivedFiles(payload.db)) {
     if (table !== 'sends') continue;
     if (!isSafeBackupBlobName(key)) throw new Error('Backup archive contains an invalid Send file');
-    if (!files[`attachments/${key}.bin`] && !external.has(key)) {
+    if (!files[`attachments/${key}.bin`]) {
       throw new Error(`Backup archive is missing required file: attachments/${key}.bin`);
     }
   }
@@ -620,16 +590,9 @@ export async function buildBackupArchive(
     BackupTableName,
     SqlRow[]
   >;
-  // Runner locks and the Yubico bootstrap claim stay with this instance; backup settings leave only as
-  // their portable envelope.
-  const exportedConfigRows = rows.config.flatMap((row): SqlRow[] => {
+  const exportedConfigRows = rows.config.filter((row) => {
     const key = String(row.key || '').trim();
-    if (!key || key === BACKUP_RUNNER_LOCK_CONFIG_KEY || key === YUBICO_BOOTSTRAP_CLAIM_CONFIG_KEY) return [];
-    if (key === BACKUP_SETTINGS_CONFIG_KEY) {
-      const portableOnly = exportPortableBackupSettingsEnvelope(typeof row.value === 'string' ? row.value : null);
-      return portableOnly ? [{ ...row, value: portableOnly }] : [];
-    }
-    return [{ ...row }];
+    return key && !INSTANCE_LOCAL_CONFIG_KEYS.has(key);
   });
   const exportedAttachmentRows = includeAttachments ? rows.attachments : [];
   const attachmentBlobs: BackupManifestAttachmentBlob[] = exportedAttachmentRows.map((row) => {
@@ -689,9 +652,18 @@ export async function buildBackupArchive(
       `Backup database payload is ${Math.round(dbJson.byteLength / BYTES_PER_MIB)} MiB; restore accepts at most ${MAX_BACKUP_DB_JSON_BYTES / BYTES_PER_MIB} MiB`,
     );
   }
+  // Every archived file travels inline, so the archive restores on its own.
+  const fileEntries = await Promise.all(
+    archivedFiles(exported).map(async ({ key }) => {
+      const object = await getBlobObject(env, key);
+      if (!object?.body) throw new Error(`Backup blob missing for ${key}`);
+      return [`attachments/${key}.bin`, new Uint8Array(await new Response(object.body).arrayBuffer())] as const;
+    }),
+  );
   const files: Record<string, Uint8Array> = {
     'manifest.json': encoder.encode(JSON.stringify(manifestBase, null, BACKUP_JSON_INDENT)),
     'db.json': dbJson,
+    ...Object.fromEntries(fileEntries),
   };
 
   await options.progress?.({

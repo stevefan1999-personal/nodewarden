@@ -23,7 +23,6 @@ const SIGNALR_UPDATE_TYPE_SYNC_SEND_UPDATE = 13;
 const SIGNALR_UPDATE_TYPE_SYNC_SEND_DELETE = 14;
 const SIGNALR_UPDATE_TYPE_AUTH_REQUEST = 15;
 const SIGNALR_UPDATE_TYPE_AUTH_REQUEST_RESPONSE = 16;
-const SIGNALR_UPDATE_TYPE_BACKUP_RESTORE_PROGRESS = 102;
 const WEBSOCKET_CONNECTION_TOKEN_PREFIX = 'ws-token:';
 const WEBSOCKET_CONNECTION_TOKEN_TTL_MS = 60 * 1000;
 
@@ -852,70 +851,4 @@ async function notifyUserUpdate(
   } catch (error) {
     console.error('Failed to broadcast realtime notification:', withoutQueryParams(error));
   }
-}
-
-export async function notifyUserBackupProgress(
-  env: Env,
-  userId: string,
-  progress: {
-    operation: 'backup-restore' | 'backup-export' | 'backup-remote-run';
-    source?: 'local' | 'remote';
-    step: string;
-    fileName: string;
-    stageTitle?: string;
-    stageDetail?: string;
-    replaceExisting?: boolean;
-    done?: boolean;
-    ok?: boolean;
-    error?: string | null;
-    timestamp?: string;
-  },
-  targetDeviceIdentifier?: string | null,
-): Promise<void> {
-  const revisionDate = progress.timestamp || new Date().toISOString();
-  try {
-    const id = env.NOTIFICATIONS_HUB.idFromName(userId);
-    const stub = env.NOTIFICATIONS_HUB.get(id);
-    await stub.fetch('https://notifications/internal/notify', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-NodeWarden-UserId': userId,
-      },
-      body: JSON.stringify({
-        revisionDate,
-        contextId: null,
-        updateType: SIGNALR_UPDATE_TYPE_BACKUP_RESTORE_PROGRESS,
-        targetDeviceIdentifier: targetDeviceIdentifier || null,
-        payload: {
-          UserId: userId,
-          Date: revisionDate,
-          ...progress,
-        },
-      }),
-    });
-  } catch (error) {
-    console.error('Failed to broadcast backup progress:', withoutQueryParams(error));
-  }
-}
-
-export async function notifyUserBackupRestoreProgress(
-  env: Env,
-  userId: string,
-  progress: {
-    operation: 'backup-restore';
-    source: 'local' | 'remote';
-    step: string;
-    fileName: string;
-    stageTitle?: string;
-    stageDetail?: string;
-    replaceExisting?: boolean;
-    done?: boolean;
-    ok?: boolean;
-    error?: string | null;
-    timestamp?: string;
-  },
-  targetDeviceIdentifier?: string | null,
-): Promise<void> {
-  return notifyUserBackupProgress(env, userId, progress, targetDeviceIdentifier);
 }

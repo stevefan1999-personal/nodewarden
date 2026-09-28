@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import { subtle } from 'node:crypto';
 import test from 'node:test';
 import { eq } from 'drizzle-orm';
 import { unzipSync, zipSync } from 'fflate';
@@ -8,13 +7,10 @@ import { getOrm } from '../db/client';
 import { auditLogs } from '../db/schema';
 import { buildBackupArchive } from '../services/backup-archive';
 import { importBackupArchiveBytes } from '../services/backup-import';
-import { BACKUP_SETTINGS_CONFIG_KEY, getDefaultBackupSettings, saveBackupSettings } from '../services/backup-config';
-import { parseBackupSettingsEnvelope } from '../services/backup-settings-crypto';
 import { AuthService } from '../services/auth';
 import { markEmailVerified, syncVaultAdminRoles } from '../services/vault-admin-role';
 import { createRegisterVerifyToken } from '../utils/jwt';
 import { authedFetch, createTestEnv, portalFetch, seedUser, signInToAdminPortal } from './support/env';
-import * as configRepo from '../services/storage-config-repo';
 import * as userRepo from '../services/storage-user-repo';
 
 const ENCRYPTED = '2.dGVzdA==|dGVzdA==|dGVzdA==';
@@ -128,34 +124,7 @@ test('markEmailVerified grants a listed account once and stale saves cannot clea
   assert.equal(await roleSyncAudits(env.DB), 1);
 });
 
-test('role changes re-wrap live backup settings for the derived administrator', async () => {
-  const env = await createTestEnv();
-  const { publicKey } = await subtle.generateKey(
-    { name: 'RSA-OAEP', modulusLength: 2048, publicExponent: Uint8Array.of(1, 0, 1), hash: 'SHA-1' },
-    true,
-    ['encrypt', 'decrypt'],
-  );
-  const spki = Buffer.from(await subtle.exportKey('spki', publicKey)).toString('base64');
-  const old = await seedUser(env, { role: 'admin', publicKey: spki });
-  const listed = await seedUser(env, { publicKey: spki });
-  await saveBackupSettings(env.DB, env, getDefaultBackupSettings());
-  assert.deepEqual(
-    parseBackupSettingsEnvelope(
-      await configRepo.getConfigValue(env.DB, BACKUP_SETTINGS_CONFIG_KEY),
-    )!.portable.wraps.map((w) => w.userId),
-    [old.id],
-  );
-  env.ADMIN_EMAILS = listed.email;
-  await syncVaultAdminRoles(env);
-  assert.deepEqual(
-    parseBackupSettingsEnvelope(
-      await configRepo.getConfigValue(env.DB, BACKUP_SETTINGS_CONFIG_KEY),
-    )!.portable.wraps.map((w) => w.userId),
-    [listed.id],
-  );
-});
-
-test('local and remote backup restore preserve verified state, default legacy rows and correct imported roles', async () => {
+test('backup restore preserves verified state, defaults legacy rows and corrects imported roles', async () => {
   const source = await createTestEnv();
   const legacy = await seedUser(source, { role: 'admin' });
   const listed = await seedUser(source);
@@ -166,13 +135,10 @@ test('local and remote backup restore preserve verified state, default legacy ro
   assert.equal(db.users.find((row: { id: string }) => row.id === unverified.id).email_verified, 0);
   delete db.users.find((row: { id: string }) => row.id === listed.id).email_verified;
   files['db.json'] = Buffer.from(JSON.stringify(db));
-  const bytes = zipSync(files);
-  for (const remote of [false, true]) {
-    const env = await createTestEnv({ ADMIN_EMAILS: listed.email });
-    await importBackupArchiveBytes(bytes, env, legacy.id, false, remote ? { loadAttachment: async () => null } : null);
-    assert.equal((await userRepo.getUserById(env.DB, listed.id))?.role, 'admin');
-    assert.equal((await userRepo.getUserById(env.DB, listed.id))?.emailVerified, true);
-    assert.equal((await userRepo.getUserById(env.DB, legacy.id))?.role, 'user');
-    assert.equal((await userRepo.getUserById(env.DB, unverified.id))?.emailVerified, false);
-  }
+  const env = await createTestEnv({ ADMIN_EMAILS: listed.email });
+  await importBackupArchiveBytes(zipSync(files), env, legacy.id, false);
+  assert.equal((await userRepo.getUserById(env.DB, listed.id))?.role, 'admin');
+  assert.equal((await userRepo.getUserById(env.DB, listed.id))?.emailVerified, true);
+  assert.equal((await userRepo.getUserById(env.DB, legacy.id))?.role, 'user');
+  assert.equal((await userRepo.getUserById(env.DB, unverified.id))?.emailVerified, false);
 });

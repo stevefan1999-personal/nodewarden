@@ -43,7 +43,7 @@
 | Real-time push sync | ✅ | ✅ | All device sync |
 | Attachments / Send | ✅ | ✅ | Cloudflare R2 or KV |
 | Import / export | ✅ | ✅ | Through official clients |
-| **Cloud backups** | ❌ | ✅ | **Scheduled WebDAV / S3 incrementals, configured through the admin API** |
+| **Cloud backups** | ❌ | ✅ | **Scheduled instance archives in an R2 bucket, managed through the admin API** |
 | Device management | ✅ | ✅ | **Remove devices; trust controls** |
 | Login requests | ✅ | ✅ | **Cross-device login approval/unlock** |
 | **Multi-user** | ✅ | ✅ | Invite-code registration |

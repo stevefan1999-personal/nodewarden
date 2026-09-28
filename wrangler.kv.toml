@@ -97,6 +97,11 @@ class_name = "BackupTransferRunner"
 [[kv_namespaces]]
 binding = "ATTACHMENTS_KV"
 
+# Instance backup archives, in R2 even when attachments live in KV.
+[[r2_buckets]]
+binding = "BACKUPS"
+bucket_name = "nodewarden-backups"
+
 [[migrations]]
 tag = "v1-notifications-hub"
 new_sqlite_classes = [ "NotificationsHub" ]

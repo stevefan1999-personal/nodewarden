@@ -359,7 +359,8 @@ export async function handleRegister(request: Request, env: Env): Promise<Respon
     try {
       const assigned = await adminRepo.assignInviteUsedBy(env.DB, inviteCode, user.id);
       if (!assigned) {
-        console.warn('Invite used_by was not assigned after registration', { inviteCode, userId: user.id });
+        // Invite codes are credentials, so the log names the account, never the code.
+        console.warn('Invite used_by was not assigned after registration', { userId: user.id });
       }
     } catch (error) {
       console.error('Invite used_by assignment failed after registration:', withoutQueryParams(error));

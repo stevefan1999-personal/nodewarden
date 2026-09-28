@@ -11,6 +11,7 @@ import {
   createTestEnv,
   drainWaitUntil,
   failingEmail,
+  interceptStatement,
   MAILABLE_DOMAIN,
   seedUser,
 } from './support/env';
@@ -119,4 +120,35 @@ test('a failed credential mirror during signup logs the failure without its boun
     .join('\n');
   assert.match(logged, /forced mirror failure/);
   assert.ok(!logged.includes(masterPasswordHash));
+});
+
+test('an invite signup whose invite assignment is lost warns without logging the invite code', async (t) => {
+  const warnings = t.mock.method(console, 'warn', () => {});
+  const env = await createTestEnv();
+  const admin = await seedUser(env, { role: 'admin' });
+  const code = 'secret-invite-code';
+  const now = new Date().toISOString();
+  await adminRepo.createInvite(env.DB, {
+    code,
+    createdBy: admin.id,
+    usedBy: null,
+    status: 'active',
+    createdAt: now,
+    updatedAt: now,
+    expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+  });
+  // Another writer records the invite's user first, so the assignment after registration matches nothing.
+  interceptStatement(env, /^update "invites" set "used_by" = \?, "updated_at"/, async () => {
+    await adminRepo.assignInviteUsedBy(env.DB, code, admin.id);
+  });
+  assert.equal(
+    (await register(env, `invited@${MAILABLE_DOMAIN}`, { inviteCode: code }, '/api/accounts/register')).status,
+    200,
+  );
+  const logged = inspect(
+    warnings.mock.calls.map((call) => call.arguments),
+    { depth: 5 },
+  );
+  assert.match(logged, /Invite used_by was not assigned/);
+  assert.doesNotMatch(logged, new RegExp(code));
 });

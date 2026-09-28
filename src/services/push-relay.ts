@@ -56,11 +56,8 @@ export async function ensurePushInstallationCredentials(db: D1Database): Promise
   if (!response) return null;
 
   if (!response.ok) {
-    console.error(
-      'Failed to request Bitwarden push installation:',
-      response.status,
-      await response.text().catch(() => ''),
-    );
+    // A reply body can echo what was sent, so failures log only Bitwarden's status.
+    console.error('Failed to request Bitwarden push installation:', response.status);
     return null;
   }
 
@@ -118,11 +115,7 @@ async function postToPushRelay(env: Env, path: string, body?: unknown): Promise<
     if (!tokenResponse) return false;
 
     if (!tokenResponse.ok) {
-      console.error(
-        'Failed to get Bitwarden push relay token:',
-        tokenResponse.status,
-        await tokenResponse.text().catch(() => ''),
-      );
+      console.error('Failed to get Bitwarden push relay token:', tokenResponse.status);
       return false;
     }
 
@@ -159,7 +152,7 @@ async function postToPushRelay(env: Env, path: string, body?: unknown): Promise<
   if (!response) return false;
 
   if (!response.ok) {
-    console.error('Bitwarden push relay request failed:', path, response.status, await response.text().catch(() => ''));
+    console.error('Bitwarden push relay request failed:', path, response.status);
     return false;
   }
 

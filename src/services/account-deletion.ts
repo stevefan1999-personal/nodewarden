@@ -1,7 +1,7 @@
 import { and, eq, exists, isNotNull, isNull, ne, not, notExists } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/sqlite-core';
 
-import { getOrm, userRowMatches, type Orm } from '../db/client';
+import { getOrm, userRowMatches, withoutQueryParams, type Orm } from '../db/client';
 import {
   attachments,
   ciphers,
@@ -165,7 +165,7 @@ async function deleteBlobs(env: Env, keys: string[]): Promise<void> {
     try {
       await deleteBlobObject(env, key);
     } catch (error) {
-      console.error('account deletion blob cleanup failed', { key, error });
+      console.error('account deletion blob cleanup failed', { key, error: withoutQueryParams(error) });
     }
   }
 }

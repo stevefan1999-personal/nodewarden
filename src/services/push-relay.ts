@@ -1,4 +1,5 @@
 import type { Env } from '../types';
+import { withoutQueryParams } from '../db/client';
 import { getConfigValue as getStoredConfigValue, setConfigValue as saveConfigValue } from './storage-config-repo';
 import { getDevicePushUuid, userHasPushDevice } from './storage-device-repo';
 
@@ -22,7 +23,7 @@ async function fetchPushEndpoint(url: string, init: RequestInit, errorMessage: s
   try {
     return await fetch(url, { ...init, signal: controller.signal });
   } catch (error) {
-    console.error(errorMessage, error);
+    console.error(errorMessage, withoutQueryParams(error));
     return null;
   } finally {
     clearTimeout(timeout);

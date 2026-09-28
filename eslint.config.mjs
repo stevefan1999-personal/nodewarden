@@ -141,6 +141,54 @@ const noSingleUseFunction = {
   },
 };
 
+// A caught error can be a drizzle failure whose message and stack list every bound value, so a console call may
+// use it only through withoutQueryParams() (src/db/client.ts); its typeof is harmless.
+const noRawErrorLog = {
+  meta: {
+    type: 'problem',
+    docs: { description: 'Log caught errors only through withoutQueryParams(), which strips bound query values.' },
+    messages: { rawError: 'Pass {{name}} through withoutQueryParams() before logging it.' },
+    schema: [],
+  },
+  create(context) {
+    const consoleCalls = [];
+    return {
+      'CallExpression[callee.type="MemberExpression"][callee.object.name="console"]'(node) {
+        consoleCalls.push(node);
+      },
+      'Program:exit'() {
+        // Every reference to a catch-clause binding or to the first parameter of a promise's .catch() callback.
+        const caught = new Set(
+          context.sourceCode.scopeManager.scopes
+            .flatMap((scope) => scope.variables)
+            .filter((variable) =>
+              variable.defs.some(
+                (definition) =>
+                  definition.type === 'CatchClause' ||
+                  (definition.type === 'Parameter' &&
+                    definition.node.parent?.type === 'CallExpression' &&
+                    definition.node.parent.callee.property?.name === 'catch' &&
+                    definition.node.params[0] === definition.name),
+              ),
+            )
+            .flatMap((variable) => variable.references.map((reference) => reference.identifier)),
+        );
+        const leaks = (node) => {
+          if (caught.has(node)) return [node];
+          if (node.type === 'CallExpression' && node.callee.name === 'withoutQueryParams') return [];
+          if (node.type === 'UnaryExpression' && node.operator === 'typeof') return [];
+          return (context.sourceCode.visitorKeys[node.type] ?? []).flatMap((key) =>
+            [node[key]].flat().filter(Boolean).flatMap(leaks),
+          );
+        };
+        for (const call of consoleCalls)
+          for (const leak of call.arguments.flatMap(leaks))
+            context.report({ node: leak, messageId: 'rawError', data: { name: leak.name } });
+      },
+    };
+  },
+};
+
 export default defineConfig([
   // The admin portal's build output and SvelteKit's generated files.
   { ignores: ['admin/build/**', 'admin/.svelte-kit/**'] },
@@ -149,7 +197,13 @@ export default defineConfig([
     linterOptions: { reportUnusedDisableDirectives: 'error' },
     plugins: {
       '@typescript-eslint': tseslint.plugin,
-      nodewarden: { rules: { 'no-raw-sql': noRawSql, 'no-single-use-function': noSingleUseFunction } },
+      nodewarden: {
+        rules: {
+          'no-raw-sql': noRawSql,
+          'no-single-use-function': noSingleUseFunction,
+          'no-raw-error-log': noRawErrorLog,
+        },
+      },
     },
     rules: {
       // Rest siblings are how a field is dropped from a copy ({ secret: _omitted, ...rest }).
@@ -171,6 +225,12 @@ export default defineConfig([
     },
   },
   { files: ['**/*.{ts,mts,js,mjs,cjs}'], languageOptions: { parser: tseslint.parser } },
+  {
+    // Production code only: tests may print whole errors to debug a failure.
+    files: ['src/**/*.ts', 'admin/**/*.ts'],
+    ignores: ['src/test/**', '**/*.test.ts'],
+    rules: { 'nodewarden/no-raw-error-log': 'error' },
+  },
   // The admin portal's components: Svelte's recommended rules, with TypeScript in their scripts.
   ...svelte.configs.recommended,
   {

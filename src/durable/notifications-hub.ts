@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { DurableObject, waitUntil } from 'cloudflare:workers';
 import type { Env } from '../types';
+import { withoutQueryParams } from '../db/client';
 import { notifyMobilePush } from '../services/push-relay';
 
 const SIGNALR_RECORD_SEPARATOR = 0x1e;
@@ -791,7 +792,7 @@ export async function notifyAuthRequestResponse(
       }),
     });
   } catch (error) {
-    console.error('Failed to broadcast auth request response notification:', error);
+    console.error('Failed to broadcast auth request response notification:', withoutQueryParams(error));
   }
 }
 
@@ -849,7 +850,7 @@ async function notifyUserUpdate(
       },
     });
   } catch (error) {
-    console.error('Failed to broadcast realtime notification:', error);
+    console.error('Failed to broadcast realtime notification:', withoutQueryParams(error));
   }
 }
 
@@ -894,7 +895,7 @@ export async function notifyUserBackupProgress(
       }),
     });
   } catch (error) {
-    console.error('Failed to broadcast backup progress:', error);
+    console.error('Failed to broadcast backup progress:', withoutQueryParams(error));
   }
 }
 

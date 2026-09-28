@@ -34,8 +34,10 @@ async function ensureDatabaseInitialized(env: Env): Promise<void> {
       dbInitError = null;
     })()
       .catch((error: unknown) => {
-        console.error('Failed to initialize database:', withoutQueryParams(error));
-        dbInitError = error instanceof Error ? error.message : 'Unknown database initialization error';
+        const loggable = withoutQueryParams(error);
+        console.error('Failed to initialize database:', loggable);
+        // Logged again on every request and cron run, so it keeps only the scrubbed message.
+        dbInitError = loggable instanceof Error ? loggable.message : 'Unknown database initialization error';
       })
       .finally(() => {
         dbInitPromise = null;

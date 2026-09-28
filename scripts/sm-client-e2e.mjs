@@ -151,7 +151,15 @@ writeFileSync(
     compatibility_date: '2024-09-23',
     compatibility_flags: ['nodejs_compat'],
     vars: { ALLOW_OPEN_REGISTRATION: '1', JWT_SECRET: randomBytes(48).toString('base64') },
-    d1_databases: [{ binding: 'DB', database_name: 'sm-client-e2e', database_id: randomUUID() }],
+    d1_databases: [
+      {
+        binding: 'DB',
+        database_name: 'sm-client-e2e',
+        database_id: randomUUID(),
+        migrations_dir: join(repo, 'migrations'),
+        migrations_pattern: join(repo, 'migrations/*/migration.sql'),
+      },
+    ],
     durable_objects: {
       bindings: classes.map((class_name, i) => ({
         name: ['NOTIFICATIONS_HUB', 'BACKUP_TRANSFER_RUNNER'][i],
@@ -165,9 +173,10 @@ writeFileSync(
 const sql = join(run, 'seed.sql');
 writeFileSync(
   sql,
-  "CREATE TABLE config (key TEXT PRIMARY KEY, value TEXT NOT NULL); INSERT INTO config VALUES ('push.installation.id', 'local-e2e'), ('push.installation.key', 'local-e2e');",
+  "INSERT INTO config VALUES ('push.installation.id', 'local-e2e'), ('push.installation.key', 'local-e2e');",
 );
 const wrangler = join(repo, 'node_modules/.bin/wrangler');
+exec(wrangler, ['d1', 'migrations', 'apply', 'sm-client-e2e', '--local', '--config', config, '--persist-to', state]);
 exec(wrangler, ['d1', 'execute', 'sm-client-e2e', '--local', '--config', config, '--persist-to', state, '--file', sql]);
 const port = await new Promise((resolvePort, reject) => {
   const probe = createServer().once('error', reject);

@@ -1,11 +1,11 @@
-// Seed a local SQLite file (wrangler D1 state or any path). Never talk to remote D1.
+// Seed a migrated local SQLite file: the wrangler D1 state `npm run dev` migrates, or any path. Never talk to
+// remote D1.
 import { existsSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { seed } from 'drizzle-seed';
 
-import { schemaStatements } from '../src/db/migrate';
 import * as schema from '../src/db/schema';
 
 const SEED_GENERATOR_VERSION = '2';
@@ -43,9 +43,6 @@ if (pathArg) {
 }
 
 const sqlite = new Database(target);
-for (const statement of schemaStatements()) {
-  sqlite.exec(statement);
-}
 
 const db = drizzle({ client: sqlite });
 await seed(db, schema, { count: 1, seed: 1, version: SEED_GENERATOR_VERSION }).refine(() => ({

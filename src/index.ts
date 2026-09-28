@@ -3,6 +3,7 @@ import { purgeExpiredEmailOtps } from './services/email-otp';
 import { purgeSecretsTrash } from './services/storage-secret-repo';
 import { purgeExpiredSends, purgeOldTrash } from './services/retention';
 import { syncVaultAdminRoles } from './services/vault-admin-role';
+import { ensurePushInstallationCredentials } from './services/push-relay';
 import { Env } from './types';
 import { NotificationsHub } from './durable/notifications-hub';
 import { BackupTransferRunner } from './durable/backup-transfer-runner';
@@ -11,7 +12,6 @@ import { applyCors, applySecurityHeaders, jsonResponse } from './utils/response'
 import { runScheduledBackupIfDue } from './handlers/backup';
 import { approveExpiredEmergencyAccess, remindPendingEmergencyAccess } from './handlers/emergency-access';
 import { isBackendRequestPath } from './web-vault-visibility';
-import { initializeDatabase } from './db/migrate';
 import { withoutQueryParams } from './db/client';
 
 let dbInitialized = false;
@@ -23,7 +23,7 @@ async function ensureDatabaseInitialized(env: Env): Promise<void> {
 
   if (!dbInitPromise) {
     dbInitPromise = (async () => {
-      await initializeDatabase(env.DB);
+      await ensurePushInstallationCredentials(env.DB);
       try {
         await syncVaultAdminRoles(env);
       } catch {

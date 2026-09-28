@@ -10,7 +10,6 @@ import type { Env, User } from '../../types';
 import { waitUntil } from './cloudflare-workers';
 import './workers-crypto';
 import { createSqliteD1, sqliteD1, type StatementWrapper } from './d1-sqlite';
-import { initializeDatabase } from '../../db/migrate';
 import * as userRepo from '../../services/storage-user-repo';
 
 export const TEST_ORIGIN = 'https://vault.example.test';
@@ -22,8 +21,8 @@ const PBKDF2_KDF_TYPE = 0;
 
 // Workers-only globals. The Cache API (sync responses) is a Map keyed by
 // cache name and URL that ignores Cache-Control, so a handler that forgets to bump the revision
-// date is served its stale entry. fetch is blocked so tests stay hermetic: the storage
-// bootstrap would otherwise register a real push installation with Bitwarden.
+// date is served its stale entry. fetch is blocked so tests stay hermetic: the Worker's first
+// request would otherwise register a real push installation with Bitwarden.
 const cachedResponses = new Map<string, Response>();
 const namedCache = (cacheName: string) => ({
   async match(request: RequestInfo | URL): Promise<Response | undefined> {
@@ -72,11 +71,6 @@ registerHooks({
 });
 const { default: worker } = await import('../../index');
 
-// src/index.ts bootstraps storage once per isolate. Run that bootstrap now on
-// a throwaway database so it never re-runs on a test database, where it would promote
-// whichever user was seeded first to admin.
-await initializeDatabase(await createSqliteD1());
-
 const executionContext = { waitUntil, passThroughOnException: () => {} } as unknown as ExecutionContext;
 
 // Realtime notifications go to the NotificationsHub Durable Object; tests only need them accepted.
@@ -84,6 +78,10 @@ const acceptingDurableObjectNamespace = {
   idFromName: (name: string) => name,
   get: () => ({ fetch: async () => new Response(null, { status: 204 }) }),
 } as unknown as DurableObjectNamespace;
+
+// src/index.ts registers the push installation and syncs administrator roles once per isolate. Spend that on a
+// throwaway deployment, so it never runs against a test's database.
+await worker.fetch(new Request(`${TEST_ORIGIN}/api/alive`), await createTestEnv(), executionContext);
 
 // Every env is a fresh deployment: its own database, an empty edge cache and fresh rate limiters, so rate-limit
 // budgets keyed by the shared test client IP never leak between tests.

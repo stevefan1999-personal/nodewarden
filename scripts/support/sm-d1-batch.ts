@@ -8,7 +8,7 @@ const repo = process.env.SM_E2E_REPO_ROOT || resolve(import.meta.dirname, '../..
 const load = (path: string) => import(pathToFileURL(resolve(repo, path)).href);
 const { updateSecret } = await load('src/services/storage-secret-repo.ts');
 const { abortUnlessChanged, getOrm } = await load('src/db/client.ts');
-const { ensureStorageSchema } = await load('src/db/migrate.ts');
+const { MIGRATIONS } = await load('src/test/support/d1-sqlite.ts');
 const { organizations, smProjects, smSecretProjects, smSecretServiceAccounts, smSecrets, smServiceAccounts } =
   await load('src/db/schema.ts');
 // This platform check complements SQLite route tests: it needs workerd's actual D1 batch.
@@ -20,7 +20,10 @@ const mf = new Miniflare({
 });
 try {
   const db = await mf.getD1Database('DB');
-  await ensureStorageSchema(db);
+  // The migrations wrangler applies to D1, one statement per drizzle-kit breakpoint.
+  for (const migration of MIGRATIONS as string[])
+    // eslint-disable-next-line nodewarden/no-raw-sql -- migration execution
+    await db.batch(migration.split('--> statement-breakpoint').map((statement) => db.prepare(statement)));
   const orm = getOrm(db);
   await orm.batch([
     orm

@@ -79,7 +79,7 @@
 
 - If the site reports a missing `JWT_SECRET`, add it as a **Secret** in Workers settings. In production use a random string of at least 32 characters; do not use temporary or example values.
 
-- In this flow you hand code to Cloudflare to build and deploy. `wrangler.toml` or `wrangler.kv.toml` in the repo defines binding names; the Worker initializes the D1 schema on first request—no manual SQL upload.
+- In this flow you hand code to Cloudflare to build and deploy. `wrangler.toml` or `wrangler.kv.toml` in the repo defines binding names; the deploy command applies the D1 migrations before it deploys the Worker, so there is no manual SQL upload.
 
 - Optional SSO: set `SSO_ENABLED=1`, `SSO_AUTHORITY`, `SSO_CLIENT_ID`, and `SSO_CLIENT_SECRET`.
 - Attachments and Send files are limited to 100 MiB: official clients upload them through the Worker.
@@ -146,7 +146,7 @@ npm run build:official-web   # once per pinned release; deploy and dev include i
 Set `WEB_VAULT_ORIGINS` to the Worker origin. Current official web builds refuse `http://` API calls, so run the Worker over HTTPS for browser tests:
 
 ```bash
-npx wrangler dev --local-protocol https
+npm run dev -- --local-protocol https
 E2E_ORIGIN=https://127.0.0.1:8787 OFFICIAL_WEB_ORIGIN=https://127.0.0.1:8787 npm run test:e2e
 ```
 

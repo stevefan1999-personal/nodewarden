@@ -1,6 +1,6 @@
+import { readdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import Database from 'better-sqlite3';
-
-import { ensureStorageSchema } from '../../db/migrate';
 
 type SqliteConnection = InstanceType<typeof Database>;
 
@@ -156,9 +156,16 @@ export function sqliteD1(db: D1Database): SqliteD1Database {
   return db;
 }
 
-// A fresh in-memory database per call, with the schema applied by the production bootstrap.
+// Every drizzle-kit migration's SQL, in the order wrangler applies them to D1.
+const MIGRATIONS_DIR = join(import.meta.dirname, '../../../migrations');
+export const MIGRATIONS = readdirSync(MIGRATIONS_DIR)
+  .toSorted()
+  .map((folder) => readFileSync(join(MIGRATIONS_DIR, folder, 'migration.sql'), 'utf8'));
+
+// A fresh in-memory database per call, migrated the way wrangler migrates D1, which enforces foreign keys.
 export async function createSqliteD1(): Promise<D1Database> {
-  const database = new SqliteD1Database(new Database(':memory:')) as unknown as D1Database;
-  await ensureStorageSchema(database);
-  return database;
+  const connection = new Database(':memory:');
+  connection.pragma('foreign_keys = ON');
+  for (const migration of MIGRATIONS) connection.exec(migration);
+  return new SqliteD1Database(connection) as unknown as D1Database;
 }

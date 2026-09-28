@@ -6,6 +6,10 @@
  * by name. The template ships without an id so fresh accounts can provision one
  * on first deploy. In non-interactive builds, wrangler may try to create the
  * same namespace again on later builds and fail with code 10014.
+ *
+ * It also creates the D1 database on the first build: `deploy:kv` applies the
+ * migrations before `wrangler deploy`, which would otherwise provision it, and
+ * both find it by `database_name`.
  */
 const { execSync } = require('node:child_process');
 const fs = require('node:fs');
@@ -17,6 +21,16 @@ const BINDING = 'ATTACHMENTS_KV';
 const wrangler = (args) => execSync(`npx wrangler ${args}`, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] });
 
 const toml = fs.readFileSync(CONFIG, 'utf8');
+const databaseName = ((toml.match(/\[\[d1_databases\]\][^[]*/) || [''])[0].match(/database_name\s*=\s*"([^"]+)"/) ||
+  [])[1];
+if (!databaseName) throw new Error('[ensure-kv] wrangler.kv.toml has no D1 database_name');
+if (JSON.parse(wrangler('d1 list --json')).some((database) => database.name === databaseName)) {
+  console.log(`[ensure-kv] D1 database "${databaseName}" exists`);
+} else {
+  wrangler(`d1 create "${databaseName}"`);
+  console.log(`[ensure-kv] created D1 database "${databaseName}"`);
+}
+
 const bindingBlock = (toml.match(/\[\[kv_namespaces\]\][^[]*/g) || []).find((entry) =>
   new RegExp(`binding\\s*=\\s*"${BINDING}"`).test(entry),
 );

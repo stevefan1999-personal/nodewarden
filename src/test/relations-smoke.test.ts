@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import { getOrm } from '../db/client';
 import { createTestEnv } from './support/env';
 
-test('relations v2 through-queries execute against the generated baseline', async () => {
+test('relations v2 through-queries execute against the migrated schema', async () => {
   const db = getOrm((await createTestEnv()).DB);
 
   const rows = await Promise.all([

@@ -22,6 +22,7 @@ const INSTANCE_LOCAL_TABLES: Record<string, string> = {
   used_attachment_download_tokens: 'one-time tokens',
   sso_auth: 'one-time SSO state',
   audit_logs: 'administrator log, which a restore must not rewrite',
+  backup_restore_rows: 'restore staging',
 };
 
 const tables = { config: [], users: [], user_revisions: [], folders: [], ciphers: [], attachments: [] };

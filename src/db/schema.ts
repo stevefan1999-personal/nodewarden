@@ -934,3 +934,15 @@ export const events = sqliteTable(
     ),
   ],
 );
+
+// Archive rows a backup restore stages until one batch swaps them into the live tables
+// (src/services/backup-import.ts): each archived row as JSON, so staging needs no runtime DDL.
+export const backupRestoreRows = sqliteTable(
+  'backup_restore_rows',
+  {
+    tableName: text('table_name').notNull(),
+    position: integer('position').notNull(),
+    row: text('row').notNull(),
+  },
+  (table) => [primaryKey({ columns: [table.tableName, table.position] })],
+);

@@ -1,10 +1,9 @@
 import { syncVaultAdminRoles } from './vault-admin-role';
-import { and, count, eq, getTableName, TableAliasProxyHandler } from 'drizzle-orm';
-import type { SQLiteTable } from 'drizzle-orm/sqlite-core';
+import { and, count, eq } from 'drizzle-orm';
 
 import { chunkRows, columnCount, getOrm } from '../db/client';
-import { sqliteMaster } from '../db/migrate';
-import { attachments, ciphers, folders, organizations, sends } from '../db/schema';
+import { attachments, backupRestoreRows, ciphers, folders, organizations, sends } from '../db/schema';
+import { bound, coalesce, jsonExtract } from '../db/sql';
 import type { Env, User } from '../types';
 import { KV_MAX_OBJECT_BYTES, deleteBlobObject, getBlobStorageKind, putBlobObject } from './blob-store';
 import { BACKUP_SETTINGS_CONFIG_KEY, normalizeImportedBackupSettingsValue } from './backup-config';
@@ -34,17 +33,6 @@ import {
 // - Do not import, clear, or replace runtime authentication state such as
 //   devices, sessions, auth requests, or remembered 2FA device tokens.
 type SqlRow = Record<string, string | number | null>;
-
-function shadowTableName(table: string): string {
-  return `${table}__restore`;
-}
-
-// A shadow copy has its live table's columns under the __restore name. Drizzle's alias proxy with
-// replaceOriginalName renders that name in every position (FROM, INSERT INTO, DELETE FROM, column
-// references), so the query builder addresses the copy although it has no schema entry of its own.
-function shadowTable<T extends SQLiteTable>(table: T): T {
-  return new Proxy(table, new TableAliasProxyHandler(shadowTableName(getTableName(table)), true));
-}
 
 export interface BackupImportResultBody {
   object: 'instance-backup-import';
@@ -76,30 +64,23 @@ export interface BackupImportExecutionResult {
   auditActorUserId: string | null;
 }
 
-async function resetRestoreArtifacts(db: D1Database): Promise<void> {
-  /* eslint-disable nodewarden/no-raw-sql -- shadow tables are DDL copies made at runtime, outside the drizzle schema */
-  await db.batch(
-    BACKUP_TABLE_NAMES.slice()
-      .reverse()
-      .map((table) => db.prepare(`DROP TABLE IF EXISTS ${shadowTableName(table)}`)),
+// Staged rows per table must match what the restore meant to stage; a mismatch rejects it before the swap.
+async function validateStagedCounts(db: D1Database, expected: Record<string, number>): Promise<void> {
+  const staged = new Map(
+    (
+      await getOrm(db)
+        .select({ tableName: backupRestoreRows.tableName, rows: count() })
+        .from(backupRestoreRows)
+        .groupBy(backupRestoreRows.tableName)
+    ).map((row) => [row.tableName, row.rows]),
   );
-  /* eslint-enable nodewarden/no-raw-sql */
-}
-
-async function validateShadowTableCounts(
-  db: D1Database,
-  expectedCounts: Partial<Record<BackupTableName, number>>,
-): Promise<void> {
-  const orm = getOrm(db);
-  await Promise.all(
-    BACKUP_TABLE_NAMES.map(async (table) => {
-      const expected = expectedCounts[table] ?? 0;
-      const actual = await orm.$count(shadowTable(BACKUP_TABLES[table].table));
-      if (actual !== expected) {
-        throw new Error(`Restore shadow validation failed for ${table}: expected ${expected}, received ${actual}`);
-      }
-    }),
-  );
+  for (const name of BACKUP_TABLE_NAMES) {
+    const wanted = expected[name] ?? 0;
+    const actual = staged.get(name) ?? 0;
+    if (actual !== wanted) {
+      throw new Error(`Restore staging validation failed for ${name}: expected ${wanted}, received ${actual}`);
+    }
+  }
 }
 
 // Every blob the instance's attachments and file Sends own.
@@ -239,41 +220,9 @@ export async function importBackupArchiveBytes(
     }
   }
 
-  await resetRestoreArtifacts(env.DB);
+  await orm.delete(backupRestoreRows);
   const previousBlobKeys = replaceExisting ? await collectCurrentBlobKeys(env.DB) : new Set<string>();
   try {
-    await report('create_shadow', 'shadow');
-    const createStatements: string[] = [];
-    for (const table of BACKUP_TABLE_NAMES) {
-      const [row] = await orm
-        .select({ sql: sqliteMaster.sql })
-        .from(sqliteMaster)
-        .where(and(eq(sqliteMaster.type, 'table'), eq(sqliteMaster.name, table)))
-        .limit(1);
-      const createSql = String(row?.sql || '').trim();
-      if (!createSql) {
-        throw new Error(`Restore shadow schema is missing table definition for ${table}`);
-      }
-      // Rename the copy and point its foreign keys at the other shadow tables.
-      const tablePattern = new RegExp(
-        `^CREATE TABLE(?:\\s+IF NOT EXISTS)?\\s+(?:\"${table}\"|\`${table}\`|${table})(?=\\s*\\()`,
-        'i',
-      );
-      let shadowSql = createSql.replace(tablePattern, `CREATE TABLE "${shadowTableName(table)}"`);
-      if (shadowSql === createSql) {
-        throw new Error(`Restore shadow schema could not rewrite CREATE TABLE statement for ${table}`);
-      }
-      for (const currentTable of BACKUP_TABLE_NAMES) {
-        const referencePattern = new RegExp(
-          `\\bREFERENCES\\s+(?:\"${currentTable}\"|\`${currentTable}\`|${currentTable})(?=\\s*\\()`,
-          'gi',
-        );
-        shadowSql = shadowSql.replace(referencePattern, `REFERENCES "${shadowTableName(currentTable)}"`);
-      }
-      createStatements.push(shadowSql);
-    }
-    // eslint-disable-next-line nodewarden/no-raw-sql -- shadow DDL is rewritten at runtime from the live tables' sqlite_master text
-    await env.DB.batch(createStatements.map((statement) => env.DB.prepare(statement)));
     await report('import_data', 'data');
     let configRows = prepared.payload.db.config.filter(
       (row) => String(row.key || '').trim() !== YUBICO_BOOTSTRAP_CLAIM_CONFIG_KEY,
@@ -315,42 +264,26 @@ export async function importBackupArchiveBytes(
         archived_at: row.archived_at ?? null,
       })),
     };
-    // Config, revisions and domain settings keep the INSERT OR REPLACE semantics they always had. REPLACE
-    // turns a NULL in a NOT NULL column into the column default, which drizzle binds for undefined. The
-    // shadow copy starts empty, so only a key the archive repeats can conflict; skipping it leaves the
-    // count check to reject the archive, as it did after REPLACE deduplicated the rows.
-    const replaced = new Set<BackupTableName>(['config', 'user_revisions', 'domain_settings']);
+    // Each archived row is staged as JSON under its table and position, one batch per table: three parameters
+    // a row, and only the archived columns. The live tables stay intact until the swap below.
     for (const name of BACKUP_TABLE_NAMES) {
-      if (!db[name].length) continue;
-      // Multi-row inserts into the table's shadow copy, one batch per table. Only the archived columns come
-      // from the row; every other column keeps its default. Each row binds at most one parameter per
-      // schema column, so chunks by column count stay within D1's parameter limit.
-      const target: SQLiteTable = shadowTable(BACKUP_TABLES[name].table);
-      const replace = replaced.has(name);
-      const values = db[name].map((row) =>
-        Object.fromEntries(
-          backupColumns(name).map(([key, column]) => [
-            key,
-            row[column.name] ?? (replace && column.notNull ? undefined : null),
-          ]),
+      const rows = db[name].map((row, position) => ({
+        tableName: name,
+        position,
+        row: JSON.stringify(
+          Object.fromEntries(backupColumns(name).map(([, column]) => [column.name, row[column.name] ?? null])),
         ),
+      }));
+      const statements = chunkRows(rows, columnCount(backupRestoreRows)).map((chunk) =>
+        orm.insert(backupRestoreRows).values(chunk),
       );
-      const statements = chunkRows(values, columnCount(target)).map((chunk) => {
-        const insert = orm.insert(target).values(chunk);
-        return replace ? insert.onConflictDoNothing() : insert;
-      });
-      try {
-        await orm.batch(statements as [(typeof statements)[0], ...typeof statements]);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        throw new Error(`Restore insert failed for ${shadowTableName(name)}: ${message}`);
-      }
+      if (statements.length) await orm.batch(statements as [(typeof statements)[0], ...typeof statements]);
     }
     const stagedCounts = Object.fromEntries(BACKUP_TABLE_NAMES.map((name) => [name, db[name].length]));
-    await validateShadowTableCounts(env.DB, stagedCounts);
+    await validateStagedCounts(env.DB, stagedCounts);
 
     await report('restore_files', 'files');
-    // Store each file under its blob key. A row whose file is missing or cannot be stored leaves its shadow
+    // Store each file under its blob key. A row whose file is missing or cannot be stored leaves the staging
     // table and is reported as skipped; a failed drop is left to the count validation below.
     const files = archivedFiles(db);
     const failedRows = new Set<SqlRow>();
@@ -365,19 +298,10 @@ export async function importBackupArchiveBytes(
       }
     }
     const failed = files.filter(({ row }) => failedRows.has(row));
-    const stagedAttachments = shadowTable(attachments);
-    const stagedSends = shadowTable(sends);
     const drops = failed.map(({ table, row }) =>
-      table === 'sends'
-        ? orm.delete(stagedSends).where(eq(stagedSends.id, String(row.id || '').trim()))
-        : orm
-            .delete(stagedAttachments)
-            .where(
-              and(
-                eq(stagedAttachments.id, String(row.id || '').trim()),
-                eq(stagedAttachments.cipherId, String(row.cipher_id || '').trim()),
-              ),
-            ),
+      orm
+        .delete(backupRestoreRows)
+        .where(and(eq(backupRestoreRows.tableName, table), eq(backupRestoreRows.position, db[table].indexOf(row)))),
     );
     if (drops.length) await orm.batch(drops as [(typeof drops)[0], ...typeof drops]).catch(() => undefined);
     // What each file-owning table restored: its rows, and the files among them.
@@ -385,26 +309,45 @@ export async function importBackupArchiveBytes(
       rows: db[table].filter((row) => !failedRows.has(row)).length,
       files: files.filter((file) => file.table === table && !failedRows.has(file.row)).length,
     });
-    await validateShadowTableCounts(env.DB, {
+    await validateStagedCounts(env.DB, {
       ...stagedCounts,
       attachments: restored('attachments').rows,
       sends: restored('sends').rows,
     });
     await report('finalize', 'finalize');
-    // Commit by replacing live table contents from validated shadow tables.
-    // This avoids D1 schema-rename edge cases while keeping current data intact
-    // until the final batch succeeds.
+    // Commit by replacing every live table from the staged rows in one batch, so the live data changes only if
+    // all of it applies. Live constraints check the archive here: a missing required value, a duplicate key or a
+    // dangling reference rolls the batch back. Columns are copied by name, as a live table's physical column
+    // order can differ from its schema order (users does). Config, revisions and domain settings keep the
+    // INSERT OR REPLACE semantics they always had: a missing or NULL value in a NOT NULL column takes the
+    // column default.
+    const replaced = new Set<BackupTableName>(['config', 'user_revisions', 'domain_settings']);
     const swap = [
       ...BACKUP_TABLE_NAMES.toReversed().map((name) => orm.delete(BACKUP_TABLES[name].table)),
-      // Copies by column name, not SELECT *: a live table's physical column order can differ from its
-      // schema order (users does), so a positional copy under drizzle's column list would misplace values.
-      ...BACKUP_TABLE_NAMES.map((name) => BACKUP_TABLES[name].table).map(<T extends SQLiteTable>(live: T) =>
-        orm.insert(live).select(orm.select().from(shadowTable(live))),
+      // Each staged column is selected under the live column's key, so drizzle names the columns in its INSERT.
+      // A selection built per table has no static keys to type-check; drizzle checks at runtime that every key
+      // is a column of the live table.
+      ...BACKUP_TABLE_NAMES.map((name) =>
+        orm.insert(BACKUP_TABLES[name].table).select(
+          orm
+            .select(
+              Object.fromEntries(
+                backupColumns(name).map(([key, column]) => {
+                  const value = jsonExtract<unknown>(backupRestoreRows.row, `$.${column.name}`);
+                  const fallback = replaced.has(name) && column.notNull ? column.default : undefined;
+                  return [key, (fallback === undefined ? value : coalesce(value, bound(fallback))).as(key)];
+                }),
+              ),
+            )
+            .from(backupRestoreRows)
+            .where(eq(backupRestoreRows.tableName, name))
+            .orderBy(backupRestoreRows.position) as never,
+        ),
       ),
+      orm.delete(backupRestoreRows),
     ];
     await orm.batch(swap as [(typeof swap)[0], ...typeof swap]);
     await syncVaultAdminRoles(env);
-    await resetRestoreArtifacts(env.DB).catch(() => undefined);
     if (replaceExisting && previousBlobKeys.size) {
       const nextBlobKeys = await collectCurrentBlobKeys(env.DB).catch(() => null);
       if (nextBlobKeys) {
@@ -452,7 +395,7 @@ export async function importBackupArchiveBytes(
       ok: false,
       error: error instanceof Error ? error.message : String(error),
     });
-    await resetRestoreArtifacts(env.DB).catch(() => undefined);
+    await orm.delete(backupRestoreRows).catch(() => undefined);
     throw error;
   }
 }

@@ -4,9 +4,10 @@ import { eq, getColumns, getTableName } from 'drizzle-orm';
 import { getTableConfig, type SQLiteColumn, type SQLiteTable } from 'drizzle-orm/sqlite-core';
 import { unzipSync, zipSync } from 'fflate';
 
-import { getOrm } from '../db/client';
+import { columnCount, D1_MAX_BOUND_PARAMETERS, getOrm } from '../db/client';
 import {
   attachments,
+  backupRestoreRows,
   ciphers,
   config,
   domainSettings,
@@ -221,26 +222,34 @@ test('backup restore rejects a row missing a required value outside the replace 
   const restored = await createTestEnv();
   await assert.rejects(
     importBackupArchiveBytes(zipSync(files), restored, owner.id, false),
-    /NOT NULL constraint failed: ciphers__restore\.favorite/,
+    /NOT NULL constraint failed: ciphers\.favorite/,
   );
   assert.deepEqual(await rowsOf(restored.DB, users, users.id), []);
 });
 
 test('backup restore writes tables with more rows than one D1 statement can bind', async () => {
   const source = await createTestEnv();
-  // users has 31 columns, so each insert statement carries at most three rows under the 100-parameter cap.
-  const seeded = [];
-  for (let index = 0; index < 7; index++) seeded.push(await seedUser(source));
+  const owner = await seedUser(source);
+  // Staging binds every column of backup_restore_rows for each row, so one folder more than a statement holds
+  // takes a second statement.
+  const folderIds = Array.from(
+    { length: Math.floor(D1_MAX_BOUND_PARAMETERS / columnCount(backupRestoreRows)) + 1 },
+    (_, index) => `folder-${index}`,
+  );
+  for (const id of folderIds)
+    await getOrm(source.DB)
+      .insert(folders)
+      .values({ id, userId: owner.id, name: 'enc', createdAt: 'c', updatedAt: 'u' });
   const restored = await createTestEnv();
   await importBackupArchiveBytes(
     (await buildBackupArchive(source, new Date(), { includeAttachments: false })).bytes,
     restored,
-    seeded[0].id,
+    owner.id,
     false,
   );
   assert.deepEqual(
-    (await getOrm(restored.DB).select({ id: users.id }).from(users)).map((row) => row.id).toSorted(),
-    seeded.map((user) => user.id).toSorted(),
+    (await getOrm(restored.DB).select({ id: folders.id }).from(folders)).map((row) => row.id).toSorted(),
+    folderIds.toSorted(),
   );
 });
 

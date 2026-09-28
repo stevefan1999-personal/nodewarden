@@ -19,15 +19,9 @@ import {
   webauthnCredentials,
 } from '../db/schema';
 import { unmapped } from '../db/sql';
-import {
-  BACKUP_TABLE_NAMES,
-  BACKUP_TABLES,
-  backupColumns,
-  buildBackupArchive,
-  type BackupTableName,
-} from '../services/backup-archive';
-import { importBackupArchiveBytes } from '../services/backup-import';
+import { BACKUP_TABLE_NAMES, BACKUP_TABLES, backupColumns, type BackupTableName } from '../services/backup-archive';
 import { SendType, type Env } from '../types';
+import { archiveDb, archiveOf, restoreArchive, withArchiveDb } from './support/backup';
 import { createTestEnv, interceptStatement, memoryKv, seedUser } from './support/env';
 
 type Row = Record<string, unknown>;
@@ -156,19 +150,17 @@ test('backup restore brings back every archived value, fills legacy defaults and
 
   await blobs.binding.put('cipher-1/att-1', 'blob-1');
   await blobs.binding.put('cipher-1/att-2', 'blob-2');
-  const archive = await buildBackupArchive(source, new Date(), { includeAttachments: true });
-  const files = unzipSync(archive.bytes);
-  const archived = JSON.parse(new TextDecoder().decode(files['db.json'])) as Record<string, Row[]>;
+  const archive = await archiveOf(source);
+  const archived = archiveDb(archive.bytes);
   // An archive from before custom equivalent domains existed lacks the column; restore falls back to its
   // default. Older archives may also still carry runtime-only columns, which restore must ignore.
   const legacy = structuredClone(archived);
   delete legacy.domain_settings.find((row) => row.user_id === owner.id)!.custom_equivalent_domains;
   Object.assign(legacy.users[0], { api_key: 'archived-api-key', user_key_id: 'archived-key-id' });
-  files['db.json'] = Buffer.from(JSON.stringify(legacy));
 
   const kv = memoryKv();
   const restored = await createTestEnv({ ATTACHMENTS_KV: kv.binding });
-  const outcome = await importBackupArchiveBytes(zipSync(files), restored, owner.id, false);
+  const outcome = await restoreArchive(restored, withArchiveDb(archive.bytes, legacy), owner.id);
   assert.equal(outcome.result.imported.attachments, 2);
   assert.equal(outcome.result.skipped.attachments, 0);
   assert.deepEqual([...kv.values.keys()], ['cipher-1/att-1', 'cipher-1/att-2']);
@@ -213,14 +205,13 @@ test('backup restore rejects a row missing a required value outside the replace 
   await getOrm(source.DB)
     .insert(ciphers)
     .values({ id: 'cipher-1', userId: owner.id, type: 1, favorite: 1, data: '{}', createdAt: 'c', updatedAt: 'u' });
-  const files = unzipSync((await buildBackupArchive(source, new Date(), { includeAttachments: false })).bytes);
-  const archived = JSON.parse(new TextDecoder().decode(files['db.json'])) as Record<string, Row[]>;
+  const { bytes } = await archiveOf(source, false);
+  const archived = archiveDb(bytes);
   delete archived.ciphers[0].favorite;
-  files['db.json'] = Buffer.from(JSON.stringify(archived));
 
   const restored = await createTestEnv();
   await assert.rejects(
-    importBackupArchiveBytes(zipSync(files), restored, owner.id, false),
+    restoreArchive(restored, withArchiveDb(bytes, archived), owner.id),
     /NOT NULL constraint failed: ciphers\.favorite/,
   );
   assert.deepEqual(await rowsOf(restored.DB, users, users.id), []);
@@ -240,12 +231,7 @@ test('backup restore writes tables with more rows than one D1 statement can bind
       .insert(folders)
       .values({ id, userId: owner.id, name: 'enc', createdAt: 'c', updatedAt: 'u' });
   const restored = await createTestEnv();
-  await importBackupArchiveBytes(
-    (await buildBackupArchive(source, new Date(), { includeAttachments: false })).bytes,
-    restored,
-    owner.id,
-    false,
-  );
+  await restoreArchive(restored, (await archiveOf(source, false)).bytes, owner.id);
   assert.deepEqual(
     (await getOrm(restored.DB).select({ id: folders.id }).from(folders)).map((row) => row.id).toSorted(),
     folderIds.toSorted(),
@@ -272,8 +258,8 @@ test('backup export reads every table in one snapshot, so a concurrent write can
       updatedAt: 'u',
     });
   });
-  const archive = await buildBackupArchive(source, new Date(), { includeAttachments: false });
-  await importBackupArchiveBytes(archive.bytes, await createTestEnv(), owner.id, false);
+  const archive = await archiveOf(source, false);
+  await restoreArchive(await createTestEnv(), archive.bytes, owner.id);
 });
 
 // Columns that point at another table without a foreign key; restore checks that the folder exists.
@@ -329,8 +315,8 @@ test('backup restore brings back every row of every archived table', async () =>
   const source = await createTestEnv();
   const seeded = await seedEveryArchivedTable(source, 'source');
   const restored = await createTestEnv();
-  const archive = await buildBackupArchive(source, new Date(), { includeAttachments: true });
-  await importBackupArchiveBytes(archive.bytes, restored, String(seeded.get('users')!.id), false);
+  const archive = await archiveOf(source);
+  await restoreArchive(restored, archive.bytes, String(seeded.get('users')!.id));
   assert.deepEqual(await archivedTables(restored.DB), await archivedTables(source.DB));
 });
 
@@ -339,20 +325,20 @@ test('a replacing restore swaps every archived table of a populated instance for
   const seeded = await seedEveryArchivedTable(source, 'source');
   const target = await createTestEnv();
   await seedEveryArchivedTable(target, 'target');
-  const archive = await buildBackupArchive(source, new Date(), { includeAttachments: true });
-  await importBackupArchiveBytes(archive.bytes, target, String(seeded.get('users')!.id), true);
+  const archive = await archiveOf(source);
+  await restoreArchive(target, archive.bytes, String(seeded.get('users')!.id), true);
   assert.deepEqual(await archivedTables(target.DB), await archivedTables(source.DB));
 });
 
 test('backup restore without replace refuses an instance that already has an organization', async () => {
   const source = await createTestEnv();
   const owner = await seedUser(source);
-  const archive = await buildBackupArchive(source, new Date(), { includeAttachments: false });
+  const archive = await archiveOf(source, false);
   const target = await createTestEnv();
   await getOrm(target.DB)
     .insert(organizations)
     .values({ id: 'org', name: 'enc', billingEmail: 'owner@example.test', createdAt: 'c', updatedAt: 'u' });
-  await assert.rejects(importBackupArchiveBytes(archive.bytes, target, owner.id, false), {
+  await assert.rejects(restoreArchive(target, archive.bytes, owner.id), {
     message: 'Backup import requires a fresh instance with no vault or send data',
   });
 });
@@ -381,42 +367,119 @@ test('file Sends travel with their files the way attachments do', async () => {
     ]);
 
   // Without attachments an archive carries no files, so the file Send stays behind.
-  const bare = await buildBackupArchive(source, new Date(), { includeAttachments: false });
+  const bare = await archiveOf(source, false);
   assert.equal(bare.manifest.tableCounts.sends, 1);
-  assert.deepEqual(bare.manifest.sendFileBlobs, []);
-  const archive = await buildBackupArchive(source, new Date(), { includeAttachments: true });
-  assert.deepEqual(archive.manifest.sendFileBlobs, [
-    { sendId: 'file-send', fileId: 'file-1', blobName: 'sends/file-send/file-1', sizeBytes: 4 },
-  ]);
+  assert.equal(bare.manifest.blobSummary.sendFiles, 0);
+  const archive = await archiveOf(source);
+  assert.deepEqual(archive.manifest.blobSummary, { attachmentFiles: 0, sendFiles: 1, totalBytes: 4, missingFiles: 0 });
   assert.equal(new TextDecoder().decode(unzipSync(archive.bytes)['attachments/sends/file-send/file-1.bin']), 'file');
 
   // The archive carries the file inline; restore stores it under the Send's blob key.
   const local = memoryKv();
-  const restored = await importBackupArchiveBytes(
-    archive.bytes,
+  const restored = await restoreArchive(
     await createTestEnv({ ATTACHMENTS_KV: local.binding }),
+    archive.bytes,
     owner.id,
-    false,
   );
   assert.deepEqual([restored.result.imported.sends, restored.result.imported.sendFiles], [2, 1]);
   assert.deepEqual([...local.values.keys()], ['sends/file-send/file-1']);
 
   // Without blob storage the file Send cannot restore; it is left out and reported.
   const noStorage = await createTestEnv();
-  const skipped = await importBackupArchiveBytes(archive.bytes, noStorage, owner.id, false);
+  const skipped = await restoreArchive(noStorage, archive.bytes, owner.id);
   assert.deepEqual(skipped.result.skipped.items, [
     { kind: 'send', path: 'attachments/sends/file-send/file-1.bin', sizeBytes: 4 },
   ]);
   assert.deepEqual(await getOrm(noStorage.DB).select({ id: sends.id }).from(sends), [{ id: 'text-send' }]);
 });
 
-test('backup export refuses an archive whose database payload restore would reject', async () => {
+test('backup export refuses a row that restore would reject for its size', async () => {
   const source = await createTestEnv();
   await seedUser(source);
   await getOrm(source.DB)
     .insert(config)
     .values({ key: 'oversized', value: 'x'.repeat(33 * 1024 * 1024) });
-  await assert.rejects(buildBackupArchive(source, new Date(), { includeAttachments: false }), {
-    message: 'Backup database payload is 33 MiB; restore accepts at most 32 MiB',
+  await assert.rejects(archiveOf(source, false), {
+    message: 'Backup table config holds a row of 33 MiB; restore accepts at most 32 MiB',
   });
+});
+
+test('a file the archive lacks leaves its row out and is reported, while the rest restores', async () => {
+  const blobs = memoryKv();
+  const source = await createTestEnv({ ATTACHMENTS_KV: blobs.binding });
+  const owner = await seedUser(source);
+  const orm = getOrm(source.DB);
+  await orm
+    .insert(ciphers)
+    .values({ id: 'cipher-1', userId: owner.id, type: 1, data: '{}', createdAt: 'c', updatedAt: 'u' });
+  await orm.insert(attachments).values(
+    ['kept', 'lost'].map((id) => ({
+      id,
+      cipherId: 'cipher-1',
+      fileName: 'enc',
+      size: 4,
+      sizeName: '4 Bytes',
+      key: 'k',
+    })),
+  );
+  // The lost attachment's blob is already gone, so the archive carries its row without a file.
+  await blobs.binding.put('cipher-1/kept', 'kept');
+  const archive = await archiveOf(source);
+  assert.equal(archive.manifest.blobSummary.missingFiles, 1);
+
+  const restoredBlobs = memoryKv();
+  const restored = await createTestEnv({ ATTACHMENTS_KV: restoredBlobs.binding });
+  const outcome = await restoreArchive(restored, archive.bytes, owner.id);
+  assert.deepEqual(outcome.result.skipped, {
+    reason: 'Some files were missing from the archive and were skipped',
+    attachments: 1,
+    sendFiles: 0,
+    items: [{ kind: 'attachment', path: 'attachments/cipher-1/lost.bin', sizeBytes: 4 }],
+  });
+  assert.deepEqual([...restoredBlobs.values.keys()], ['cipher-1/kept']);
+  assert.deepEqual(await getOrm(restored.DB).select({ id: attachments.id }).from(attachments), [{ id: 'kept' }]);
+});
+
+test('a database split over several slices restores, and a lost slice fails the manifest count', async () => {
+  const source = await createTestEnv();
+  const owner = await seedUser(source);
+  await getOrm(source.DB)
+    .insert(folders)
+    .values({ id: 'folder-1', userId: owner.id, name: 'enc', createdAt: 'c', updatedAt: 'u' });
+  const { bytes } = await archiveOf(source, false);
+  const { folders: folderRows, ...rest } = archiveDb(bytes);
+  const encode = (value: unknown) => new TextEncoder().encode(JSON.stringify(value));
+  const { 'db/0001.json': whole, ...entries } = unzipSync(withArchiveDb(bytes, { ...rest, folders: folderRows }));
+  assert.ok(whole);
+  const split = { ...entries, 'db/0001.json': encode(rest), 'db/0002.json': encode({ folders: folderRows }) };
+
+  const restored = await createTestEnv();
+  await restoreArchive(restored, zipSync(split), owner.id);
+  assert.deepEqual(await getOrm(restored.DB).select({ id: folders.id }).from(folders), [{ id: 'folder-1' }]);
+
+  const { 'db/0002.json': lost, ...truncated } = split;
+  assert.ok(lost);
+  await assert.rejects(restoreArchive(await createTestEnv(), zipSync(truncated), owner.id), {
+    message: 'Backup archive is incomplete: folders holds 0 rows, its manifest counts 1',
+  });
+});
+
+test('a format 2 archive, with the whole database in db.json, still restores', async () => {
+  const source = await createTestEnv();
+  const owner = await seedUser(source);
+  await getOrm(source.DB)
+    .insert(folders)
+    .values({ id: 'folder-1', userId: owner.id, name: 'enc', createdAt: 'c', updatedAt: 'u' });
+  const encode = (value: unknown) => new TextEncoder().encode(JSON.stringify(value));
+  const legacy = zipSync({
+    'manifest.json': encode({ formatVersion: 2 }),
+    // A whole database lists every table, empty ones included.
+    'db.json': encode({
+      ...Object.fromEntries(BACKUP_TABLE_NAMES.map((name) => [name, []])),
+      ...archiveDb((await archiveOf(source, false)).bytes),
+    }),
+  });
+  const restored = await createTestEnv();
+  await restoreArchive(restored, legacy, owner.id);
+  assert.deepEqual(await getOrm(restored.DB).select({ id: folders.id }).from(folders), [{ id: 'folder-1' }]);
 });

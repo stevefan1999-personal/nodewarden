@@ -6,9 +6,8 @@ import { getOrm } from '../db/client';
 import { authRequests, verification } from '../db/schema';
 import { createSsoEmail2faSessionToken, signHs256Jwt } from '../utils/jwt';
 import { hashPassword } from '../services/auth-password';
-import { buildBackupArchive } from '../services/backup-archive';
-import { importBackupArchiveBytes } from '../services/backup-import';
 import type { Env, User } from '../types';
+import { archiveOf, restoreArchive } from './support/backup';
 import { authedFetch, captureEmail, createTestEnv, drainWaitUntil, MAILABLE_DOMAIN, seedUser } from './support/env';
 import * as userRepo from '../services/storage-user-repo';
 
@@ -191,9 +190,9 @@ test('Email remains enforced with mail disabled, but settings and both removal r
 test('backup restore preserves the enrolled Email address', async () => {
   const { env, user, token, code } = await setup();
   assert.equal((await enable(env, user, token, FACTOR_EMAIL, code)).status, 200);
-  const archive = await buildBackupArchive(env, new Date(), { includeAttachments: false });
+  const archive = await archiveOf(env, false);
   const restored = await createTestEnv();
-  await importBackupArchiveBytes(archive.bytes, restored, user.id, false);
+  await restoreArchive(restored, archive.bytes, user.id);
   assert.equal((await userRepo.getUserById(restored.DB, user.id))?.twoFactorEmail, FACTOR_EMAIL);
 });
 

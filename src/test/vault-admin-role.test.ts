@@ -1,15 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { eq } from 'drizzle-orm';
-import { unzipSync, zipSync } from 'fflate';
 
 import { getOrm } from '../db/client';
 import { auditLogs } from '../db/schema';
-import { buildBackupArchive } from '../services/backup-archive';
-import { importBackupArchiveBytes } from '../services/backup-import';
 import { AuthService } from '../services/auth';
 import { markEmailVerified, syncVaultAdminRoles } from '../services/vault-admin-role';
 import { createRegisterVerifyToken } from '../utils/jwt';
+import { archiveDb, archiveOf, restoreArchive, withArchiveDb } from './support/backup';
 import { authedFetch, createTestEnv, portalFetch, seedUser, signInToAdminPortal } from './support/env';
 import * as userRepo from '../services/storage-user-repo';
 
@@ -129,14 +127,12 @@ test('backup restore preserves verified state, defaults legacy rows and corrects
   const legacy = await seedUser(source, { role: 'admin' });
   const listed = await seedUser(source);
   const unverified = await seedUser(source, { emailVerified: false });
-  const archive = await buildBackupArchive(source, new Date(), { includeAttachments: false });
-  const files = unzipSync(archive.bytes);
-  const db = JSON.parse(new TextDecoder().decode(files['db.json']));
-  assert.equal(db.users.find((row: { id: string }) => row.id === unverified.id).email_verified, 0);
-  delete db.users.find((row: { id: string }) => row.id === listed.id).email_verified;
-  files['db.json'] = Buffer.from(JSON.stringify(db));
+  const { bytes } = await archiveOf(source, false);
+  const db = archiveDb(bytes);
+  assert.equal(db.users.find((row) => row.id === unverified.id)!.email_verified, 0);
+  delete db.users.find((row) => row.id === listed.id)!.email_verified;
   const env = await createTestEnv({ ADMIN_EMAILS: listed.email });
-  await importBackupArchiveBytes(zipSync(files), env, legacy.id, false);
+  await restoreArchive(env, withArchiveDb(bytes, db), legacy.id);
   assert.equal((await userRepo.getUserById(env.DB, listed.id))?.role, 'admin');
   assert.equal((await userRepo.getUserById(env.DB, listed.id))?.emailVerified, true);
   assert.equal((await userRepo.getUserById(env.DB, legacy.id))?.role, 'user');

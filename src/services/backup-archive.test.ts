@@ -2,10 +2,15 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { getTableName, is } from 'drizzle-orm';
 import { getTableConfig, SQLiteTable } from 'drizzle-orm/sqlite-core';
-import { zipSync } from 'fflate';
 
 import * as schema from '../db/schema';
-import { BACKUP_TABLE_NAMES, BACKUP_TABLES, isSafeBackupBlobName, parseBackupArchive } from './backup-archive';
+import {
+  BACKUP_TABLE_NAMES,
+  BACKUP_TABLES,
+  isSafeBackupBlobName,
+  parseBackupManifest,
+  parseDbEntry,
+} from './backup-archive';
 
 // Tables that stay with their instance, and why. Every other table must be archived.
 const INSTANCE_LOCAL_TABLES: Record<string, string> = {
@@ -26,37 +31,32 @@ const INSTANCE_LOCAL_TABLES: Record<string, string> = {
 };
 
 const tables = { config: [], users: [], user_revisions: [], folders: [], ciphers: [], attachments: [] };
+const json = (value: unknown) => new TextEncoder().encode(JSON.stringify(value));
 
-function archive(manifest: unknown, db: unknown): Uint8Array {
-  const encoder = new TextEncoder();
-  return zipSync({
-    'manifest.json': encoder.encode(JSON.stringify(manifest)),
-    'db.json': encoder.encode(JSON.stringify(db)),
-  });
-}
-
-test('parseBackupArchive keeps only allowlisted tables and defaults the optional ones', () => {
-  const { payload } = parseBackupArchive(archive({ formatVersion: 1 }, { ...tables, devices: [{ id: 'd1' }] }));
-  assert.deepEqual(payload.db, Object.fromEntries(BACKUP_TABLE_NAMES.map((name) => [name, []])));
-  assert.deepEqual(payload.manifest.attachmentBlobs, []);
+test('a database entry keeps only allowlisted tables, and a whole database must list the required ones', () => {
+  assert.deepEqual(parseDbEntry(json({ ...tables, devices: [{ id: 'd1' }] }), true), tables);
+  // A slice holds whichever tables it reaches.
+  assert.deepEqual(parseDbEntry(json({ folders: [] }), false), { folders: [] });
+  const required = BACKUP_TABLE_NAMES.find((name) => 'required' in BACKUP_TABLES[name]);
+  assert.throws(() => parseDbEntry(json({}), true), { message: `Backup archive table ${required} is invalid` });
 });
 
-test('parseBackupArchive names the first malformed table or manifest field', () => {
-  const cases: Array<[unknown, unknown, string]> = [
-    [{ formatVersion: 3 }, tables, 'Unsupported backup format version'],
-    [null, tables, 'Unsupported backup format version'],
-    [{ formatVersion: 1 }, [], 'Backup archive database payload is invalid'],
-    [{ formatVersion: 1 }, { ...tables, users: {} }, 'Backup archive table users is invalid'],
-    [
-      { formatVersion: 1 },
-      { ...tables, ciphers: [{ data: { nested: true } }] },
-      'Backup archive table ciphers is invalid',
-    ],
-    [{ formatVersion: 1, attachmentBlobs: [{ cipherId: 'c1' }] }, tables, 'Backup archive manifest is invalid'],
+test('manifests and database entries name the first malformed field', () => {
+  const manifests: Array<[unknown, string]> = [
+    [{ formatVersion: 4 }, 'Unsupported backup format version'],
+    [null, 'Unsupported backup format version'],
+    [{ formatVersion: 3, tableCounts: { users: 'many' } }, 'Backup archive manifest is invalid'],
   ];
-  for (const [manifest, db, message] of cases) {
-    assert.throws(() => parseBackupArchive(archive(manifest, db)), { message });
-  }
+  for (const [manifest, message] of manifests) assert.throws(() => parseBackupManifest(json(manifest)), { message });
+  assert.throws(() => parseBackupManifest(new TextEncoder().encode('{not json')), {
+    message: 'Backup archive contains invalid JSON metadata',
+  });
+  const entries: Array<[unknown, string]> = [
+    [[], 'Backup archive database payload is invalid'],
+    [{ ...tables, users: {} }, 'Backup archive table users is invalid'],
+    [{ ...tables, ciphers: [{ data: { nested: true } }] }, 'Backup archive table ciphers is invalid'],
+  ];
+  for (const [db, message] of entries) assert.throws(() => parseDbEntry(json(db), true), { message });
 });
 
 test('every schema table is either archived or kept with its instance', () => {
@@ -84,7 +84,7 @@ test('archived tables come after every table their rows reference', () => {
     }
 });
 
-test('archives and remote destinations accept only attachment and Send file blob keys', () => {
+test('archives accept only attachment and Send file blob keys', () => {
   for (const name of ['cipher-1/attachment-1', 'sends/send-1/file-1'])
     assert.equal(isSafeBackupBlobName(name), true, name);
   for (const name of [

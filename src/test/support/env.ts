@@ -53,7 +53,26 @@ const rateLimitBindings = Object.fromEntries(
   ]),
 );
 
+// workerd's pass-through stream that promises a byte count, which R2 needs to store a stream: like workerd's, it
+// errors when the bytes through it are more or fewer.
+class FixedLengthStream extends TransformStream<Uint8Array, Uint8Array> {
+  constructor(expectedLength: number | bigint) {
+    let seen = 0;
+    super({
+      transform(chunk, controller) {
+        seen += chunk.byteLength;
+        if (seen > Number(expectedLength)) throw new Error('FixedLengthStream received more bytes than promised');
+        controller.enqueue(chunk);
+      },
+      flush() {
+        if (seen !== Number(expectedLength)) throw new Error('FixedLengthStream received fewer bytes than promised');
+      },
+    });
+  }
+}
+
 Object.assign(globalThis, {
+  FixedLengthStream,
   caches: { default: namedCache('default') },
   async fetch(input: RequestInfo | URL): Promise<Response> {
     throw new Error(`Outbound fetch blocked in tests: ${new Request(input).url}`);
@@ -123,8 +142,9 @@ export function memoryKv(): { binding: KVNamespace; values: Map<string, string> 
       const value = values.get(key);
       return { value: value === undefined ? null : await new Response(value).arrayBuffer(), metadata: null };
     },
-    put: async (key: string, value: string) => {
-      values.set(key, value);
+    // Reads a stream to its end, as KV does; values are text, as every blob the tests store is.
+    put: async (key: string, value: string | ReadableStream | ArrayBuffer | ArrayBufferView) => {
+      values.set(key, typeof value === 'string' ? value : await new Response(value).text());
     },
     delete: async (key: string) => {
       values.delete(key);
@@ -139,9 +159,11 @@ export interface StoredR2Object {
   contentType: string | undefined;
 }
 
-// An R2 bucket in memory with the calls backups make, listing keys in order a page at a time as R2 does.
+// An R2 bucket in memory with the calls backups make: range reads, listing keys in order a page at a time, and
+// multipart uploads held to R2's part rules, so a writer that breaks them fails here as it would in production.
 export function memoryR2(): { binding: R2Bucket; objects: Map<string, StoredR2Object> } {
   const LIST_PAGE_KEYS = 1000;
+  const MIN_PART_BYTES = 5 * 1024 * 1024;
   const objects = new Map<string, StoredR2Object>();
   const describe = (key: string, { bytes, uploaded, contentType }: StoredR2Object) => ({
     key,
@@ -160,13 +182,49 @@ export function memoryR2(): { binding: R2Bucket; objects: Map<string, StoredR2Ob
       objects.set(key, stored);
       return describe(key, stored);
     },
-    async get(key: string) {
+    async get(key: string, options?: R2GetOptions) {
       const stored = objects.get(key);
       if (!stored) return null;
+      const range = options?.range as { offset: number; length: number } | undefined;
+      const bytes = range ? stored.bytes.slice(range.offset, range.offset + range.length) : stored.bytes;
       return {
         ...describe(key, stored),
-        body: new Response(stored.bytes).body,
-        arrayBuffer: async () => stored.bytes.slice().buffer,
+        body: new Response(bytes).body,
+        arrayBuffer: async () => bytes.slice().buffer,
+      };
+    },
+    async createMultipartUpload(key: string, options?: R2MultipartOptions) {
+      const parts = new Map<number, Uint8Array>();
+      return {
+        key,
+        uploadId: crypto.randomUUID(),
+        async uploadPart(partNumber: number, value: BodyInit) {
+          parts.set(partNumber, new Uint8Array(await new Response(value).arrayBuffer()));
+          return { partNumber, etag: String(partNumber) };
+        },
+        async complete(uploaded: R2UploadedPart[]) {
+          const ordered = uploaded
+            .toSorted((a, b) => a.partNumber - b.partNumber)
+            .map(({ partNumber }) => parts.get(partNumber)!);
+          const [first, ...rest] = ordered;
+          if (rest.some((part, index) => index < rest.length - 1 && part.byteLength !== first.byteLength))
+            throw new Error('R2 multipart parts before the last must share one size');
+          if (ordered.slice(0, -1).some((part) => part.byteLength < MIN_PART_BYTES))
+            throw new Error('R2 multipart parts before the last must be at least 5 MiB');
+          const bytes = new Uint8Array(ordered.reduce((sum, part) => sum + part.byteLength, 0));
+          ordered.reduce((offset, part) => (bytes.set(part, offset), offset + part.byteLength), 0);
+          const httpMetadata = options?.httpMetadata;
+          const stored = {
+            bytes,
+            uploaded: new Date(),
+            contentType: httpMetadata instanceof Headers ? undefined : httpMetadata?.contentType,
+          };
+          objects.set(key, stored);
+          return describe(key, stored);
+        },
+        async abort() {
+          parts.clear();
+        },
       };
     },
     async head(key: string) {

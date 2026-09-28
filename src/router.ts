@@ -54,7 +54,7 @@ app.use(async (c, next) => {
 
 const BODY_LIMIT_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
-// Attachment and Send file uploads and backup imports are exempt from the buffered body cap.
+// Attachment and Send file uploads are exempt from the buffered body cap.
 app.use(async (c, next) => {
   const request = c.req.raw;
   const path = c.req.path;
@@ -62,8 +62,7 @@ app.use(async (c, next) => {
     BODY_LIMIT_METHODS.has(c.req.method) &&
     !(
       /^\/api\/ciphers\/[a-f0-9-]+\/attachment\/[a-f0-9-]+$/i.test(path) ||
-      /^\/api\/sends\/[a-f0-9-]+\/file\/[a-f0-9-]+$/i.test(path) ||
-      path === '/api/admin/backup/import'
+      /^\/api\/sends\/[a-f0-9-]+\/file\/[a-f0-9-]+$/i.test(path)
     ) &&
     request.body
   ) {

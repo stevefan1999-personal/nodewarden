@@ -1,23 +1,30 @@
-import { syncVaultAdminRoles } from './vault-admin-role';
 import { and, count, eq } from 'drizzle-orm';
 
-import { chunkRows, columnCount, getOrm } from '../db/client';
+import { chunkRows, columnCount, getOrm, withoutQueryParams } from '../db/client';
 import { attachments, backupRestoreRows, ciphers, folders, organizations, sends } from '../db/schema';
 import { bound, coalesce, jsonExtract } from '../db/sql';
 import type { Env } from '../types';
-import { KV_MAX_OBJECT_BYTES, deleteBlobObject, getBlobStorageKind, putBlobObject } from './blob-store';
 import {
+  BACKUP_FORMAT_VERSION,
   BACKUP_TABLE_NAMES,
   BACKUP_TABLES,
+  BackupRowValidator,
+  DB_SLICE_ENTRY,
   INSTANCE_LOCAL_CONFIG_KEYS,
+  MAX_ARCHIVE_ENTRIES,
+  MAX_DB_ENTRY_BYTES,
+  MAX_MANIFEST_BYTES,
   archivedFiles,
   backupColumns,
-  type ArchivedFile,
-  type BackupPayload,
+  parseBackupManifest,
+  parseDbEntry,
+  validateBackupEntryName,
   type BackupTableName,
-  parseBackupArchive,
-  validateBackupPayloadContents,
+  type SqlRow,
 } from './backup-archive';
+import { R2ZipReader, type ZipEntry } from './backup-zip';
+import { KV_MAX_OBJECT_BYTES, deleteBlobObject, getBlobStorageKind, putBlobObject } from './blob-store';
+import { syncVaultAdminRoles } from './vault-admin-role';
 
 // CONTRACT:
 // Restore is intentionally whitelist-based. Old backups may contain retired
@@ -25,12 +32,11 @@ import {
 // archives are imported.
 //
 // WHEN CHANGING THIS:
-// - Give rows from older archives a value for every column a table gains in
-//   the prepared payload, as users, passkeys and ciphers do.
+// - Give rows from older archives a value for every column a table gains when
+//   their slice is prepared, as users, passkeys and ciphers do.
 // - Do not import users.api_key, even if an older backup contains it.
 // - Do not import, clear, or replace runtime authentication state such as
 //   devices, sessions, auth requests, or remembered 2FA device tokens.
-type SqlRow = Record<string, string | number | null>;
 
 export interface BackupImportResultBody {
   object: 'instance-backup-import';
@@ -60,6 +66,15 @@ type SkippedFile = { kind: 'attachment' | 'send'; path: string; sizeBytes: numbe
 export interface BackupImportExecutionResult {
   result: BackupImportResultBody;
   auditActorUserId: string | null;
+}
+
+// A staged row whose file streams to blob storage once every slice is staged.
+interface StagedFile {
+  table: 'attachments' | 'sends';
+  position: number;
+  key: string;
+  entry: ZipEntry;
+  item: SkippedFile;
 }
 
 // Staged rows per table must match what the restore meant to stage; a mismatch rejects it before the swap.
@@ -96,47 +111,44 @@ async function collectCurrentBlobKeys(db: D1Database): Promise<Set<string>> {
 
 const KV_BLOB_SKIP_REASON = 'Cloudflare KV object size limit (25 MB)';
 const BLOB_STORAGE_UNAVAILABLE_SKIP_REASON = 'Attachment storage is not configured';
+const MISSING_FILE_SKIP_REASON = 'Some files were missing from the archive and were skipped';
 const FILE_RESTORE_FAILED_REASON = 'Some attachments could not be restored and were skipped';
 
-export async function importBackupArchiveBytes(
-  archiveBytes: Uint8Array,
+// Restores the archive at key in bucket. The archive is read through range requests and each database entry is
+// parsed alone, so memory holds one entry, the id sets the validator keeps and the staged files' entries. Rows are
+// staged in backup_restore_rows as they arrive; the live tables change only in the final swap. ponytail: two
+// subrequests per file (its range read and its store), so a restore stays within the invocation's 10,000 with a
+// few thousand files; raise limits.subrequests for more.
+export async function restoreBackupArchive(
   env: Env,
+  bucket: R2Bucket,
+  key: string,
   actorUserId: string,
   replaceExisting: boolean,
 ): Promise<BackupImportExecutionResult> {
-  const parsed = parseBackupArchive(archiveBytes);
-  validateBackupPayloadContents(parsed.payload, parsed.files);
-  const storageKind = getBlobStorageKind(env);
-  const describe = (file: ArchivedFile) => {
-    const inline = parsed.files[`attachments/${file.key}.bin`];
-    const item: SkippedFile = {
-      kind: file.table === 'sends' ? 'send' : 'attachment',
-      path: `attachments/${file.key}.bin`,
-      sizeBytes: inline?.byteLength ?? file.sizeBytes,
-    };
-    return { inline, item };
-  };
-  // Fit the files to this instance's blob storage: R2 takes every file, KV only files within its object
-  // size limit, and without storage no file-owning row restores. A row whose file does not fit is left out.
-  const unfit = archivedFiles(parsed.payload.db).filter((file) => {
-    const { inline, item } = describe(file);
-    return !inline || !storageKind || (storageKind === 'kv' && item.sizeBytes > KV_MAX_OBJECT_BYTES);
-  });
-  const unfitRows = new Set(unfit.map(({ row }) => row));
-  const prepared = {
-    payload: {
-      ...parsed.payload,
-      db: {
-        ...parsed.payload.db,
-        attachments: parsed.payload.db.attachments.filter((row) => !unfitRows.has(row)),
-        sends: parsed.payload.db.sends.filter((row) => !unfitRows.has(row)),
-      },
-    },
-    skipped: unfit.map((file) => describe(file).item),
-    reason: !unfit.length ? null : storageKind ? KV_BLOB_SKIP_REASON : BLOB_STORAGE_UNAVAILABLE_SKIP_REASON,
-  };
-  const orm = getOrm(env.DB);
+  const zip = await R2ZipReader.open(bucket, key);
+  if (!zip) throw new Error('Backup archive not found');
+  if (zip.entries.length > MAX_ARCHIVE_ENTRIES) throw new Error('Backup archive contains too many files');
+  const entries = new Map<string, ZipEntry>();
+  for (const entry of zip.entries) {
+    validateBackupEntryName(entry.name);
+    if (entries.has(entry.name)) throw new Error(`Backup archive contains a duplicate file: ${entry.name}`);
+    entries.set(entry.name, entry);
+  }
+  const manifestEntry = entries.get('manifest.json');
+  if (!manifestEntry) throw new Error('Backup archive is missing manifest.json or db.json');
+  const manifest = parseBackupManifest(
+    await zip.bytes(manifestEntry, MAX_MANIFEST_BYTES, 'Backup archive manifest is too large'),
+  );
+  // Format 3 slices the database in restore order; older archives hold it whole in db.json.
+  const sliced = manifest.formatVersion === BACKUP_FORMAT_VERSION;
+  const sliceNumber = (entry: ZipEntry) => Number(DB_SLICE_ENTRY.exec(entry.name)?.[1]);
+  const dbEntries = sliced
+    ? zip.entries.filter((entry) => DB_SLICE_ENTRY.test(entry.name)).toSorted((a, b) => sliceNumber(a) - sliceNumber(b))
+    : [entries.get('db.json')].filter((entry) => entry !== undefined);
+  if (!dbEntries.length) throw new Error('Backup archive is missing manifest.json or db.json');
 
+  const orm = getOrm(env.DB);
   try {
     const counts = await Promise.all([
       orm.select({ count: count() }).from(ciphers),
@@ -155,85 +167,158 @@ export async function importBackupArchiveBytes(
     }
   }
 
+  const storageKind = getBlobStorageKind(env);
   await orm.delete(backupRestoreRows);
   const previousBlobKeys = replaceExisting ? await collectCurrentBlobKeys(env.DB) : new Set<string>();
   try {
-    // A restored instance counts as registered, whatever the archive says.
-    const configRows: SqlRow[] = [
-      ...prepared.payload.db.config.filter((row) => {
-        const key = String(row.key || '').trim();
-        return key !== 'registered' && !INSTANCE_LOCAL_CONFIG_KEYS.has(key);
-      }),
-      { key: 'registered', value: 'true' },
-    ];
-    const db: BackupPayload['db'] = {
-      ...prepared.payload.db,
-      config: configRows,
-      users: prepared.payload.db.users.map((row) => ({
-        ...row,
-        email_verified: row.email_verified ?? 1,
-        verify_devices: row.verify_devices ?? 0,
-        yubikey_nfc: row.yubikey_nfc ?? 0,
-      })),
-      // Archives from before passkey purposes hold login passkeys only.
-      webauthn_credentials: prepared.payload.db.webauthn_credentials.map((row) => ({
-        ...row,
-        purpose: row.purpose == null ? 'login' : String(row.purpose).trim() === 'twoFactor' ? 'twoFactor' : 'login',
-      })),
-      ciphers: prepared.payload.db.ciphers.map((row) => ({
-        ...row,
-        archived_at: row.archived_at ?? null,
-      })),
-    };
-    // Each archived row is staged as JSON under its table and position, one batch per table: three parameters
-    // a row, and only the archived columns. The live tables stay intact until the swap below.
-    for (const name of BACKUP_TABLE_NAMES) {
-      const rows = db[name].map((row, position) => ({
+    const validator = new BackupRowValidator();
+    const read = new Map<BackupTableName, number>();
+    const staged = new Map<BackupTableName, number>();
+    const stagedFiles: StagedFile[] = [];
+    const skipped: Array<{ item: SkippedFile; reason: string }> = [];
+    let actorRestored = false;
+    // Stages rows at the table's next positions, three parameters a row and only the archived columns, and
+    // returns the first position.
+    const stage = async (name: BackupTableName, rows: SqlRow[]) => {
+      const first = staged.get(name) ?? 0;
+      staged.set(name, first + rows.length);
+      const values = rows.map((row, index) => ({
         tableName: name,
-        position,
+        position: first + index,
         row: JSON.stringify(
           Object.fromEntries(backupColumns(name).map(([, column]) => [column.name, row[column.name] ?? null])),
         ),
       }));
-      const statements = chunkRows(rows, columnCount(backupRestoreRows)).map((chunk) =>
+      const statements = chunkRows(values, columnCount(backupRestoreRows)).map((chunk) =>
         orm.insert(backupRestoreRows).values(chunk),
       );
       if (statements.length) await orm.batch(statements as [(typeof statements)[0], ...typeof statements]);
-    }
-    const stagedCounts = Object.fromEntries(BACKUP_TABLE_NAMES.map((name) => [name, db[name].length]));
-    await validateStagedCounts(env.DB, stagedCounts);
+      return first;
+    };
 
-    // Store each file under its blob key. A row whose file is missing or cannot be stored leaves the staging
-    // table and is reported as skipped; a failed drop is left to the count validation below.
-    const files = archivedFiles(db);
-    const failedRows = new Set<SqlRow>();
-    for (const file of files) {
-      const { inline } = describe(file);
-      try {
-        const bytes = inline;
-        if (!bytes) throw new Error('Backup file is unavailable');
-        await putBlobObject(env, file.key, bytes, { size: bytes.byteLength, contentType: 'application/octet-stream' });
-      } catch {
-        failedRows.add(file.row);
+    for (const dbEntry of dbEntries) {
+      const slice = parseDbEntry(
+        await zip.bytes(dbEntry, MAX_DB_ENTRY_BYTES, 'Backup archive database payload is too large'),
+        !sliced,
+      );
+      for (const name of BACKUP_TABLE_NAMES) {
+        const rows = slice[name];
+        if (!rows?.length) continue;
+        read.set(name, (read.get(name) ?? 0) + rows.length);
+        validator.check(name, rows);
+        if (name === 'users') actorRestored ||= rows.some((row) => String(row.id || '').trim() === actorUserId);
+        // Rows from older archives get a value for every column the table gained since. The instance's own
+        // config rows, and the registered flag staged below, are not taken from the archive.
+        const prepared =
+          name === 'config'
+            ? rows.filter((row) => {
+                const configKey = String(row.key || '').trim();
+                return configKey !== 'registered' && !INSTANCE_LOCAL_CONFIG_KEYS.has(configKey);
+              })
+            : name === 'users'
+              ? rows.map((row) => ({
+                  ...row,
+                  email_verified: row.email_verified ?? 1,
+                  verify_devices: row.verify_devices ?? 0,
+                  yubikey_nfc: row.yubikey_nfc ?? 0,
+                }))
+              : // Archives from before passkey purposes hold login passkeys only.
+                name === 'webauthn_credentials'
+                ? rows.map((row) => ({
+                    ...row,
+                    purpose:
+                      row.purpose == null
+                        ? 'login'
+                        : String(row.purpose).trim() === 'twoFactor'
+                          ? 'twoFactor'
+                          : 'login',
+                  }))
+                : name === 'ciphers'
+                  ? rows.map((row) => ({ ...row, archived_at: row.archived_at ?? null }))
+                  : rows;
+        // A file-owning row restores only with a file in the archive that this instance can store; the rest are
+        // left out and reported.
+        const described = prepared.map((row) => {
+          const [file] = archivedFiles({
+            attachments: name === 'attachments' ? [row] : [],
+            sends: name === 'sends' ? [row] : [],
+          });
+          if (!file) return { row };
+          const path = `attachments/${file.key}.bin`;
+          const entry = entries.get(path);
+          const item: SkippedFile = {
+            kind: file.table === 'sends' ? 'send' : 'attachment',
+            path,
+            sizeBytes: entry?.size ?? file.sizeBytes,
+          };
+          const reason = !entry
+            ? MISSING_FILE_SKIP_REASON
+            : !storageKind
+              ? BLOB_STORAGE_UNAVAILABLE_SKIP_REASON
+              : storageKind === 'kv' && entry.size > KV_MAX_OBJECT_BYTES
+                ? KV_BLOB_SKIP_REASON
+                : null;
+          return { row, file: { table: file.table, key: file.key, entry, item }, reason };
+        });
+        skipped.push(...described.flatMap(({ file, reason }) => (file && reason ? [{ item: file.item, reason }] : [])));
+        const kept = described.filter(({ reason }) => !reason);
+        const first = await stage(
+          name,
+          kept.map(({ row }) => row),
+        );
+        stagedFiles.push(
+          ...kept.flatMap(({ file }, index) =>
+            file?.entry ? [{ ...file, entry: file.entry, position: first + index }] : [],
+          ),
+        );
       }
     }
-    const failed = files.filter(({ row }) => failedRows.has(row));
-    const drops = failed.map(({ table, row }) =>
+    // A format 3 manifest counts every table's rows, so a lost slice cannot pass for a smaller table.
+    if (sliced)
+      for (const name of BACKUP_TABLE_NAMES) {
+        const expected = manifest.tableCounts[name] ?? 0;
+        const found = read.get(name) ?? 0;
+        if (found !== expected)
+          throw new Error(`Backup archive is incomplete: ${name} holds ${found} rows, its manifest counts ${expected}`);
+      }
+    // A restored instance counts as registered, whatever the archive says.
+    await stage('config', [{ key: 'registered', value: 'true' }]);
+    await validateStagedCounts(env.DB, Object.fromEntries(staged));
+
+    // Each file streams from its entry to its blob key. One that cannot be stored takes its row out of the staging
+    // table and is reported as skipped; a failed drop is left to the count check below.
+    const failed: StagedFile[] = [];
+    for (const file of stagedFiles) {
+      // A store that fails before reading its stream would leave the entry's range read open; the abort closes it.
+      const abort = new AbortController();
+      try {
+        const { readable, writable } = new FixedLengthStream(file.entry.size);
+        await Promise.all([
+          (await zip.stream(file.entry)).pipeTo(writable, { signal: abort.signal }),
+          putBlobObject(env, file.key, readable, { size: file.entry.size, contentType: 'application/octet-stream' }),
+        ]);
+      } catch (error) {
+        abort.abort();
+        console.error('Backup file restore failed', file.key, withoutQueryParams(error));
+        failed.push(file);
+      }
+    }
+    const drops = failed.map(({ table, position }) =>
       orm
         .delete(backupRestoreRows)
-        .where(and(eq(backupRestoreRows.tableName, table), eq(backupRestoreRows.position, db[table].indexOf(row)))),
+        .where(and(eq(backupRestoreRows.tableName, table), eq(backupRestoreRows.position, position))),
     );
     if (drops.length) await orm.batch(drops as [(typeof drops)[0], ...typeof drops]).catch(() => undefined);
-    // What each file-owning table restored: its rows, and the files among them.
-    const restored = (table: ArchivedFile['table']) => ({
-      rows: db[table].filter((row) => !failedRows.has(row)).length,
-      files: files.filter((file) => file.table === table && !failedRows.has(file.row)).length,
-    });
+    const failedIn = (table: StagedFile['table']) => failed.filter((file) => file.table === table).length;
+    const restoredRows = (table: StagedFile['table']) => (staged.get(table) ?? 0) - failedIn(table);
+    const restoredFiles = (table: StagedFile['table']) =>
+      stagedFiles.filter((file) => file.table === table).length - failedIn(table);
     await validateStagedCounts(env.DB, {
-      ...stagedCounts,
-      attachments: restored('attachments').rows,
-      sends: restored('sends').rows,
+      ...Object.fromEntries(staged),
+      attachments: restoredRows('attachments'),
+      sends: restoredRows('sends'),
     });
+
     // Commit by replacing every live table from the staged rows in one batch, so the live data changes only if
     // all of it applies. Live constraints check the archive here: a missing required value, a duplicate key or a
     // dangling reference rolls the batch back. Columns are copied by name, as a live table's physical column
@@ -281,29 +366,30 @@ export async function importBackupArchiveBytes(
       }
     }
 
-    const skippedItems = [...prepared.skipped, ...failed.map((file) => describe(file).item)];
+    const imported = (name: BackupTableName) => staged.get(name) ?? 0;
+    const skippedItems = [...skipped, ...failed.map(({ item }) => ({ item, reason: FILE_RESTORE_FAILED_REASON }))];
     return {
-      auditActorUserId: db.users.some((row) => String(row.id || '').trim() === actorUserId) ? actorUserId : null,
+      auditActorUserId: actorRestored ? actorUserId : null,
       result: {
         object: 'instance-backup-import',
         imported: {
-          config: db.config.length,
-          users: db.users.length,
-          domainSettings: db.domain_settings.length,
-          userRevisions: db.user_revisions.length,
-          webauthnCredentials: db.webauthn_credentials.length,
-          folders: db.folders.length,
-          ciphers: db.ciphers.length,
-          attachments: restored('attachments').rows,
-          attachmentFiles: restored('attachments').files,
-          sends: restored('sends').rows,
-          sendFiles: restored('sends').files,
+          config: imported('config'),
+          users: imported('users'),
+          domainSettings: imported('domain_settings'),
+          userRevisions: imported('user_revisions'),
+          webauthnCredentials: imported('webauthn_credentials'),
+          folders: imported('folders'),
+          ciphers: imported('ciphers'),
+          attachments: restoredRows('attachments'),
+          attachmentFiles: restoredFiles('attachments'),
+          sends: restoredRows('sends'),
+          sendFiles: restoredFiles('sends'),
         },
         skipped: {
-          reason: failed.length ? FILE_RESTORE_FAILED_REASON : prepared.reason,
-          attachments: skippedItems.filter((item) => item.kind === 'attachment').length,
-          sendFiles: skippedItems.filter((item) => item.kind === 'send').length,
-          items: skippedItems,
+          reason: failed.length ? FILE_RESTORE_FAILED_REASON : (skipped[0]?.reason ?? null),
+          attachments: skippedItems.filter(({ item }) => item.kind === 'attachment').length,
+          sendFiles: skippedItems.filter(({ item }) => item.kind === 'send').length,
+          items: skippedItems.map(({ item }) => item),
         },
       },
     };

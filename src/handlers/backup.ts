@@ -2,23 +2,14 @@ import type { Env, User } from '../types';
 import { z } from 'zod';
 import { bodyIssues, errorResponse, jsonResponse, parseBody } from '../utils/response';
 import {
-  MAX_BACKUP_ARCHIVE_BYTES,
-  buildBackupArchive,
-  isSafeBackupBlobName,
-  verifyBackupArchiveFileNameChecksum,
-} from '../services/backup-archive';
-import {
   BackupScheduleSchema,
   loadBackupSchedule,
   loadBackupStatus,
   saveBackupSchedule,
 } from '../services/backup-config';
-import { importBackupArchiveBytes } from '../services/backup-import';
 import { deleteBackupArchive, isBackupArchiveKey, listBackupArchives } from '../services/backup-runs';
 import { AuthService } from '../services/auth';
 import { auditRequestMetadata, writeAuditEvent } from '../services/audit-events';
-import { getBlobObject } from '../services/blob-store';
-import { getMultipartRequestMaxBytes } from '../utils/direct-upload';
 
 function isAdmin(user: User): boolean {
   return user.role === 'admin' && user.status === 'active';
@@ -62,17 +53,6 @@ async function writeAuditLog(
 
 function backupTransferRunner(env: Env) {
   return env.BACKUP_TRANSFER_RUNNER.get(env.BACKUP_TRANSFER_RUNNER.idFromName('configured-backup-runner'));
-}
-
-function toImportStatusCode(message: string): number {
-  const lower = message.toLowerCase();
-  if (lower.includes('checksum')) return 400;
-  if (lower.includes('not found')) return 404;
-  if (lower.includes('invalid backup') || lower.includes('invalid json') || lower.includes('key is invalid'))
-    return 400;
-  if (lower.includes('fresh instance')) return 409;
-  if (lower.includes('not configured') || lower.includes('kv')) return 409;
-  return 500;
 }
 
 export async function runScheduledBackupIfDue(env: Env): Promise<void> {
@@ -191,7 +171,17 @@ export async function handleRestoreAdminBackupArchive(request: Request, env: Env
     return jsonResponse(imported);
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Backup restore failed';
-    return errorResponse(message, toImportStatusCode(message));
+    // What is wrong with the archive is the caller's to fix; an instance that is not fresh or has no storage
+    // conflicts with the restore.
+    const status =
+      message === 'Backup archive not found'
+        ? 404
+        : /^(Backup archive |Invalid backup archive|Unsupported backup format version)/.test(message)
+          ? 400
+          : /fresh instance|not configured/.test(message)
+            ? 409
+            : 500;
+    return errorResponse(message, status);
   }
 }
 
@@ -210,186 +200,4 @@ export async function handleDeleteAdminBackupArchive(request: Request, env: Env,
   await deleteBackupArchive(env, key);
   await writeAuditLog(env.DB, actorUser.id, 'admin.backup.archive.delete', key, {}, request);
   return jsonResponse({ object: 'backup-archive-delete', deleted: true, key });
-}
-
-export async function handleAdminExportBackup(request: Request, env: Env, actorUser: User): Promise<Response> {
-  if (!isAdmin(actorUser)) return errorResponse('Forbidden', 403);
-
-  const body = await parseBackupBody(
-    request,
-    { includeAttachments: z.boolean().nullish(), masterPasswordHash: optionalString },
-    'Backup export payload is invalid',
-  );
-  if (body instanceof Response) return body;
-  const verificationError = await requireBackupUserVerification(actorUser, body.masterPasswordHash, env);
-  if (verificationError) return verificationError;
-
-  let archive: Awaited<ReturnType<typeof buildBackupArchive>>;
-  try {
-    archive = await buildBackupArchive(env, new Date(), { includeAttachments: !!body.includeAttachments });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Backup export failed';
-    return errorResponse(message, message.includes('blob missing') ? 409 : 500);
-  }
-
-  await writeAuditLog(
-    env.DB,
-    actorUser.id,
-    'admin.backup.export',
-    null,
-    {
-      users: archive.manifest.tableCounts.users,
-      ciphers: archive.manifest.tableCounts.ciphers,
-      attachments: archive.manifest.tableCounts.attachments,
-      compressedBytes: archive.bytes.byteLength,
-      includesAttachments: archive.manifest.includes.attachments,
-    },
-    request,
-  );
-
-  return new Response(archive.bytes, {
-    status: 200,
-    headers: {
-      'Content-Type': 'application/zip',
-      'Content-Disposition': `attachment; filename="${archive.fileName}"`,
-      'Cache-Control': 'no-store',
-      'X-Content-Type-Options': 'nosniff',
-    },
-  });
-}
-
-export async function handleDownloadAdminBackupAttachment(
-  request: Request,
-  env: Env,
-  actorUser: User,
-): Promise<Response> {
-  if (!isAdmin(actorUser)) return errorResponse('Forbidden', 403);
-
-  try {
-    // Read the request body only. Accepting these fields from the query string
-    // would put the master-password authentication hash in the URL, where it is
-    // captured by request logs, browser history and Referer headers.
-    const body = await parseBackupBody(
-      request,
-      { blobName: optionalString, masterPasswordHash: optionalString },
-      'Backup attachment download payload is invalid',
-    );
-    if (body instanceof Response) return body;
-
-    const verificationError = await requireBackupUserVerification(actorUser, body.masterPasswordHash, env);
-    if (verificationError) return verificationError;
-
-    const blobName = String(body.blobName || '')
-      .trim()
-      .replace(/\\/g, '/')
-      .replace(/^\/+|\/+$/g, '');
-    if (!blobName) {
-      return errorResponse('Backup attachment blob is required', 400);
-    }
-    // Only <cipher>/<attachment> names with safe segments reach blob storage.
-    if (!isSafeBackupBlobName(blobName)) {
-      return errorResponse('Backup attachment blob is invalid', 400);
-    }
-    const object = await getBlobObject(env, blobName);
-    if (!object) {
-      return errorResponse('Backup attachment blob not found', 404);
-    }
-    return new Response(object.body, {
-      status: 200,
-      headers: {
-        'Content-Type': object.contentType || 'application/octet-stream',
-        'Content-Length': String(object.size),
-        'Cache-Control': 'no-store',
-      },
-    });
-  } catch (error) {
-    return errorResponse(error instanceof Error ? error.message : 'Backup attachment download failed', 400);
-  }
-}
-
-export async function handleAdminImportBackup(request: Request, env: Env, actorUser: User): Promise<Response> {
-  if (!isAdmin(actorUser)) return errorResponse('Forbidden', 403);
-
-  const contentType = request.headers.get('Content-Type') || '';
-  if (!contentType.includes('multipart/form-data')) {
-    return errorResponse('Content-Type must be multipart/form-data', 400);
-  }
-  // Refuse an oversized upload before reading it; a missing or malformed Content-Length falls through to the
-  // file size check below.
-  const declaredSize = Number(request.headers.get('content-length') || Number.NaN);
-  if (
-    Number.isFinite(declaredSize) &&
-    declaredSize >= 0 &&
-    Math.floor(declaredSize) > getMultipartRequestMaxBytes(MAX_BACKUP_ARCHIVE_BYTES)
-  ) {
-    return errorResponse(
-      `Backup file too large. Maximum size is ${Math.floor(MAX_BACKUP_ARCHIVE_BYTES / (1024 * 1024))}MB`,
-      413,
-    );
-  }
-
-  let formData: FormData;
-  try {
-    formData = await request.formData();
-  } catch {
-    return errorResponse('Content-Type must be multipart/form-data', 400);
-  }
-
-  const file = formData.get('file');
-  if (!file || typeof file !== 'object' || !('arrayBuffer' in file)) {
-    return errorResponse('Backup file is required', 400);
-  }
-  if ('size' in file && typeof (file as File).size === 'number' && (file as File).size > MAX_BACKUP_ARCHIVE_BYTES) {
-    return errorResponse(
-      `Backup file too large. Maximum size is ${Math.floor(MAX_BACKUP_ARCHIVE_BYTES / (1024 * 1024))}MB`,
-      413,
-    );
-  }
-
-  const verificationError = await requireBackupUserVerification(
-    actorUser,
-    String(formData.get('masterPasswordHash') || ''),
-    env,
-  );
-  if (verificationError) return verificationError;
-
-  const replaceExisting = String(formData.get('replaceExisting') || '').trim() === '1';
-  const allowChecksumMismatch = String(formData.get('allowChecksumMismatch') || '').trim() === '1';
-  let archiveBytes: Uint8Array;
-  try {
-    archiveBytes = new Uint8Array(await (file as { arrayBuffer(): Promise<ArrayBuffer> }).arrayBuffer());
-  } catch {
-    return errorResponse('Unable to read backup file', 400);
-  }
-
-  try {
-    const fileName = 'name' in file ? String((file as File).name || '') : '';
-    const checksumOk = await verifyBackupArchiveFileNameChecksum(archiveBytes, fileName);
-    if (!checksumOk && !allowChecksumMismatch) {
-      return errorResponse('Backup file checksum does not match its filename', 400);
-    }
-    const imported = await importBackupArchiveBytes(archiveBytes, env, actorUser.id, replaceExisting);
-    await writeAuditLog(
-      env.DB,
-      imported.auditActorUserId,
-      'admin.backup.import',
-      null,
-      {
-        users: imported.result.imported.users,
-        ciphers: imported.result.imported.ciphers,
-        attachments: imported.result.imported.attachmentFiles,
-        skippedAttachments: imported.result.skipped.attachments,
-        skippedReason: imported.result.skipped.reason,
-        replaceExisting,
-        trigger: 'local',
-        bytes: archiveBytes.byteLength,
-        checksumMismatchAccepted: !checksumOk,
-      },
-      request,
-    );
-    return jsonResponse(imported.result);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Backup import failed';
-    return errorResponse(message, toImportStatusCode(message));
-  }
 }

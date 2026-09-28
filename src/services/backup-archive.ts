@@ -1,7 +1,6 @@
-import { zipSync, unzipSync, type UnzipFileInfo } from 'fflate';
-import { sha256 } from 'hono/utils/crypto';
+import { Zip, ZipPassThrough } from 'fflate';
 import { z } from 'zod';
-import { asc, getColumns } from 'drizzle-orm';
+import { asc, getColumns, gt } from 'drizzle-orm';
 import { getTableConfig, type SQLiteColumn } from 'drizzle-orm/sqlite-core';
 
 import { getOrm } from '../db/client';
@@ -51,26 +50,30 @@ import { APP_VERSION } from '../../shared/app-version';
 import { BACKUP_STATUS_CONFIG_KEY, RETIRED_BACKUP_CONFIG_KEYS } from './backup-config';
 import { YUBICO_BOOTSTRAP_CLAIM_CONFIG_KEY } from './yubico-config';
 import { getAttachmentObjectKey, getBlobObject, getBlobStorageKind, getSendFileObjectKey } from './blob-store';
+import { MAX_ZIP32_ENTRIES, R2PartWriter } from './backup-zip';
 import { jsonText } from './org-types';
 
 // CONTRACT:
-// This file defines the exported instance-backup archive shape. Keep it in lock
-// step with src/services/backup-import.ts.
+// This file defines the instance-backup archive: a store-only zip holding manifest.json, the database as
+// db/NNNN.json slices ({ table: rows[] }, tables in restore order, each slice a few MiB), and every attachment and
+// Send file inline as attachments/<blob storage key>.bin. Restore reads format 1 and 2 archives too, whose whole
+// database is one db.json.
 //
 // WHEN CHANGING THIS:
 // - Add persistent tables to BACKUP_TABLES, in restore order: export, restore,
 //   manifest tableCounts and the db allowlist all follow it. Put cross-row rules
-//   the database cannot check in validateBackupPayloadContents().
-// - Keep secrets and transient runtime rows sanitized before writing db.json.
+//   the database cannot check in BackupRowValidator.
+// - Keep secrets and transient runtime rows sanitized before writing a slice.
 // - Runtime authentication state (devices, sessions, auth requests, remembered
 //   2FA devices, and one-time tokens) must never enter an instance backup.
 // - users.api_key is intentionally not exported.
 // - Config rows in INSTANCE_LOCAL_CONFIG_KEYS never leave the instance, and
 //   restore never writes them.
-type SqlRow = Record<string, string | number | null>;
+export type SqlRow = Record<string, string | number | null>;
 
-// Format 2 added organizations, Sends, Secrets Manager, emergency access and event history.
-const BACKUP_FORMAT_VERSION = 2;
+// Format 3 slices the database; format 2 added organizations, Sends, Secrets Manager, emergency access and event
+// history.
+export const BACKUP_FORMAT_VERSION = 3;
 // Config rows that stay with their instance: the Yubico bootstrap claim, the backup status and the rows of the
 // WebDAV-era backup destinations.
 export const INSTANCE_LOCAL_CONFIG_KEYS: ReadonlySet<string> = new Set([
@@ -78,17 +81,18 @@ export const INSTANCE_LOCAL_CONFIG_KEYS: ReadonlySet<string> = new Set([
   BACKUP_STATUS_CONFIG_KEY,
   ...RETIRED_BACKUP_CONFIG_KEYS,
 ]);
-const BACKUP_FILE_HASH_PREFIX_LENGTH = 5;
-// Worker-side backup export must stay well below Cloudflare CPU limits.
-// Prefer store-only ZIP entries over heavier compression to keep exports reliable.
-const BACKUP_TEXT_COMPRESSION_LEVEL = 0;
-const BACKUP_JSON_INDENT = 2;
 const BYTES_PER_MIB = 1024 * 1024;
-export const MAX_BACKUP_ARCHIVE_BYTES = 64 * BYTES_PER_MIB;
-const MAX_BACKUP_ARCHIVE_ENTRY_COUNT = 10_000;
-const MAX_BACKUP_EXTRACTED_BYTES = 64 * BYTES_PER_MIB;
-const MAX_BACKUP_DB_JSON_BYTES = 32 * BYTES_PER_MIB;
+// Restore parses one database entry at a time; each has to fit the isolate's memory with room to spare.
+export const MAX_DB_ENTRY_BYTES = 32 * BYTES_PER_MIB;
+const DB_SLICE_TARGET_BYTES = 4 * BYTES_PER_MIB;
+export const MAX_MANIFEST_BYTES = BYTES_PER_MIB;
+// An end record whose entry count reads 0xFFFF belongs to a ZIP64 archive.
+export const MAX_ARCHIVE_ENTRIES = MAX_ZIP32_ENTRIES - 1;
+export const DB_SLICE_ENTRY = /^db\/(\d{4,})\.json$/;
+const EVENT_PAGE_ROWS = 1000;
 const MAX_BACKUP_PATH_SEGMENT_LENGTH = 128;
+const ARCHIVE_KEY_SUFFIX_BYTES = 3;
+const BACKUP_JSON_INDENT = 2;
 
 export interface BackupManifest {
   formatVersion: typeof BACKUP_FORMAT_VERSION;
@@ -103,30 +107,12 @@ export interface BackupManifest {
     attachmentFiles: number;
     sendFiles: number;
     totalBytes: number;
-    largestObjectBytes: number;
+    // Files whose blob was already gone: their rows travel, and restore leaves them out.
+    missingFiles: number;
   };
-  attachmentBlobs?: BackupManifestAttachmentBlob[];
-  sendFileBlobs?: BackupManifestSendFileBlob[];
 }
 
-const BackupManifestAttachmentBlobSchema = z.object({
-  cipherId: z.string().trim(),
-  attachmentId: z.string().trim(),
-  blobName: z.string().trim(),
-  sizeBytes: z.number(),
-});
-export type BackupManifestAttachmentBlob = z.infer<typeof BackupManifestAttachmentBlobSchema>;
-
-const BackupManifestSendFileBlobSchema = z.object({
-  sendId: z.string().trim(),
-  fileId: z.string().trim(),
-  blobName: z.string().trim(),
-  sizeBytes: z.number(),
-});
-type BackupManifestSendFileBlob = z.infer<typeof BackupManifestSendFileBlobSchema>;
-
 const sqlRows = z.array(z.record(z.string(), z.union([z.string(), z.number(), z.null()])));
-const optionalSqlRows = sqlRows.nullish().transform((rows) => rows ?? []);
 
 // The tables an instance backup carries, in restore order: each follows the tables its rows reference.
 // Everything else stays with the instance: runtime authentication state (sessions, devices, auth requests,
@@ -187,85 +173,57 @@ export function backupColumns(name: BackupTableName): Array<[string, SQLiteColum
   return Object.entries(getColumns(spec.table)).filter(([, column]) => !omit.includes(column.name));
 }
 
-// Restore reads only the format version and the attachment references from the manifest. The db
-// shape is an explicit allowlist: z.object strips extra tables from old or modified archives,
-// especially runtime authentication state.
-const BackupPayloadSchema = z.object({
-  manifest: z.looseObject(
-    {
-      formatVersion: z.literal([1, BACKUP_FORMAT_VERSION], { error: 'Unsupported backup format version' }),
-      attachmentBlobs: z
-        .array(BackupManifestAttachmentBlobSchema)
-        .nullish()
-        .transform((blobs) => blobs ?? []),
-      sendFileBlobs: z
-        .array(BackupManifestSendFileBlobSchema)
-        .nullish()
-        .transform((blobs) => blobs ?? []),
-    },
-    { error: 'Unsupported backup format version' },
-  ),
-  db: z.object(
-    Object.fromEntries(
-      BACKUP_TABLE_NAMES.map((name) => [name, 'required' in BACKUP_TABLES[name] ? sqlRows : optionalSqlRows]),
-    ) as Record<BackupTableName, typeof optionalSqlRows>,
-    { error: 'Backup archive database payload is invalid' },
-  ),
-});
-export type BackupPayload = z.output<typeof BackupPayloadSchema>;
+// Restore reads only the format version and the table counts from the manifest.
+const BackupManifestSchema = z.looseObject(
+  {
+    formatVersion: z.literal([1, 2, BACKUP_FORMAT_VERSION], { error: 'Unsupported backup format version' }),
+    tableCounts: z
+      .record(z.string(), z.number())
+      .nullish()
+      .transform((counts) => counts ?? {}),
+  },
+  { error: 'Unsupported backup format version' },
+);
+export type ParsedBackupManifest = z.output<typeof BackupManifestSchema>;
 
-export interface BackupArchiveBundle {
-  bytes: Uint8Array;
-  fileName: string;
-  manifest: BackupManifest;
+function parseArchiveJson(bytes: Uint8Array): unknown {
+  try {
+    return JSON.parse(new TextDecoder().decode(bytes));
+  } catch {
+    throw new Error('Backup archive contains invalid JSON metadata');
+  }
 }
 
-export interface BackupFileIntegrityCheckResult {
-  hasChecksumPrefix: boolean;
-  expectedPrefix: string | null;
-  actualPrefix: string;
-  matches: boolean;
+export function parseBackupManifest(bytes: Uint8Array): ParsedBackupManifest {
+  const parsed = BackupManifestSchema.safeParse(parseArchiveJson(bytes), {
+    error: () => 'Backup archive manifest is invalid',
+  });
+  if (!parsed.success) throw new Error(parsed.error.issues[0].message);
+  return parsed.data;
 }
 
-export interface BuildBackupArchiveOptions {
-  includeAttachments?: boolean;
-  progress?: BackupArchiveBuildProgressReporter;
-  timeZone?: string;
-}
-
-export interface BackupArchiveBuildProgressEvent {
-  step: string;
-  fileName?: string;
-  stageTitle: string;
-  stageDetail: string;
-  includeAttachments: boolean;
-}
-
-export type BackupArchiveBuildProgressReporter = (event: BackupArchiveBuildProgressEvent) => Promise<void>;
-
-export function extractBackupFileChecksumPrefix(fileName: string): string | null {
-  const normalized = String(fileName || '').trim();
-  const match = normalized.match(/_([0-9a-f]{5})\.zip$/i);
-  return match ? match[1].toLowerCase() : null;
-}
-
-export async function inspectBackupArchiveFileNameChecksum(
-  bytes: Uint8Array,
-  fileName: string,
-): Promise<BackupFileIntegrityCheckResult> {
-  const expectedPrefix = extractBackupFileChecksumPrefix(fileName);
-  const actualPrefix = String(await sha256(bytes)).slice(0, BACKUP_FILE_HASH_PREFIX_LENGTH);
-  return {
-    hasChecksumPrefix: !!expectedPrefix,
-    expectedPrefix,
-    actualPrefix,
-    matches: !expectedPrefix || actualPrefix === expectedPrefix,
-  };
-}
-
-export async function verifyBackupArchiveFileNameChecksum(bytes: Uint8Array, fileName: string): Promise<boolean> {
-  const result = await inspectBackupArchiveFileNameChecksum(bytes, fileName);
-  return result.matches;
+// A database entry is an explicit allowlist: z.object strips tables outside BACKUP_TABLES from old or modified
+// archives, especially runtime authentication state. A format 1 or 2 db.json must hold the required tables; a slice
+// holds whichever tables it reaches, and the manifest's counts check that none is missing.
+export function parseDbEntry(bytes: Uint8Array, wholeDatabase: boolean): Partial<Record<BackupTableName, SqlRow[]>> {
+  const parsed = z
+    .object(
+      Object.fromEntries(
+        BACKUP_TABLE_NAMES.map((name) => [
+          name,
+          wholeDatabase && 'required' in BACKUP_TABLES[name] ? sqlRows : sqlRows.optional(),
+        ]),
+      ) as Record<BackupTableName, z.ZodOptional<typeof sqlRows>>,
+      { error: 'Backup archive database payload is invalid' },
+    )
+    .safeParse(parseArchiveJson(bytes), {
+      error: ({ path = [] }) =>
+        path.length
+          ? `Backup archive table ${String(path[0])} is invalid`
+          : 'Backup archive database payload is invalid',
+    });
+  if (!parsed.success) throw new Error(parsed.error.issues[0].message);
+  return parsed.data;
 }
 
 function isSafeBackupPathSegment(value: string): boolean {
@@ -292,7 +250,7 @@ export type ArchivedFile = { table: 'attachments' | 'sends'; row: SqlRow; key: s
 // The file a file Send's data names. A Send whose data names none owns no file.
 const SendFile = jsonText.pipe(z.object({ id: z.string(), size: z.coerce.number().catch(0) }).nullable()).catch(null);
 
-export function archivedFiles(db: Pick<BackupPayload['db'], 'attachments' | 'sends'>): ArchivedFile[] {
+export function archivedFiles(db: { attachments: SqlRow[]; sends: SqlRow[] }): ArchivedFile[] {
   return [
     ...db.attachments.map((row) => ({
       table: 'attachments' as const,
@@ -316,7 +274,7 @@ export function archivedFiles(db: Pick<BackupPayload['db'], 'attachments' | 'sen
   ];
 }
 
-function validateBackupEntryName(name: string): void {
+export function validateBackupEntryName(name: string): void {
   const normalized = String(name || '').trim();
   if (normalized !== name || !normalized) {
     throw new Error('Backup archive contains an invalid file name');
@@ -329,363 +287,106 @@ function validateBackupEntryName(name: string): void {
   ) {
     throw new Error(`Backup archive contains an unsafe file name: ${normalized}`);
   }
-  // Besides the two metadata files, only attachments/<blob storage key>.bin with safe segments is accepted.
+  // Besides the manifest, the database (db.json, or db/NNNN.json slices) and attachments/<blob storage key>.bin
+  // with safe segments, nothing is accepted.
   const attachmentEntry =
     normalized.startsWith('attachments/') &&
     normalized.endsWith('.bin') &&
     isSafeBackupBlobName(normalized.slice('attachments/'.length, -'.bin'.length));
-  if (normalized !== 'manifest.json' && normalized !== 'db.json' && !attachmentEntry) {
+  if (
+    normalized !== 'manifest.json' &&
+    normalized !== 'db.json' &&
+    !DB_SLICE_ENTRY.test(normalized) &&
+    !attachmentEntry
+  ) {
     throw new Error(`Backup archive contains an unsupported file: ${normalized}`);
   }
 }
 
-export function parseBackupArchive(bytes: Uint8Array): { payload: BackupPayload; files: Record<string, Uint8Array> } {
-  if (bytes.byteLength > MAX_BACKUP_ARCHIVE_BYTES) {
-    throw new Error(
-      `Backup archive is too large. The current restore limit is ${MAX_BACKUP_ARCHIVE_BYTES / BYTES_PER_MIB} MiB`,
-    );
-  }
-  // The filter vets each entry's name and declared size before fflate inflates it; the loop below
-  // re-checks the sizes actually extracted.
-  let entryCount = 0;
-  let totalOriginalBytes = 0;
-  let zipped: Record<string, Uint8Array>;
-  try {
-    zipped = unzipSync(bytes, {
-      filter: (file: UnzipFileInfo): boolean => {
-        entryCount += 1;
-        if (entryCount > MAX_BACKUP_ARCHIVE_ENTRY_COUNT) {
-          throw new Error('Backup archive contains too many files');
-        }
-        validateBackupEntryName(file.name);
-        const originalSize = Number(file.originalSize);
-        if (!Number.isFinite(originalSize) || originalSize < 0) {
-          throw new Error(`Backup archive contains an invalid file size: ${file.name}`);
-        }
-        if (file.name === 'db.json' && originalSize > MAX_BACKUP_DB_JSON_BYTES) {
-          throw new Error('Backup archive database payload is too large');
-        }
-        totalOriginalBytes += originalSize;
-        if (totalOriginalBytes > MAX_BACKUP_EXTRACTED_BYTES) {
-          throw new Error('Backup archive expands beyond the current restore limit');
-        }
-        return true;
-      },
-    });
-  } catch (error) {
-    if (error instanceof Error && error.message.startsWith('Backup archive ')) {
-      throw error;
+// The checks the database cannot make, over rows that arrive table by table in restore order, so every parent is
+// seen before its children. Only ids are kept.
+export class BackupRowValidator {
+  private readonly userIds = new Set<string>();
+  private readonly domainSettingUserIds = new Set<string>();
+  private readonly folderIds = new Set<string>();
+  private readonly cipherIds = new Set<string>();
+  private readonly passkeyIds = new Set<string>();
+  private readonly passkeyCredentialIds = new Set<string>();
+
+  check(table: BackupTableName, rows: SqlRow[]): void {
+    const text = (row: SqlRow, column: string) => String(row[column] || '').trim();
+    for (const row of rows) {
+      if (table === 'users') {
+        const id = text(row, 'id');
+        if (!id || !text(row, 'email')) throw new Error('Backup archive contains an invalid user row');
+        if (this.userIds.has(id)) throw new Error(`Backup archive contains duplicate user id: ${id}`);
+        this.userIds.add(id);
+      } else if (table === 'config') {
+        if (!text(row, 'key')) throw new Error('Backup archive contains an invalid config row');
+      } else if (table === 'user_revisions') {
+        const userId = text(row, 'user_id');
+        if (!this.userIds.has(userId))
+          throw new Error(`Backup archive contains a revision for an unknown user: ${userId || '(empty)'}`);
+      } else if (table === 'domain_settings') {
+        const userId = text(row, 'user_id');
+        if (!this.userIds.has(userId))
+          throw new Error(`Backup archive contains domain settings for an unknown user: ${userId || '(empty)'}`);
+        if (this.domainSettingUserIds.has(userId))
+          throw new Error(`Backup archive contains duplicate domain settings for user: ${userId}`);
+        this.domainSettingUserIds.add(userId);
+      } else if (table === 'folders') {
+        const id = text(row, 'id');
+        if (!id || !this.userIds.has(text(row, 'user_id')))
+          throw new Error('Backup archive contains an invalid folder row');
+        if (this.folderIds.has(id)) throw new Error(`Backup archive contains duplicate folder id: ${id}`);
+        this.folderIds.add(id);
+      } else if (table === 'ciphers') {
+        const id = text(row, 'id');
+        const folderId = text(row, 'folder_id');
+        if (!id || !this.userIds.has(text(row, 'user_id')))
+          throw new Error('Backup archive contains an invalid cipher row');
+        if (folderId && !this.folderIds.has(folderId))
+          throw new Error(`Backup archive contains a cipher for an unknown folder: ${folderId}`);
+        if (this.cipherIds.has(id)) throw new Error(`Backup archive contains duplicate cipher id: ${id}`);
+        this.cipherIds.add(id);
+      } else if (table === 'attachments') {
+        const cipherId = text(row, 'cipher_id');
+        if (
+          !isSafeBackupPathSegment(text(row, 'id')) ||
+          !isSafeBackupPathSegment(cipherId) ||
+          !this.cipherIds.has(cipherId)
+        )
+          throw new Error('Backup archive contains an invalid attachment row');
+      } else if (table === 'sends') {
+        // A file Send's file travels like an attachment's.
+        for (const { key } of archivedFiles({ attachments: [], sends: [row] }))
+          if (!isSafeBackupBlobName(key)) throw new Error('Backup archive contains an invalid Send file');
+      } else if (table === 'webauthn_credentials') {
+        const id = text(row, 'id');
+        const purpose = row.purpose == null ? 'login' : text(row, 'purpose');
+        const credentialId = text(row, 'credential_id');
+        if (
+          !id ||
+          !this.userIds.has(text(row, 'user_id')) ||
+          !credentialId ||
+          !text(row, 'public_key') ||
+          (purpose !== 'login' && purpose !== 'twoFactor')
+        )
+          throw new Error('Backup archive contains an invalid account passkey row');
+        if (this.passkeyIds.has(id)) throw new Error(`Backup archive contains duplicate account passkey id: ${id}`);
+        if (this.passkeyCredentialIds.has(credentialId))
+          throw new Error(`Backup archive contains duplicate account passkey credential id: ${credentialId}`);
+        this.passkeyIds.add(id);
+        this.passkeyCredentialIds.add(credentialId);
+      }
     }
-    throw new Error('Invalid backup archive');
-  }
-
-  const entryNames = Object.keys(zipped);
-  if (entryNames.length > MAX_BACKUP_ARCHIVE_ENTRY_COUNT) {
-    throw new Error('Backup archive contains too many files');
-  }
-
-  let totalExtractedBytes = 0;
-  for (const entry of entryNames) {
-    validateBackupEntryName(entry);
-    const entryBytes = zipped[entry];
-    totalExtractedBytes += entryBytes.byteLength;
-    if (entry === 'db.json' && entryBytes.byteLength > MAX_BACKUP_DB_JSON_BYTES) {
-      throw new Error('Backup archive database payload is too large');
-    }
-    if (totalExtractedBytes > MAX_BACKUP_EXTRACTED_BYTES) {
-      throw new Error('Backup archive expands beyond the current restore limit');
-    }
-  }
-
-  const manifestBytes = zipped['manifest.json'];
-  const dbBytes = zipped['db.json'];
-  if (!manifestBytes || !dbBytes) {
-    throw new Error('Backup archive is missing manifest.json or db.json');
-  }
-
-  const decoder = new TextDecoder();
-  let rawPayload: unknown;
-  try {
-    rawPayload = { manifest: JSON.parse(decoder.decode(manifestBytes)), db: JSON.parse(decoder.decode(dbBytes)) };
-  } catch {
-    throw new Error('Backup archive contains invalid JSON metadata');
-  }
-
-  const parsed = BackupPayloadSchema.safeParse(rawPayload, {
-    error: ({ path = [] }) =>
-      path[0] === 'db' ? `Backup archive table ${String(path[1])} is invalid` : 'Backup archive manifest is invalid',
-  });
-  if (!parsed.success) throw new Error(parsed.error.issues[0].message);
-  const payload = parsed.data;
-
-  // A file with an unsafe key is reported by validateBackupPayloadContents() as an invalid row.
-  for (const { key } of archivedFiles(payload.db)) {
-    const entry = `attachments/${key}.bin`;
-    if (isSafeBackupBlobName(key) && !zipped[entry]) {
-      throw new Error(`Backup archive is missing required file: ${entry}`);
-    }
-  }
-
-  return {
-    payload,
-    files: zipped,
-  };
-}
-
-export function validateBackupPayloadContents(payload: BackupPayload, files: Record<string, Uint8Array>): void {
-  const {
-    config: configRows,
-    users: userRows,
-    user_revisions: revisionRows,
-    domain_settings: domainSettingsRows,
-    folders: folderRows,
-    ciphers: cipherRows,
-    attachments: attachmentRows,
-    webauthn_credentials: accountPasskeyRows,
-  } = payload.db;
-
-  const userIds = new Set<string>();
-  for (const row of userRows) {
-    const id = String(row.id || '').trim();
-    const email = String(row.email || '').trim();
-    if (!id || !email) throw new Error('Backup archive contains an invalid user row');
-    if (userIds.has(id)) throw new Error(`Backup archive contains duplicate user id: ${id}`);
-    userIds.add(id);
-  }
-
-  for (const row of configRows) {
-    const key = String(row.key || '').trim();
-    if (!key) throw new Error('Backup archive contains an invalid config row');
-  }
-
-  for (const row of revisionRows) {
-    const userId = String(row.user_id || '').trim();
-    if (!userId || !userIds.has(userId)) {
-      throw new Error(`Backup archive contains a revision for an unknown user: ${userId || '(empty)'}`);
-    }
-  }
-
-  const domainSettingUserIds = new Set<string>();
-  for (const row of domainSettingsRows) {
-    const userId = String(row.user_id || '').trim();
-    if (!userId || !userIds.has(userId)) {
-      throw new Error(`Backup archive contains domain settings for an unknown user: ${userId || '(empty)'}`);
-    }
-    if (domainSettingUserIds.has(userId)) {
-      throw new Error(`Backup archive contains duplicate domain settings for user: ${userId}`);
-    }
-    domainSettingUserIds.add(userId);
-  }
-
-  const folderIds = new Set<string>();
-  for (const row of folderRows) {
-    const id = String(row.id || '').trim();
-    const userId = String(row.user_id || '').trim();
-    if (!id || !userIds.has(userId)) throw new Error('Backup archive contains an invalid folder row');
-    if (folderIds.has(id)) throw new Error(`Backup archive contains duplicate folder id: ${id}`);
-    folderIds.add(id);
-  }
-
-  const cipherIds = new Set<string>();
-  for (const row of cipherRows) {
-    const id = String(row.id || '').trim();
-    const userId = String(row.user_id || '').trim();
-    const folderId = String(row.folder_id || '').trim();
-    if (!id || !userIds.has(userId)) throw new Error('Backup archive contains an invalid cipher row');
-    if (folderId && !folderIds.has(folderId)) {
-      throw new Error(`Backup archive contains a cipher for an unknown folder: ${folderId}`);
-    }
-    if (cipherIds.has(id)) throw new Error(`Backup archive contains duplicate cipher id: ${id}`);
-    cipherIds.add(id);
-  }
-
-  for (const row of attachmentRows) {
-    const id = String(row.id || '').trim();
-    const cipherId = String(row.cipher_id || '').trim();
-    if (
-      !id ||
-      !cipherId ||
-      !isSafeBackupPathSegment(id) ||
-      !isSafeBackupPathSegment(cipherId) ||
-      !cipherIds.has(cipherId)
-    ) {
-      throw new Error('Backup archive contains an invalid attachment row');
-    }
-    if (!files[`attachments/${cipherId}/${id}.bin`]) {
-      throw new Error(`Backup archive is missing required file: attachments/${cipherId}/${id}.bin`);
-    }
-  }
-
-  // A file Send's file travels like an attachment's.
-  for (const { table, key } of archivedFiles(payload.db)) {
-    if (table !== 'sends') continue;
-    if (!isSafeBackupBlobName(key)) throw new Error('Backup archive contains an invalid Send file');
-    if (!files[`attachments/${key}.bin`]) {
-      throw new Error(`Backup archive is missing required file: attachments/${key}.bin`);
-    }
-  }
-
-  const accountPasskeyIds = new Set<string>();
-  const accountPasskeyCredentialIds = new Set<string>();
-  for (const row of accountPasskeyRows) {
-    const id = String(row.id || '').trim();
-    const userId = String(row.user_id || '').trim();
-    const purpose = row.purpose == null ? 'login' : String(row.purpose || '').trim();
-    const credentialId = String(row.credential_id || '').trim();
-    const publicKey = String(row.public_key || '').trim();
-    if (
-      !id ||
-      !userIds.has(userId) ||
-      !credentialId ||
-      !publicKey ||
-      (purpose !== 'login' && purpose !== 'twoFactor')
-    ) {
-      throw new Error('Backup archive contains an invalid account passkey row');
-    }
-    if (accountPasskeyIds.has(id)) throw new Error(`Backup archive contains duplicate account passkey id: ${id}`);
-    if (accountPasskeyCredentialIds.has(credentialId))
-      throw new Error(`Backup archive contains duplicate account passkey credential id: ${credentialId}`);
-    accountPasskeyIds.add(id);
-    accountPasskeyCredentialIds.add(credentialId);
   }
 }
 
-export async function buildBackupArchive(
-  env: Env,
-  date: Date = new Date(),
-  options: BuildBackupArchiveOptions = {},
-): Promise<BackupArchiveBundle> {
-  const includeAttachments = options.includeAttachments !== false;
-  await options.progress?.({
-    step: 'collect_data',
-    fileName: '',
-    stageTitle: 'txt_backup_archive_progress_collect_title',
-    stageDetail: includeAttachments
-      ? 'txt_backup_archive_progress_collect_with_attachments_detail'
-      : 'txt_backup_archive_progress_collect_detail',
-    includeAttachments,
-  });
-  const encoder = new TextEncoder();
-  const orm = getOrm(env.DB);
-  const selects = BACKUP_TABLE_NAMES.map((name) => {
-    // Rows keep database column names and raw stored values: every column is selected through unmapped(),
-    // so no drizzle value mapping runs. Rows follow the primary key, so repeated exports list them in the
-    // same order.
-    const { table } = BACKUP_TABLES[name];
-    const { primaryKeys, columns } = getTableConfig(table);
-    const primaryKey = primaryKeys[0]?.columns ?? columns.filter((column) => column.primary);
-    return orm
-      .select(
-        Object.fromEntries(
-          backupColumns(name).map(([, column]) => [column.name, unmapped<string | number | null>(column)]),
-        ),
-      )
-      .from(table)
-      .orderBy(...primaryKey.map((column) => asc(column)));
-  });
-  // One batch reads every table inside a single D1 transaction. Separate reads would let a write land
-  // between them and export a row whose parent the archive lacks, which restore then rejects.
-  const results = await orm.batch(selects as [(typeof selects)[0], ...typeof selects]);
-  const rows = Object.fromEntries(BACKUP_TABLE_NAMES.map((name, index) => [name, results[index]])) as Record<
-    BackupTableName,
-    SqlRow[]
-  >;
-  const exportedConfigRows = rows.config.filter((row) => {
-    const key = String(row.key || '').trim();
-    return key && !INSTANCE_LOCAL_CONFIG_KEYS.has(key);
-  });
-  const exportedAttachmentRows = includeAttachments ? rows.attachments : [];
-  const attachmentBlobs: BackupManifestAttachmentBlob[] = exportedAttachmentRows.map((row) => {
-    const cipherId = String(row.cipher_id || '').trim();
-    const attachmentId = String(row.id || '').trim();
-    return {
-      cipherId,
-      attachmentId,
-      blobName: getAttachmentObjectKey(cipherId, attachmentId),
-      sizeBytes: Number(row.size || 0) || 0,
-    };
-  });
-
-  // Without attachments an archive carries no files, and a file Send is useless without its file.
-  const exportedSendRows = includeAttachments
-    ? rows.sends
-    : rows.sends.filter((row) => Number(row.type) !== SendType.File);
-  const sendFileBlobs: BackupManifestSendFileBlob[] = archivedFiles({ attachments: [], sends: exportedSendRows }).map(
-    ({ row, key, sizeBytes }) => ({
-      sendId: String(row.id || '').trim(),
-      fileId: key.split('/')[2],
-      blobName: key,
-      sizeBytes,
-    }),
-  );
-  const fileSizes = [...attachmentBlobs, ...sendFileBlobs].map((blob) => blob.sizeBytes);
-
-  const exported: Record<BackupTableName, SqlRow[]> = {
-    ...rows,
-    config: exportedConfigRows,
-    sends: exportedSendRows,
-    attachments: exportedAttachmentRows,
-  };
-  const manifestBase = {
-    formatVersion: BACKUP_FORMAT_VERSION,
-    exportedAt: date.toISOString(),
-    appVersion: APP_VERSION,
-    storageKind: getBlobStorageKind(env),
-    tableCounts: Object.fromEntries(BACKUP_TABLE_NAMES.map((name) => [name, exported[name].length])),
-    includes: {
-      attachments: includeAttachments,
-    },
-    blobSummary: {
-      attachmentFiles: attachmentBlobs.length,
-      sendFiles: sendFileBlobs.length,
-      totalBytes: fileSizes.reduce((sum, size) => sum + size, 0),
-      largestObjectBytes: Math.max(0, ...fileSizes),
-    },
-    attachmentBlobs: includeAttachments ? attachmentBlobs : [],
-    sendFileBlobs,
-  } satisfies BackupManifest;
-
-  const dbJson = encoder.encode(JSON.stringify(exported, null, BACKUP_JSON_INDENT));
-  // Restore refuses a larger payload, so such an archive could never come back.
-  if (dbJson.byteLength > MAX_BACKUP_DB_JSON_BYTES) {
-    throw new Error(
-      `Backup database payload is ${Math.round(dbJson.byteLength / BYTES_PER_MIB)} MiB; restore accepts at most ${MAX_BACKUP_DB_JSON_BYTES / BYTES_PER_MIB} MiB`,
-    );
-  }
-  // Every archived file travels inline, so the archive restores on its own.
-  const fileEntries = await Promise.all(
-    archivedFiles(exported).map(async ({ key }) => {
-      const object = await getBlobObject(env, key);
-      if (!object?.body) throw new Error(`Backup blob missing for ${key}`);
-      return [`attachments/${key}.bin`, new Uint8Array(await new Response(object.body).arrayBuffer())] as const;
-    }),
-  );
-  const files: Record<string, Uint8Array> = {
-    'manifest.json': encoder.encode(JSON.stringify(manifestBase, null, BACKUP_JSON_INDENT)),
-    'db.json': dbJson,
-    ...Object.fromEntries(fileEntries),
-  };
-
-  await options.progress?.({
-    step: 'package_archive',
-    fileName: '',
-    stageTitle: 'txt_backup_archive_progress_package_title',
-    stageDetail: includeAttachments
-      ? 'txt_backup_archive_progress_package_with_attachments_detail'
-      : 'txt_backup_archive_progress_package_detail',
-    includeAttachments,
-  });
-  const bytes = zipSync(
-    Object.fromEntries(
-      Object.entries(files).map(([path, content]): [string, [Uint8Array, { level: 0 | 1 | 6 }]] => [
-        path,
-        [content, { level: BACKUP_TEXT_COMPRESSION_LEVEL }],
-      ]),
-    ),
-  );
-  const fileHashPrefix = String(await sha256(bytes)).slice(0, BACKUP_FILE_HASH_PREFIX_LENGTH);
+// nodewarden_backup_<local date>_<local time>_<random>.zip, in the schedule's timezone.
+export function backupArchiveKey(date: Date, timeZone: string): string {
   const parts = new Intl.DateTimeFormat('en-CA', {
-    timeZone: options.timeZone || 'UTC',
+    timeZone,
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
@@ -695,18 +396,158 @@ export async function buildBackupArchive(
     hourCycle: 'h23',
   }).formatToParts(date);
   const pick = (type: string): string => parts.find((part) => part.type === type)?.value || '';
-  const fileName = `nodewarden_backup_${pick('year')}${pick('month')}${pick('day')}_${pick('hour')}${pick('minute')}${pick('second')}_${fileHashPrefix}.zip`;
-  await options.progress?.({
-    step: 'archive_ready',
-    fileName,
-    stageTitle: 'txt_backup_archive_progress_ready_title',
-    stageDetail: 'txt_backup_archive_progress_ready_detail',
-    includeAttachments,
-  });
+  const suffix = crypto.getRandomValues(new Uint8Array(ARCHIVE_KEY_SUFFIX_BYTES)).toHex().slice(0, 5);
+  return `nodewarden_backup_${pick('year')}${pick('month')}${pick('day')}_${pick('hour')}${pick('minute')}${pick('second')}_${suffix}.zip`;
+}
 
-  return {
-    bytes,
-    fileName,
-    manifest: manifestBase,
+// Streams an archive of the instance into bucket under key. Every table but events is read in one D1 batch, a
+// consistent snapshot, so no row can point at a parent the archive lacks. Events follow a page at a time: they
+// are append-only history, and a page keeps only events whose organization is in the snapshot. The snapshot's rows
+// stay in memory while files stream through a part at a time. ponytail: one R2 read per file, so an archive
+// holds a few thousand files within the invocation's 10,000-subrequest budget; raise limits.subrequests for more.
+export async function writeBackupArchive(
+  env: Env,
+  bucket: R2Bucket,
+  key: string,
+  date: Date,
+  includeAttachments: boolean,
+): Promise<{ object: R2Object; manifest: BackupManifest }> {
+  const orm = getOrm(env.DB);
+  const snapshotTables = BACKUP_TABLE_NAMES.filter((name) => name !== 'events');
+  const columnsOf = (name: BackupTableName) =>
+    Object.fromEntries(
+      backupColumns(name).map(([, column]) => [column.name, unmapped<string | number | null>(column)]),
+    );
+  const selects = snapshotTables.map((name) => {
+    // Rows keep database column names and raw stored values, in primary key order, so repeated exports list
+    // them the same way.
+    const { table } = BACKUP_TABLES[name];
+    const { primaryKeys, columns } = getTableConfig(table);
+    const primaryKey = primaryKeys[0]?.columns ?? columns.filter((column) => column.primary);
+    return orm
+      .select(columnsOf(name))
+      .from(table)
+      .orderBy(...primaryKey.map((column) => asc(column)));
+  });
+  const results = await orm.batch(selects as [(typeof selects)[0], ...typeof selects]);
+  const rows = Object.fromEntries(snapshotTables.map((name, index) => [name, results[index]])) as Record<
+    BackupTableName,
+    SqlRow[]
+  >;
+  // Without attachments an archive carries no files, and a file Send is useless without its file.
+  const exported: Record<BackupTableName, SqlRow[]> = {
+    ...rows,
+    config: rows.config.filter((row) => {
+      const configKey = String(row.key || '').trim();
+      return configKey && !INSTANCE_LOCAL_CONFIG_KEYS.has(configKey);
+    }),
+    attachments: includeAttachments ? rows.attachments : [],
+    sends: includeAttachments ? rows.sends : rows.sends.filter((row) => Number(row.type) !== SendType.File),
+    events: [],
   };
+  const organizationIds = new Set(exported.organizations.map((row) => String(row.id)));
+
+  const writer = await R2PartWriter.open(bucket, key, 'application/zip');
+  // fflate hands its output over synchronously as entries are pushed; each push is followed by uploading the parts
+  // it completed.
+  const zip = new Zip((error, chunk) => {
+    if (error) throw error;
+    writer.write(chunk);
+  });
+  let entries = 0;
+  const addEntry = async (name: string, chunks: AsyncIterable<Uint8Array> | Iterable<Uint8Array>) => {
+    if (++entries > MAX_ARCHIVE_ENTRIES)
+      throw new Error(`Backup archive would hold more than ${MAX_ARCHIVE_ENTRIES} entries`);
+    const entry = new ZipPassThrough(name);
+    zip.add(entry);
+    for await (const chunk of chunks) {
+      entry.push(chunk);
+      await writer.flush();
+    }
+    entry.push(new Uint8Array(0), true);
+    await writer.flush();
+  };
+  // Rows are serialized once, into slices of about DB_SLICE_TARGET_BYTES.
+  const encoder = new TextEncoder();
+  let slice = new Map<BackupTableName, string[]>();
+  let sliceBytes = 0;
+  let slices = 0;
+  const flushSlice = async () => {
+    if (!slice.size) return;
+    const body = `{${[...slice].map(([name, json]) => `${JSON.stringify(name)}:[${json.join(',')}]`).join(',')}}`;
+    slice = new Map();
+    sliceBytes = 0;
+    await addEntry(`db/${String(++slices).padStart(4, '0')}.json`, [encoder.encode(body)]);
+  };
+  const addRows = async (name: BackupTableName, tableRows: SqlRow[]) => {
+    for (const row of tableRows) {
+      const json = JSON.stringify(row);
+      if (json.length > MAX_DB_ENTRY_BYTES)
+        throw new Error(
+          `Backup table ${name} holds a row of ${Math.round(json.length / BYTES_PER_MIB)} MiB; restore accepts at most ${MAX_DB_ENTRY_BYTES / BYTES_PER_MIB} MiB`,
+        );
+      if (sliceBytes && sliceBytes + json.length > DB_SLICE_TARGET_BYTES) await flushSlice();
+      slice.set(name, [...(slice.get(name) ?? []), json]);
+      sliceBytes += json.length;
+    }
+  };
+
+  try {
+    for (const name of snapshotTables) await addRows(name, exported[name]);
+    for (let after: string | null = ''; after !== null;) {
+      const page: SqlRow[] = await orm
+        .select(columnsOf('events'))
+        .from(events)
+        .where(gt(events.id, after))
+        .orderBy(asc(events.id))
+        .limit(EVENT_PAGE_ROWS);
+      const kept = page.filter(
+        (row) => row.organization_id === null || organizationIds.has(String(row.organization_id)),
+      );
+      exported.events.push(...kept);
+      await addRows('events', kept);
+      after = page.length === EVENT_PAGE_ROWS ? String(page.at(-1)!.id) : null;
+    }
+    await flushSlice();
+
+    const files = archivedFiles(exported);
+    let missingFiles = 0;
+    let totalBytes = 0;
+    for (const file of files) {
+      const object = await getBlobObject(env, file.key);
+      if (!object?.body) {
+        missingFiles++;
+        continue;
+      }
+      const reader = object.body.getReader();
+      await addEntry(
+        `attachments/${file.key}.bin`,
+        (async function* () {
+          for (let read = await reader.read(); !read.done; read = await reader.read()) yield read.value;
+        })(),
+      );
+      totalBytes += object.size;
+    }
+    const manifest: BackupManifest = {
+      formatVersion: BACKUP_FORMAT_VERSION,
+      exportedAt: date.toISOString(),
+      appVersion: APP_VERSION,
+      storageKind: getBlobStorageKind(env),
+      tableCounts: Object.fromEntries(BACKUP_TABLE_NAMES.map((name) => [name, exported[name].length])),
+      includes: { attachments: includeAttachments },
+      blobSummary: {
+        attachmentFiles: files.filter((file) => file.table === 'attachments').length,
+        sendFiles: files.filter((file) => file.table === 'sends').length,
+        totalBytes,
+        missingFiles,
+      },
+    };
+    await addEntry('manifest.json', [encoder.encode(JSON.stringify(manifest, null, BACKUP_JSON_INDENT))]);
+    zip.end();
+    return { object: await writer.close(), manifest };
+  } catch (error) {
+    // The run fails either way; an upload left open is aborted by R2 after seven days.
+    await writer.abort().catch(() => undefined);
+    throw error;
+  }
 }

@@ -5,7 +5,7 @@ import { getTableConfig, SQLiteTable } from 'drizzle-orm/sqlite-core';
 import { zipSync } from 'fflate';
 
 import * as schema from '../db/schema';
-import { BACKUP_TABLE_NAMES, BACKUP_TABLES, parseBackupArchive } from './backup-archive';
+import { BACKUP_TABLE_NAMES, BACKUP_TABLES, isSafeBackupBlobName, parseBackupArchive } from './backup-archive';
 
 // Tables that stay with their instance, and why. Every other table must be archived.
 const INSTANCE_LOCAL_TABLES: Record<string, string> = {
@@ -81,4 +81,20 @@ test('archived tables come after every table their rows reference', () => {
         `${name} references ${parent}`,
       );
     }
+});
+
+test('archives and remote destinations accept only attachment and Send file blob keys', () => {
+  for (const name of ['cipher-1/attachment-1', 'sends/send-1/file-1'])
+    assert.equal(isSafeBackupBlobName(name), true, name);
+  for (const name of [
+    'attachment-1',
+    'cipher-1/attachment-1/extra',
+    'sends/send-1/file-1/extra',
+    'cipher-1/..',
+    'sends/../file-1',
+    '../etc/passwd',
+    'cipher 1/attachment-1',
+    '',
+  ])
+    assert.equal(isSafeBackupBlobName(name), false, name);
 });

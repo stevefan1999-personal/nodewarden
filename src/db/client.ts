@@ -1,4 +1,4 @@
-import { DrizzleQueryError, and, eq, exists, getColumns, type SQL, type Table } from 'drizzle-orm';
+import { and, eq, exists, getColumns, type SQL, type Table } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/d1';
 
 import { relations } from './relations';
@@ -64,8 +64,17 @@ export function userRowMatches(orm: Orm, userId: string, ...conditions: (SQL | u
   );
 }
 
-// A failed drizzle query's message lists every bound value (password hashes, keys, one-time codes), so
-// anything logged keeps the statement text and the driver's own error only.
-export function withoutQueryParams(error: unknown): unknown {
-  return error instanceof DrizzleQueryError ? new Error(`Failed query: ${error.query}`, { cause: error.cause }) : error;
+// drizzle ends a failed query's message with every bound value (password hashes, keys, one-time codes), its stack
+// repeats the message, and a Durable Object's failure crosses RPC as a plain Error carrying the same text.
+const BOUND_VALUES = /\nparams: [\s\S]*$/;
+
+// What may be logged of an error: every error down its cause chain keeps its statement text and driver error but
+// loses drizzle's bound values, and each rebuilt error gets a fresh stack.
+export function withoutQueryParams(error: unknown, seen: ReadonlySet<unknown> = new Set()): unknown {
+  if (!(error instanceof Error)) return error;
+  if (seen.has(error)) return undefined;
+  const cause = withoutQueryParams(error.cause, new Set([...seen, error]));
+  const message = error.message.replace(BOUND_VALUES, '');
+  if (message === error.message && cause === error.cause) return error;
+  return Object.assign(cause === undefined ? new Error(message) : new Error(message, { cause }), { name: error.name });
 }

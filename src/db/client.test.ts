@@ -85,3 +85,24 @@ test('withoutQueryParams keeps the statement and driver error but never the boun
   const plain = new Error('unrelated');
   assert.equal(withoutQueryParams(plain), plain);
 });
+
+test('withoutQueryParams strips bound values from wrapped failures and from copies that crossed an RPC boundary', () => {
+  const secret = 'p@ssw0rd-hash-value';
+  const failure = new DrizzleQueryError(
+    'update "users" set "master_password_hash" = ?',
+    [secret],
+    new Error('D1_ERROR: disk full'),
+  );
+  // A Durable Object's failure reaches its caller as a plain Error carrying the same message.
+  const copy = new Error(failure.message);
+  const wrapped = new Error('Registration failed', { cause: failure });
+  const cyclic = new Error('Broadcast failed', { cause: copy });
+  Object.assign(copy, { cause: cyclic });
+  for (const error of [copy, wrapped, cyclic])
+    assert.doesNotMatch(inspect(withoutQueryParams(error), { depth: 10 }), new RegExp(secret));
+  assert.equal((withoutQueryParams(wrapped) as Error).message, 'Registration failed');
+  assert.equal(
+    (withoutQueryParams(copy) as Error).message,
+    'Failed query: update "users" set "master_password_hash" = ?',
+  );
+});

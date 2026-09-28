@@ -10,7 +10,7 @@ import {
 } from 'hono/utils/ipaddr';
 
 import { LIMITS } from '../config/limits';
-import { getOrm } from '../db/client';
+import { getOrm, type Orm } from '../db/client';
 import { loginAttemptsIp, rateLimitBuckets } from '../db/schema';
 import { plus } from '../db/sql';
 import type { Env } from '../types';
@@ -40,7 +40,11 @@ export class RateLimitService {
   private static readonly STRICT_BUDGET_CLEANUP_INTERVAL_MS = LIMITS.rateLimit.loginIpCleanupIntervalMs;
 
   // Scoped per request: env carries D1 plus the per-minute Workers Rate Limiting bindings.
-  constructor(private readonly env: Pick<Env, 'DB'> & Partial<Pick<Env, `RATE_LIMIT_${number}_PER_MINUTE`>>) {}
+  private readonly orm: Orm;
+
+  constructor(private readonly env: Pick<Env, 'DB'> & Partial<Pick<Env, `RATE_LIMIT_${number}_PER_MINUTE`>>) {
+    this.orm = getOrm(env.DB);
+  }
 
   private shouldRunCleanup(lastRunAt: number, intervalMs: number): boolean {
     const now = Date.now();
@@ -54,7 +58,7 @@ export class RateLimitService {
     }
 
     const cutoff = nowMs - RateLimitService.LOGIN_IP_RETENTION_MS;
-    await getOrm(this.env.DB)
+    await this.orm
       .delete(loginAttemptsIp)
       .where(
         and(
@@ -75,7 +79,7 @@ export class RateLimitService {
       return;
     }
 
-    await getOrm(this.env.DB).delete(rateLimitBuckets).where(lt(rateLimitBuckets.expiresAt, nowMs));
+    await this.orm.delete(rateLimitBuckets).where(lt(rateLimitBuckets.expiresAt, nowMs));
     RateLimitService.lastStrictBudgetCleanupAt = nowMs;
   }
 
@@ -88,7 +92,7 @@ export class RateLimitService {
     const now = Date.now();
     await this.maybeCleanupLoginAttemptsIp(now);
 
-    const [row] = await getOrm(this.env.DB)
+    const [row] = await this.orm
       .select({ attempts: loginAttemptsIp.attempts, lockedUntil: loginAttemptsIp.lockedUntil })
       .from(loginAttemptsIp)
       .where(eq(loginAttemptsIp.ip, key))
@@ -107,7 +111,7 @@ export class RateLimitService {
     }
 
     if (row.lockedUntil && row.lockedUntil <= now) {
-      await getOrm(this.env.DB).delete(loginAttemptsIp).where(eq(loginAttemptsIp.ip, key));
+      await this.orm.delete(loginAttemptsIp).where(eq(loginAttemptsIp.ip, key));
       return { allowed: true, remainingAttempts: CONFIG.LOGIN_MAX_ATTEMPTS };
     }
 
@@ -119,12 +123,11 @@ export class RateLimitService {
     const key = ip.trim() || 'unknown';
     const now = Date.now();
     await this.maybeCleanupLoginAttemptsIp(now);
-    const orm = getOrm(this.env.DB);
 
     // D1 in Workers forbids raw BEGIN/COMMIT statements.
     // Use a single atomic UPSERT to increment attempts.
     // This is concurrency-safe because the row is keyed by IP.
-    await orm
+    await this.orm
       .insert(loginAttemptsIp)
       .values({ ip: key, attempts: 1, lockedUntil: null, updatedAt: now })
       .onConflictDoUpdate({
@@ -135,7 +138,7 @@ export class RateLimitService {
         },
       });
 
-    const [row] = await orm
+    const [row] = await this.orm
       .select({ attempts: loginAttemptsIp.attempts })
       .from(loginAttemptsIp)
       .where(eq(loginAttemptsIp.ip, key))
@@ -144,7 +147,7 @@ export class RateLimitService {
     const attempts = row?.attempts || 1;
     if (attempts >= CONFIG.LOGIN_MAX_ATTEMPTS) {
       const lockedUntil = now + CONFIG.LOGIN_LOCKOUT_MINUTES * 60 * 1000;
-      await orm.update(loginAttemptsIp).set({ lockedUntil, updatedAt: now }).where(eq(loginAttemptsIp.ip, key));
+      await this.orm.update(loginAttemptsIp).set({ lockedUntil, updatedAt: now }).where(eq(loginAttemptsIp.ip, key));
       return { locked: true, retryAfterSeconds: CONFIG.LOGIN_LOCKOUT_MINUTES * 60 };
     }
 
@@ -153,7 +156,7 @@ export class RateLimitService {
 
   async clearLoginAttempts(ip: string): Promise<void> {
     const key = ip.trim() || 'unknown';
-    await getOrm(this.env.DB).delete(loginAttemptsIp).where(eq(loginAttemptsIp.ip, key));
+    await this.orm.delete(loginAttemptsIp).where(eq(loginAttemptsIp.ip, key));
   }
 
   async consumeStrictBudget(
@@ -180,15 +183,14 @@ export class RateLimitService {
     const windowEndMs = (windowStart + windowSize) * 1000;
     const retryAfterSeconds = Math.max(1, Math.ceil((windowEndMs - nowMs) / 1000));
     const bucketKey = `${key}:${windowStart}`;
-    const orm = getOrm(this.env.DB);
 
     await this.maybeCleanupStrictBudgets(nowMs);
-    await orm
+    await this.orm
       .insert(rateLimitBuckets)
       .values({ bucketKey, count: 0, expiresAt: windowEndMs, updatedAt: nowMs })
       .onConflictDoNothing({ target: rateLimitBuckets.bucketKey });
 
-    const update = await orm
+    const update = await this.orm
       .update(rateLimitBuckets)
       .set({
         count: plus(rateLimitBuckets.count, cost),
@@ -199,7 +201,7 @@ export class RateLimitService {
       .run();
 
     const allowed = Number(update.meta?.changes ?? 0) > 0;
-    const [row] = await orm
+    const [row] = await this.orm
       .select({ count: rateLimitBuckets.count })
       .from(rateLimitBuckets)
       .where(eq(rateLimitBuckets.bucketKey, bucketKey))

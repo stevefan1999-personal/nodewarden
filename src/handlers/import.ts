@@ -131,6 +131,7 @@ async function runOrmBatch(
 
 // POST /api/ciphers/import - Bitwarden client import endpoint
 export async function handleCiphersImport(request: Request, env: Env, userId: string): Promise<Response> {
+  const orm = getOrm(env.DB);
   const url = new URL(request.url);
   const returnCipherMap = url.searchParams.get('returnCipherMap') === '1';
 
@@ -165,7 +166,6 @@ export async function handleCiphersImport(request: Request, env: Env, userId: st
   }
 
   if (folderRows.length > 0) {
-    const orm = getOrm(env.DB);
     await runOrmBatch(
       orm,
       folderRows.map((folder) =>
@@ -219,7 +219,6 @@ export async function handleCiphersImport(request: Request, env: Env, userId: st
   }
 
   if (cipherRows.length > 0) {
-    const orm = getOrm(env.DB);
     const cipherStatements = cipherRows.map((cipher) => {
       const values = {
         id: cipher.id,

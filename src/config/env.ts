@@ -69,10 +69,6 @@ export const EnvConfig = z.object({
   SSO_CLIENT_ID: optionalText,
   SSO_CLIENT_SECRET: optionalText,
   SSO_SCOPES: z.string().min(1).catch('openid profile email'),
-  R2_ACCOUNT_ID: text,
-  R2_ACCESS_KEY_ID: text,
-  R2_SECRET_ACCESS_KEY: text,
-  R2_BUCKET: z.string().trim().min(1).catch('nodewarden-attachments'),
 });
 export type EnvConfig = z.output<typeof EnvConfig>;
 

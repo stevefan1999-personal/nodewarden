@@ -82,7 +82,7 @@
 - In this flow you hand code to Cloudflare to build and deploy. `wrangler.toml` or `wrangler.kv.toml` in the repo defines binding names; the Worker initializes the D1 schema on first request—no manual SQL upload.
 
 - Optional SSO: set `SSO_ENABLED=1`, `SSO_AUTHORITY`, `SSO_CLIENT_ID`, and `SSO_CLIENT_SECRET`.
-- Uploads larger than 100 MB use R2 S3 presigned PUTs. Set `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, and `R2_BUCKET`.
+- Attachments and Send files are limited to 100 MiB: official clients upload them through the Worker.
 - Kubernetes: use the official [Bitwarden Secrets Manager operator](https://github.com/bitwarden/sm-kubernetes). See [NodeWarden configuration](#kubernetes-secrets-manager).
 
 

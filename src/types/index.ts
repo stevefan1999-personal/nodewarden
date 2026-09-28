@@ -38,10 +38,6 @@ export interface Env {
   SSO_SCOPES?: string;
   SSO_SIGNUPS?: string;
   SSO_ONLY?: string;
-  R2_ACCOUNT_ID?: string;
-  R2_ACCESS_KEY_ID?: string;
-  R2_SECRET_ACCESS_KEY?: string;
-  R2_BUCKET?: string;
   R2_JURISDICTION?: string;
   // Workers Rate Limiting bindings for per-minute budgets, named by their limit (wrangler.toml [[ratelimits]]).
   [perMinuteBudget: `RATE_LIMIT_${number}_PER_MINUTE`]: RateLimit | undefined;

@@ -7,7 +7,6 @@ test('env config keeps each variable degrading to its historical default', () =>
   assert.deepEqual(defaults.JWT_SECRET, { kind: 'missing' });
   assert.equal(defaults.SSO_SIGNUPS, true);
   assert.equal(defaults.SSO_SCOPES, 'openid profile email');
-  assert.equal(defaults.R2_BUCKET, 'nodewarden-attachments');
   assert.deepEqual(readEnvConfig({ JWT_SECRET: ' short ' }).JWT_SECRET, { kind: 'too_short' });
   for (const [value, enabled] of [
     [' 1 ', true],

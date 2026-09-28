@@ -22,7 +22,6 @@ import {
   putBlobObject,
 } from '../services/blob-store';
 import { writeDataAudit } from '../services/audit-events';
-import { createR2PresignedPutUrl, shouldPresignUpload } from '../services/r2-presign';
 import { loadAccessibleCipher } from './cipher-access';
 import { EventType } from '../services/events';
 import * as attachmentRepo from '../services/storage-attachment-repo';
@@ -174,18 +173,17 @@ export async function handleCreateAttachment(
     : await cipherRepo.getCipherForUser(env.DB, cipherId, userId);
   const attachments = await attachmentRepo.getAttachmentsByCipher(env.DB, cipherId);
   const uploadToken = await createAttachmentUploadToken(userId, cipherId, attachmentId, env.JWT_SECRET);
-  const usePresign = shouldPresignUpload(fileSize, env);
-  const url = usePresign
-    ? await createR2PresignedPutUrl(env, getAttachmentObjectKey(cipherId, attachmentId))
-    : buildDirectUploadUrl(request, `/api/ciphers/${cipherId}/attachment/${attachmentId}`, uploadToken);
+  // Official clients PUT the file to this Worker URL the way they upload to Azure blob storage (fileUploadType 1);
+  // for the Direct type they ignore any URL and post to the server instead.
+  const url = buildDirectUploadUrl(request, `/api/ciphers/${cipherId}/attachment/${attachmentId}`, uploadToken);
 
   await recordCipherEvents(env, request, userId, EventType.CipherAttachmentCreated, [cipher]);
   return jsonResponse({
     object: 'attachment-fileUpload',
     attachmentId: attachmentId,
     url,
-    urlType: usePresign ? 's3-presigned' : 'direct',
-    fileUploadType: usePresign ? 0 : 1,
+    urlType: 'direct',
+    fileUploadType: 1,
     cipherResponse: cipherToResponse(updatedCipher || cipher, attachments),
   });
 }

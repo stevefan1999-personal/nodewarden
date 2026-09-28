@@ -1,3 +1,20 @@
+CREATE TABLE `account` (
+	`id` text PRIMARY KEY,
+	`account_id` text NOT NULL,
+	`provider_id` text NOT NULL,
+	`user_id` text NOT NULL,
+	`access_token` text,
+	`refresh_token` text,
+	`id_token` text,
+	`access_token_expires_at` integer,
+	`refresh_token_expires_at` integer,
+	`scope` text,
+	`password` text,
+	`created_at` integer NOT NULL,
+	`updated_at` integer NOT NULL,
+	CONSTRAINT `fk_account_user_id_users_id_fk` FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON DELETE CASCADE
+);
+--> statement-breakpoint
 CREATE TABLE `attachments` (
 	`id` text PRIMARY KEY,
 	`cipher_id` text NOT NULL,
@@ -153,6 +170,24 @@ CREATE TABLE `emergency_access` (
 	CONSTRAINT `fk_emergency_access_grantee_id_users_id_fk` FOREIGN KEY (`grantee_id`) REFERENCES `users`(`id`) ON DELETE SET NULL
 );
 --> statement-breakpoint
+CREATE TABLE `events` (
+	`id` text PRIMARY KEY,
+	`organization_id` text,
+	`type` integer NOT NULL,
+	`date` text NOT NULL,
+	`recorded_at` text NOT NULL,
+	`acting_user_id` text,
+	`user_id` text,
+	`resource_type` text,
+	`resource_id` text,
+	`service_account_id` text,
+	`granted_service_account_id` text,
+	`device_type` integer,
+	`ip_address` text,
+	`system_user` integer,
+	CONSTRAINT `fk_events_organization_id_organizations_id_fk` FOREIGN KEY (`organization_id`) REFERENCES `organizations`(`id`) ON DELETE CASCADE
+);
+--> statement-breakpoint
 CREATE TABLE `folders` (
 	`id` text PRIMARY KEY,
 	`user_id` text NOT NULL,
@@ -257,25 +292,22 @@ CREATE TABLE `organizations` (
 	`updated_at` text NOT NULL
 );
 --> statement-breakpoint
+CREATE TABLE `pending_collection_users` (
+	`membership_id` text NOT NULL,
+	`collection_id` text NOT NULL,
+	`read_only` integer DEFAULT 0 NOT NULL,
+	`hide_passwords` integer DEFAULT 0 NOT NULL,
+	`manage` integer DEFAULT 0 NOT NULL,
+	CONSTRAINT `pending_collection_users_pk` PRIMARY KEY(`membership_id`, `collection_id`),
+	CONSTRAINT `fk_pending_collection_users_membership_id_organization_memberships_id_fk` FOREIGN KEY (`membership_id`) REFERENCES `organization_memberships`(`id`) ON DELETE CASCADE,
+	CONSTRAINT `fk_pending_collection_users_collection_id_collections_id_fk` FOREIGN KEY (`collection_id`) REFERENCES `collections`(`id`) ON DELETE CASCADE
+);
+--> statement-breakpoint
 CREATE TABLE `rate_limit_buckets` (
 	`bucket_key` text PRIMARY KEY,
 	`count` integer NOT NULL,
 	`expires_at` integer NOT NULL,
 	`updated_at` integer NOT NULL
-);
---> statement-breakpoint
-CREATE TABLE `refresh_tokens` (
-	`token` text PRIMARY KEY,
-	`user_id` text NOT NULL,
-	`expires_at` integer NOT NULL,
-	`device_identifier` text,
-	`device_session_stamp` text,
-	`security_stamp` text,
-	`created_at` integer,
-	`last_used_at` integer,
-	`absolute_expires_at` integer,
-	`client_type` text,
-	CONSTRAINT `fk_refresh_tokens_user_id_users_id_fk` FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON DELETE CASCADE
 );
 --> statement-breakpoint
 CREATE TABLE `sends` (
@@ -302,16 +334,54 @@ CREATE TABLE `sends` (
 	CONSTRAINT `fk_sends_user_id_users_id_fk` FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON DELETE CASCADE
 );
 --> statement-breakpoint
+CREATE TABLE `session` (
+	`id` text PRIMARY KEY,
+	`expires_at` integer NOT NULL,
+	`token` text NOT NULL UNIQUE,
+	`created_at` integer NOT NULL,
+	`updated_at` integer NOT NULL,
+	`ip_address` text,
+	`user_agent` text,
+	`user_id` text NOT NULL,
+	`device_identifier` text,
+	`device_session_stamp` text,
+	`security_stamp` text,
+	`client_type` text,
+	`absolute_expires_at` integer,
+	`last_used_at` integer,
+	CONSTRAINT `fk_session_user_id_users_id_fk` FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON DELETE CASCADE
+);
+--> statement-breakpoint
 CREATE TABLE `sm_access_tokens` (
 	`id` text PRIMARY KEY,
 	`service_account_id` text NOT NULL,
 	`name` text NOT NULL,
 	`client_secret_hash` text NOT NULL,
 	`wrapped_org_key` text,
+	`encrypted_payload` text,
+	`key` text,
 	`expire_at` text,
 	`revoked_at` text,
 	`created_at` text NOT NULL,
 	CONSTRAINT `fk_sm_access_tokens_service_account_id_sm_service_accounts_id_fk` FOREIGN KEY (`service_account_id`) REFERENCES `sm_service_accounts`(`id`) ON DELETE CASCADE
+);
+--> statement-breakpoint
+CREATE TABLE `sm_project_groups` (
+	`project_id` text NOT NULL,
+	`group_id` text NOT NULL,
+	`write_access` integer DEFAULT 0 NOT NULL,
+	CONSTRAINT `sm_project_groups_pk` PRIMARY KEY(`project_id`, `group_id`),
+	CONSTRAINT `fk_sm_project_groups_project_id_sm_projects_id_fk` FOREIGN KEY (`project_id`) REFERENCES `sm_projects`(`id`) ON DELETE CASCADE,
+	CONSTRAINT `fk_sm_project_groups_group_id_org_groups_id_fk` FOREIGN KEY (`group_id`) REFERENCES `org_groups`(`id`) ON DELETE CASCADE
+);
+--> statement-breakpoint
+CREATE TABLE `sm_project_members` (
+	`project_id` text NOT NULL,
+	`membership_id` text NOT NULL,
+	`write_access` integer DEFAULT 0 NOT NULL,
+	CONSTRAINT `sm_project_members_pk` PRIMARY KEY(`project_id`, `membership_id`),
+	CONSTRAINT `fk_sm_project_members_project_id_sm_projects_id_fk` FOREIGN KEY (`project_id`) REFERENCES `sm_projects`(`id`) ON DELETE CASCADE,
+	CONSTRAINT `fk_sm_project_members_membership_id_organization_memberships_id_fk` FOREIGN KEY (`membership_id`) REFERENCES `organization_memberships`(`id`) ON DELETE CASCADE
 );
 --> statement-breakpoint
 CREATE TABLE `sm_projects` (
@@ -323,12 +393,39 @@ CREATE TABLE `sm_projects` (
 	CONSTRAINT `fk_sm_projects_org_id_organizations_id_fk` FOREIGN KEY (`org_id`) REFERENCES `organizations`(`id`) ON DELETE CASCADE
 );
 --> statement-breakpoint
+CREATE TABLE `sm_secret_groups` (
+	`secret_id` text NOT NULL,
+	`group_id` text NOT NULL,
+	`write_access` integer DEFAULT 0 NOT NULL,
+	CONSTRAINT `sm_secret_groups_pk` PRIMARY KEY(`secret_id`, `group_id`),
+	CONSTRAINT `fk_sm_secret_groups_secret_id_sm_secrets_id_fk` FOREIGN KEY (`secret_id`) REFERENCES `sm_secrets`(`id`) ON DELETE CASCADE,
+	CONSTRAINT `fk_sm_secret_groups_group_id_org_groups_id_fk` FOREIGN KEY (`group_id`) REFERENCES `org_groups`(`id`) ON DELETE CASCADE
+);
+--> statement-breakpoint
+CREATE TABLE `sm_secret_members` (
+	`secret_id` text NOT NULL,
+	`membership_id` text NOT NULL,
+	`write_access` integer DEFAULT 0 NOT NULL,
+	CONSTRAINT `sm_secret_members_pk` PRIMARY KEY(`secret_id`, `membership_id`),
+	CONSTRAINT `fk_sm_secret_members_secret_id_sm_secrets_id_fk` FOREIGN KEY (`secret_id`) REFERENCES `sm_secrets`(`id`) ON DELETE CASCADE,
+	CONSTRAINT `fk_sm_secret_members_membership_id_organization_memberships_id_fk` FOREIGN KEY (`membership_id`) REFERENCES `organization_memberships`(`id`) ON DELETE CASCADE
+);
+--> statement-breakpoint
 CREATE TABLE `sm_secret_projects` (
 	`secret_id` text NOT NULL,
 	`project_id` text NOT NULL,
 	CONSTRAINT `sm_secret_projects_pk` PRIMARY KEY(`secret_id`, `project_id`),
 	CONSTRAINT `fk_sm_secret_projects_secret_id_sm_secrets_id_fk` FOREIGN KEY (`secret_id`) REFERENCES `sm_secrets`(`id`) ON DELETE CASCADE,
 	CONSTRAINT `fk_sm_secret_projects_project_id_sm_projects_id_fk` FOREIGN KEY (`project_id`) REFERENCES `sm_projects`(`id`) ON DELETE CASCADE
+);
+--> statement-breakpoint
+CREATE TABLE `sm_secret_service_accounts` (
+	`secret_id` text NOT NULL,
+	`service_account_id` text NOT NULL,
+	`write_access` integer DEFAULT 0 NOT NULL,
+	CONSTRAINT `sm_secret_service_accounts_pk` PRIMARY KEY(`secret_id`, `service_account_id`),
+	CONSTRAINT `fk_sm_secret_service_accounts_secret_id_sm_secrets_id_fk` FOREIGN KEY (`secret_id`) REFERENCES `sm_secrets`(`id`) ON DELETE CASCADE,
+	CONSTRAINT `fk_sm_secret_service_accounts_service_account_id_sm_service_accounts_id_fk` FOREIGN KEY (`service_account_id`) REFERENCES `sm_service_accounts`(`id`) ON DELETE CASCADE
 );
 --> statement-breakpoint
 CREATE TABLE `sm_secrets` (
@@ -341,6 +438,22 @@ CREATE TABLE `sm_secrets` (
 	`updated_at` text NOT NULL,
 	`deleted_at` text,
 	CONSTRAINT `fk_sm_secrets_org_id_organizations_id_fk` FOREIGN KEY (`org_id`) REFERENCES `organizations`(`id`) ON DELETE CASCADE
+);
+--> statement-breakpoint
+CREATE TABLE `sm_service_account_groups` (
+	`service_account_id` text NOT NULL,
+	`group_id` text NOT NULL,
+	CONSTRAINT `sm_service_account_groups_pk` PRIMARY KEY(`service_account_id`, `group_id`),
+	CONSTRAINT `fk_sm_service_account_groups_service_account_id_sm_service_accounts_id_fk` FOREIGN KEY (`service_account_id`) REFERENCES `sm_service_accounts`(`id`) ON DELETE CASCADE,
+	CONSTRAINT `fk_sm_service_account_groups_group_id_org_groups_id_fk` FOREIGN KEY (`group_id`) REFERENCES `org_groups`(`id`) ON DELETE CASCADE
+);
+--> statement-breakpoint
+CREATE TABLE `sm_service_account_members` (
+	`service_account_id` text NOT NULL,
+	`membership_id` text NOT NULL,
+	CONSTRAINT `sm_service_account_members_pk` PRIMARY KEY(`service_account_id`, `membership_id`),
+	CONSTRAINT `fk_sm_service_account_members_service_account_id_sm_service_accounts_id_fk` FOREIGN KEY (`service_account_id`) REFERENCES `sm_service_accounts`(`id`) ON DELETE CASCADE,
+	CONSTRAINT `fk_sm_service_account_members_membership_id_organization_memberships_id_fk` FOREIGN KEY (`membership_id`) REFERENCES `organization_memberships`(`id`) ON DELETE CASCADE
 );
 --> statement-breakpoint
 CREATE TABLE `sm_service_account_projects` (
@@ -428,6 +541,7 @@ CREATE TABLE `users` (
 	`verify_devices` integer DEFAULT 0 NOT NULL,
 	`totp_secret` text,
 	`totp_recovery_code` text,
+	`two_factor_email` text,
 	`yubikey_key1` text,
 	`yubikey_key2` text,
 	`yubikey_key3` text,
@@ -435,8 +549,20 @@ CREATE TABLE `users` (
 	`yubikey_key5` text,
 	`yubikey_nfc` integer DEFAULT 0 NOT NULL,
 	`api_key` text,
+	`user_key_id` text,
+	`email_verified` integer DEFAULT 1 NOT NULL,
+	`image` text,
 	`created_at` text NOT NULL,
 	`updated_at` text NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE `verification` (
+	`id` text PRIMARY KEY,
+	`identifier` text NOT NULL,
+	`value` text NOT NULL,
+	`expires_at` integer NOT NULL,
+	`created_at` integer,
+	`updated_at` integer
 );
 --> statement-breakpoint
 CREATE TABLE `webauthn_challenges` (
@@ -468,6 +594,8 @@ CREATE TABLE `webauthn_credentials` (
 	CONSTRAINT `fk_webauthn_credentials_user_id_users_id_fk` FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON DELETE CASCADE
 );
 --> statement-breakpoint
+CREATE UNIQUE INDEX `idx_account_provider_account` ON `account` (`provider_id`,`account_id`);--> statement-breakpoint
+CREATE INDEX `idx_account_user` ON `account` (`user_id`);--> statement-breakpoint
 CREATE INDEX `idx_attachments_cipher` ON `attachments` (`cipher_id`);--> statement-breakpoint
 CREATE INDEX `idx_audit_logs_created_at` ON `audit_logs` (`created_at`);--> statement-breakpoint
 CREATE INDEX `idx_audit_logs_actor_created` ON `audit_logs` (`actor_user_id`,`created_at`);--> statement-breakpoint
@@ -491,23 +619,39 @@ CREATE INDEX `idx_devices_user_push` ON `devices` (`user_id`,`push_token`);--> s
 CREATE INDEX `idx_emergency_access_grantor` ON `emergency_access` (`grantor_id`,`status`);--> statement-breakpoint
 CREATE INDEX `idx_emergency_access_grantee` ON `emergency_access` (`grantee_id`,`status`);--> statement-breakpoint
 CREATE INDEX `idx_emergency_access_email` ON `emergency_access` (`email`);--> statement-breakpoint
+CREATE INDEX `idx_events_recorded` ON `events` (`recorded_at`,`id`);--> statement-breakpoint
+CREATE INDEX `idx_events_org_date` ON `events` (`organization_id`,`date`,`id`);--> statement-breakpoint
+CREATE INDEX `idx_events_actor_date` ON `events` (`acting_user_id`,`date`,`id`);--> statement-breakpoint
+CREATE INDEX `idx_events_resource_date` ON `events` (`organization_id`,`resource_type`,`resource_id`,`date`,`id`);--> statement-breakpoint
 CREATE INDEX `idx_folders_user_updated` ON `folders` (`user_id`,`updated_at`);--> statement-breakpoint
 CREATE INDEX `idx_invites_status_expires` ON `invites` (`status`,`expires_at`);--> statement-breakpoint
 CREATE INDEX `idx_invites_created_by` ON `invites` (`created_by`,`created_at`);--> statement-breakpoint
 CREATE INDEX `idx_org_groups_org` ON `org_groups` (`org_id`);--> statement-breakpoint
-CREATE UNIQUE INDEX `idx_org_memberships_user_org` ON `organization_memberships` (`user_id`,`org_id`) WHERE "organization_memberships"."user_id" is not null;--> statement-breakpoint
+CREATE UNIQUE INDEX `idx_org_memberships_user_org` ON `organization_memberships` (`user_id`,`org_id`) WHERE ("organization_memberships"."user_id" is not null);--> statement-breakpoint
 CREATE INDEX `idx_org_memberships_org_status` ON `organization_memberships` (`org_id`,`status`);--> statement-breakpoint
 CREATE INDEX `idx_org_memberships_external` ON `organization_memberships` (`org_id`,`external_id`);--> statement-breakpoint
-CREATE UNIQUE INDEX `idx_organizations_identifier` ON `organizations` (`identifier`) WHERE "organizations"."identifier" is not null;--> statement-breakpoint
+CREATE UNIQUE INDEX `idx_organizations_identifier` ON `organizations` (`identifier`) WHERE ("organizations"."identifier" is not null);--> statement-breakpoint
 CREATE INDEX `idx_rate_limit_buckets_expires` ON `rate_limit_buckets` (`expires_at`);--> statement-breakpoint
-CREATE INDEX `idx_refresh_tokens_user` ON `refresh_tokens` (`user_id`);--> statement-breakpoint
 CREATE INDEX `idx_sends_user_updated` ON `sends` (`user_id`,`updated_at`);--> statement-breakpoint
 CREATE INDEX `idx_sends_user_deletion` ON `sends` (`user_id`,`deletion_date`);--> statement-breakpoint
 CREATE INDEX `idx_sends_user_updated_id` ON `sends` (`user_id`,`updated_at`,`id`);--> statement-breakpoint
+CREATE INDEX `idx_session_user` ON `session` (`user_id`);--> statement-breakpoint
+CREATE INDEX `idx_session_expires` ON `session` (`expires_at`);--> statement-breakpoint
+CREATE INDEX `idx_sm_project_groups_group` ON `sm_project_groups` (`group_id`);--> statement-breakpoint
+CREATE INDEX `idx_sm_project_members_membership` ON `sm_project_members` (`membership_id`);--> statement-breakpoint
 CREATE INDEX `idx_sm_projects_org` ON `sm_projects` (`org_id`);--> statement-breakpoint
+CREATE INDEX `idx_sm_secret_groups_group` ON `sm_secret_groups` (`group_id`);--> statement-breakpoint
+CREATE INDEX `idx_sm_secret_members_membership` ON `sm_secret_members` (`membership_id`);--> statement-breakpoint
+CREATE INDEX `idx_sm_secret_projects_project` ON `sm_secret_projects` (`project_id`);--> statement-breakpoint
+CREATE INDEX `idx_sm_secret_service_accounts_service_account` ON `sm_secret_service_accounts` (`service_account_id`);--> statement-breakpoint
 CREATE INDEX `idx_sm_secrets_org_updated` ON `sm_secrets` (`org_id`,`updated_at`);--> statement-breakpoint
+CREATE INDEX `idx_sm_service_account_groups_group` ON `sm_service_account_groups` (`group_id`);--> statement-breakpoint
+CREATE INDEX `idx_sm_service_account_members_membership` ON `sm_service_account_members` (`membership_id`);--> statement-breakpoint
+CREATE INDEX `idx_sm_sa_projects_project` ON `sm_service_account_projects` (`project_id`);--> statement-breakpoint
+CREATE INDEX `idx_sm_service_accounts_org` ON `sm_service_accounts` (`org_id`);--> statement-breakpoint
 CREATE INDEX `idx_totp_login_replays_consumed_at` ON `totp_login_replays` (`consumed_at`);--> statement-breakpoint
 CREATE INDEX `idx_trusted_two_factor_device_tokens_user_device` ON `trusted_two_factor_device_tokens` (`user_id`,`device_identifier`);--> statement-breakpoint
+CREATE INDEX `idx_verification_identifier` ON `verification` (`identifier`);--> statement-breakpoint
 CREATE INDEX `idx_webauthn_challenges_expires` ON `webauthn_challenges` (`expires_at`);--> statement-breakpoint
 CREATE INDEX `idx_webauthn_challenges_user_scope` ON `webauthn_challenges` (`user_id`,`scope`);--> statement-breakpoint
 CREATE UNIQUE INDEX `idx_webauthn_credentials_id` ON `webauthn_credentials` (`id`);--> statement-breakpoint

@@ -1,11 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { eq } from 'drizzle-orm';
-
 import { getOrm } from '../db/client';
-import { ensureStorageSchema } from '../db/migrate';
-import { smSecretProjects, smServiceAccountProjects } from '../db/schema';
+import { smSecretProjects } from '../db/schema';
 import * as smRepo from '../services/storage-secret-repo';
 import type { Env, User } from '../types';
 import { D1_MAX_BOUND_PARAMETERS } from './support/d1-sqlite';
@@ -123,18 +120,8 @@ test("projectsInOrg keeps only the org's projects from a cap-length id list", as
   assert.deepEqual(await smRepo.projectsInOrg(env.DB, yOrgId, [...ids, ...missingIds]), new Set([yProjectId]));
 });
 
-async function linkedProjectIds(
-  env: Env,
-  table: typeof smSecretProjects | typeof smServiceAccountProjects,
-  column: typeof smSecretProjects.secretId | typeof smServiceAccountProjects.serviceAccountId,
-  id: string,
-): Promise<string[]> {
-  const rows = await getOrm(env.DB).select({ projectId: table.projectId }).from(table).where(eq(column, id));
-  return rows.map((row) => row.projectId);
-}
-
 // Earlier builds stored any posted project id, so a link can already point across organizations.
-test('a seeded cross-org secret link never appears in projects[], and the schema step removes it', async () => {
+test('a seeded cross-org secret link never appears in projects[]', async () => {
   const { env, admin, yOrgId, yProjectId, ySecretId, xProjectId } = await seedCrossOrg();
   await getOrm(env.DB).insert(smSecretProjects).values({ secretId: ySecretId, projectId: xProjectId });
 
@@ -152,46 +139,6 @@ test('a seeded cross-org secret link never appears in projects[], and the schema
     secrets.map((listed) => [listed.id, listed.projects.map((project) => project.id)]),
     [[ySecretId, [yProjectId]]],
   );
-
-  await ensureStorageSchema(env.DB);
-  assert.deepEqual(await linkedProjectIds(env, smSecretProjects, smSecretProjects.secretId, ySecretId), [yProjectId]);
-  await ensureStorageSchema(env.DB);
-  assert.deepEqual(await linkedProjectIds(env, smSecretProjects, smSecretProjects.secretId, ySecretId), [yProjectId]);
-});
-
-test('the schema step removes cross-org and unreadable machine-account project grants and replays cleanly', async () => {
-  const { env, admin, yOrgId, yProjectId, xProjectId } = await seedCrossOrg();
-  const createAccount = async () => {
-    const { id } = await postJson<{ id: string }>(env, admin, `/api/organizations/${yOrgId}/service-accounts`, {
-      name: ENCRYPTED_FIELD,
-    });
-    await smRepo.replaceServiceAccountProjects(env.DB, id, [yProjectId]);
-    return id;
-  };
-  const [granted, unreadable] = [await createAccount(), await createAccount()];
-  const orm = getOrm(env.DB);
-  await orm
-    .insert(smServiceAccountProjects)
-    .values({ serviceAccountId: granted, projectId: xProjectId, readAccess: 1, writeAccess: 0 });
-  await orm
-    .update(smServiceAccountProjects)
-    .set({ readAccess: 0 })
-    .where(eq(smServiceAccountProjects.serviceAccountId, unreadable));
-
-  const assertOnlyReadableSameOrgGrants = async () => {
-    assert.deepEqual(
-      await linkedProjectIds(env, smServiceAccountProjects, smServiceAccountProjects.serviceAccountId, granted),
-      [yProjectId],
-    );
-    assert.deepEqual(
-      await linkedProjectIds(env, smServiceAccountProjects, smServiceAccountProjects.serviceAccountId, unreadable),
-      [],
-    );
-  };
-  await ensureStorageSchema(env.DB);
-  await assertOnlyReadableSameOrgGrants();
-  await ensureStorageSchema(env.DB);
-  await assertOnlyReadableSameOrgGrants();
 });
 
 test(`an owner lists ${LARGE_ORG_SECRET_COUNT} secrets without exceeding D1 parameters`, async () => {

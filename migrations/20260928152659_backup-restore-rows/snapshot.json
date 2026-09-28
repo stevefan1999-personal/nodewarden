@@ -1,10 +1,10 @@
 {
-  "id": "8edc653d-88d3-4766-902d-c97c2599ed70",
-  "prevIds": [
-    "788ce9d8-8879-4310-a658-8023e716e3ef"
-  ],
   "version": "7",
   "dialect": "sqlite",
+  "id": "120e40f7-9d47-4ea0-8db2-fbb80dd92c02",
+  "prevIds": [
+    "81338609-7075-45fd-9ce4-f9ae545f0658"
+  ],
   "ddl": [
     {
       "name": "account",
@@ -20,6 +20,10 @@
     },
     {
       "name": "auth_requests",
+      "entityType": "tables"
+    },
+    {
+      "name": "backup_restore_rows",
       "entityType": "tables"
     },
     {
@@ -56,6 +60,10 @@
     },
     {
       "name": "emergency_access",
+      "entityType": "tables"
+    },
+    {
+      "name": "events",
       "entityType": "tables"
     },
     {
@@ -119,7 +127,23 @@
       "entityType": "tables"
     },
     {
+      "name": "sm_project_groups",
+      "entityType": "tables"
+    },
+    {
+      "name": "sm_project_members",
+      "entityType": "tables"
+    },
+    {
       "name": "sm_projects",
+      "entityType": "tables"
+    },
+    {
+      "name": "sm_secret_groups",
+      "entityType": "tables"
+    },
+    {
+      "name": "sm_secret_members",
       "entityType": "tables"
     },
     {
@@ -127,7 +151,19 @@
       "entityType": "tables"
     },
     {
+      "name": "sm_secret_service_accounts",
+      "entityType": "tables"
+    },
+    {
       "name": "sm_secrets",
+      "entityType": "tables"
+    },
+    {
+      "name": "sm_service_account_groups",
+      "entityType": "tables"
+    },
+    {
+      "name": "sm_service_account_members",
       "entityType": "tables"
     },
     {
@@ -152,10 +188,6 @@
     },
     {
       "name": "trusted_two_factor_device_tokens",
-      "entityType": "tables"
-    },
-    {
-      "name": "two_factor",
       "entityType": "tables"
     },
     {
@@ -631,6 +663,36 @@
       "name": "authentication_date",
       "entityType": "columns",
       "table": "auth_requests"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "table_name",
+      "entityType": "columns",
+      "table": "backup_restore_rows"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "position",
+      "entityType": "columns",
+      "table": "backup_restore_rows"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "row",
+      "entityType": "columns",
+      "table": "backup_restore_rows"
     },
     {
       "type": "text",
@@ -1311,6 +1373,146 @@
       "name": "updated_at",
       "entityType": "columns",
       "table": "emergency_access"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
+      "table": "events"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "organization_id",
+      "entityType": "columns",
+      "table": "events"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "type",
+      "entityType": "columns",
+      "table": "events"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "date",
+      "entityType": "columns",
+      "table": "events"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "recorded_at",
+      "entityType": "columns",
+      "table": "events"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "acting_user_id",
+      "entityType": "columns",
+      "table": "events"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "user_id",
+      "entityType": "columns",
+      "table": "events"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "resource_type",
+      "entityType": "columns",
+      "table": "events"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "resource_id",
+      "entityType": "columns",
+      "table": "events"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "service_account_id",
+      "entityType": "columns",
+      "table": "events"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "granted_service_account_id",
+      "entityType": "columns",
+      "table": "events"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "device_type",
+      "entityType": "columns",
+      "table": "events"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "ip_address",
+      "entityType": "columns",
+      "table": "events"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "system_user",
+      "entityType": "columns",
+      "table": "events"
     },
     {
       "type": "text",
@@ -2408,6 +2610,26 @@
       "autoincrement": false,
       "default": null,
       "generated": null,
+      "name": "encrypted_payload",
+      "entityType": "columns",
+      "table": "sm_access_tokens"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "key",
+      "entityType": "columns",
+      "table": "sm_access_tokens"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
       "name": "expire_at",
       "entityType": "columns",
       "table": "sm_access_tokens"
@@ -2431,6 +2653,66 @@
       "name": "created_at",
       "entityType": "columns",
       "table": "sm_access_tokens"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "project_id",
+      "entityType": "columns",
+      "table": "sm_project_groups"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "group_id",
+      "entityType": "columns",
+      "table": "sm_project_groups"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "0",
+      "generated": null,
+      "name": "write_access",
+      "entityType": "columns",
+      "table": "sm_project_groups"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "project_id",
+      "entityType": "columns",
+      "table": "sm_project_members"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "membership_id",
+      "entityType": "columns",
+      "table": "sm_project_members"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "0",
+      "generated": null,
+      "name": "write_access",
+      "entityType": "columns",
+      "table": "sm_project_members"
     },
     {
       "type": "text",
@@ -2490,6 +2772,66 @@
       "generated": null,
       "name": "secret_id",
       "entityType": "columns",
+      "table": "sm_secret_groups"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "group_id",
+      "entityType": "columns",
+      "table": "sm_secret_groups"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "0",
+      "generated": null,
+      "name": "write_access",
+      "entityType": "columns",
+      "table": "sm_secret_groups"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "secret_id",
+      "entityType": "columns",
+      "table": "sm_secret_members"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "membership_id",
+      "entityType": "columns",
+      "table": "sm_secret_members"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "0",
+      "generated": null,
+      "name": "write_access",
+      "entityType": "columns",
+      "table": "sm_secret_members"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "secret_id",
+      "entityType": "columns",
       "table": "sm_secret_projects"
     },
     {
@@ -2501,6 +2843,36 @@
       "name": "project_id",
       "entityType": "columns",
       "table": "sm_secret_projects"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "secret_id",
+      "entityType": "columns",
+      "table": "sm_secret_service_accounts"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "service_account_id",
+      "entityType": "columns",
+      "table": "sm_secret_service_accounts"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "0",
+      "generated": null,
+      "name": "write_access",
+      "entityType": "columns",
+      "table": "sm_secret_service_accounts"
     },
     {
       "type": "text",
@@ -2581,6 +2953,46 @@
       "name": "deleted_at",
       "entityType": "columns",
       "table": "sm_secrets"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "service_account_id",
+      "entityType": "columns",
+      "table": "sm_service_account_groups"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "group_id",
+      "entityType": "columns",
+      "table": "sm_service_account_groups"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "service_account_id",
+      "entityType": "columns",
+      "table": "sm_service_account_members"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "membership_id",
+      "entityType": "columns",
+      "table": "sm_service_account_members"
     },
     {
       "type": "text",
@@ -2878,46 +3290,6 @@
       "autoincrement": false,
       "default": null,
       "generated": null,
-      "name": "id",
-      "entityType": "columns",
-      "table": "two_factor"
-    },
-    {
-      "type": "text",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "secret",
-      "entityType": "columns",
-      "table": "two_factor"
-    },
-    {
-      "type": "text",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "backup_codes",
-      "entityType": "columns",
-      "table": "two_factor"
-    },
-    {
-      "type": "text",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "user_id",
-      "entityType": "columns",
-      "table": "two_factor"
-    },
-    {
-      "type": "text",
-      "notNull": false,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
       "name": "jti",
       "entityType": "columns",
       "table": "used_attachment_download_tokens"
@@ -3129,6 +3501,16 @@
       "default": null,
       "generated": null,
       "name": "totp_recovery_code",
+      "entityType": "columns",
+      "table": "users"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "two_factor_email",
       "entityType": "columns",
       "table": "users"
     },
@@ -3774,6 +4156,21 @@
     },
     {
       "columns": [
+        "organization_id"
+      ],
+      "tableTo": "organizations",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_events_organization_id_organizations_id_fk",
+      "entityType": "fks",
+      "table": "events"
+    },
+    {
+      "columns": [
         "user_id"
       ],
       "tableTo": "users",
@@ -4014,6 +4411,66 @@
     },
     {
       "columns": [
+        "project_id"
+      ],
+      "tableTo": "sm_projects",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_sm_project_groups_project_id_sm_projects_id_fk",
+      "entityType": "fks",
+      "table": "sm_project_groups"
+    },
+    {
+      "columns": [
+        "group_id"
+      ],
+      "tableTo": "org_groups",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_sm_project_groups_group_id_org_groups_id_fk",
+      "entityType": "fks",
+      "table": "sm_project_groups"
+    },
+    {
+      "columns": [
+        "project_id"
+      ],
+      "tableTo": "sm_projects",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_sm_project_members_project_id_sm_projects_id_fk",
+      "entityType": "fks",
+      "table": "sm_project_members"
+    },
+    {
+      "columns": [
+        "membership_id"
+      ],
+      "tableTo": "organization_memberships",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_sm_project_members_membership_id_organization_memberships_id_fk",
+      "entityType": "fks",
+      "table": "sm_project_members"
+    },
+    {
+      "columns": [
         "org_id"
       ],
       "tableTo": "organizations",
@@ -4026,6 +4483,66 @@
       "name": "fk_sm_projects_org_id_organizations_id_fk",
       "entityType": "fks",
       "table": "sm_projects"
+    },
+    {
+      "columns": [
+        "secret_id"
+      ],
+      "tableTo": "sm_secrets",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_sm_secret_groups_secret_id_sm_secrets_id_fk",
+      "entityType": "fks",
+      "table": "sm_secret_groups"
+    },
+    {
+      "columns": [
+        "group_id"
+      ],
+      "tableTo": "org_groups",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_sm_secret_groups_group_id_org_groups_id_fk",
+      "entityType": "fks",
+      "table": "sm_secret_groups"
+    },
+    {
+      "columns": [
+        "secret_id"
+      ],
+      "tableTo": "sm_secrets",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_sm_secret_members_secret_id_sm_secrets_id_fk",
+      "entityType": "fks",
+      "table": "sm_secret_members"
+    },
+    {
+      "columns": [
+        "membership_id"
+      ],
+      "tableTo": "organization_memberships",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_sm_secret_members_membership_id_organization_memberships_id_fk",
+      "entityType": "fks",
+      "table": "sm_secret_members"
     },
     {
       "columns": [
@@ -4059,6 +4576,36 @@
     },
     {
       "columns": [
+        "secret_id"
+      ],
+      "tableTo": "sm_secrets",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_sm_secret_service_accounts_secret_id_sm_secrets_id_fk",
+      "entityType": "fks",
+      "table": "sm_secret_service_accounts"
+    },
+    {
+      "columns": [
+        "service_account_id"
+      ],
+      "tableTo": "sm_service_accounts",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_sm_secret_service_accounts_service_account_id_sm_service_accounts_id_fk",
+      "entityType": "fks",
+      "table": "sm_secret_service_accounts"
+    },
+    {
+      "columns": [
         "org_id"
       ],
       "tableTo": "organizations",
@@ -4071,6 +4618,66 @@
       "name": "fk_sm_secrets_org_id_organizations_id_fk",
       "entityType": "fks",
       "table": "sm_secrets"
+    },
+    {
+      "columns": [
+        "service_account_id"
+      ],
+      "tableTo": "sm_service_accounts",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_sm_service_account_groups_service_account_id_sm_service_accounts_id_fk",
+      "entityType": "fks",
+      "table": "sm_service_account_groups"
+    },
+    {
+      "columns": [
+        "group_id"
+      ],
+      "tableTo": "org_groups",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_sm_service_account_groups_group_id_org_groups_id_fk",
+      "entityType": "fks",
+      "table": "sm_service_account_groups"
+    },
+    {
+      "columns": [
+        "service_account_id"
+      ],
+      "tableTo": "sm_service_accounts",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_sm_service_account_members_service_account_id_sm_service_accounts_id_fk",
+      "entityType": "fks",
+      "table": "sm_service_account_members"
+    },
+    {
+      "columns": [
+        "membership_id"
+      ],
+      "tableTo": "organization_memberships",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_sm_service_account_members_membership_id_organization_memberships_id_fk",
+      "entityType": "fks",
+      "table": "sm_service_account_members"
     },
     {
       "columns": [
@@ -4173,21 +4780,6 @@
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "nameExplicit": false,
-      "name": "fk_two_factor_user_id_users_id_fk",
-      "entityType": "fks",
-      "table": "two_factor"
-    },
-    {
-      "columns": [
-        "user_id"
-      ],
-      "tableTo": "users",
-      "columnsTo": [
-        "id"
-      ],
-      "onUpdate": "NO ACTION",
-      "onDelete": "CASCADE",
-      "nameExplicit": false,
       "name": "fk_user_revisions_user_id_users_id_fk",
       "entityType": "fks",
       "table": "user_revisions"
@@ -4206,6 +4798,16 @@
       "name": "fk_webauthn_credentials_user_id_users_id_fk",
       "entityType": "fks",
       "table": "webauthn_credentials"
+    },
+    {
+      "columns": [
+        "table_name",
+        "position"
+      ],
+      "nameExplicit": false,
+      "name": "backup_restore_rows_pk",
+      "entityType": "pks",
+      "table": "backup_restore_rows"
     },
     {
       "columns": [
@@ -4269,6 +4871,46 @@
     },
     {
       "columns": [
+        "project_id",
+        "group_id"
+      ],
+      "nameExplicit": false,
+      "name": "sm_project_groups_pk",
+      "entityType": "pks",
+      "table": "sm_project_groups"
+    },
+    {
+      "columns": [
+        "project_id",
+        "membership_id"
+      ],
+      "nameExplicit": false,
+      "name": "sm_project_members_pk",
+      "entityType": "pks",
+      "table": "sm_project_members"
+    },
+    {
+      "columns": [
+        "secret_id",
+        "group_id"
+      ],
+      "nameExplicit": false,
+      "name": "sm_secret_groups_pk",
+      "entityType": "pks",
+      "table": "sm_secret_groups"
+    },
+    {
+      "columns": [
+        "secret_id",
+        "membership_id"
+      ],
+      "nameExplicit": false,
+      "name": "sm_secret_members_pk",
+      "entityType": "pks",
+      "table": "sm_secret_members"
+    },
+    {
+      "columns": [
         "secret_id",
         "project_id"
       ],
@@ -4276,6 +4918,36 @@
       "name": "sm_secret_projects_pk",
       "entityType": "pks",
       "table": "sm_secret_projects"
+    },
+    {
+      "columns": [
+        "secret_id",
+        "service_account_id"
+      ],
+      "nameExplicit": false,
+      "name": "sm_secret_service_accounts_pk",
+      "entityType": "pks",
+      "table": "sm_secret_service_accounts"
+    },
+    {
+      "columns": [
+        "service_account_id",
+        "group_id"
+      ],
+      "nameExplicit": false,
+      "name": "sm_service_account_groups_pk",
+      "entityType": "pks",
+      "table": "sm_service_account_groups"
+    },
+    {
+      "columns": [
+        "service_account_id",
+        "membership_id"
+      ],
+      "nameExplicit": false,
+      "name": "sm_service_account_members_pk",
+      "entityType": "pks",
+      "table": "sm_service_account_members"
     },
     {
       "columns": [
@@ -4376,6 +5048,15 @@
       "nameExplicit": false,
       "name": "emergency_access_pk",
       "table": "emergency_access",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "events_pk",
+      "table": "events",
       "entityType": "pks"
     },
     {
@@ -4547,15 +5228,6 @@
       "nameExplicit": false,
       "name": "trusted_two_factor_device_tokens_pk",
       "table": "trusted_two_factor_device_tokens",
-      "entityType": "pks"
-    },
-    {
-      "columns": [
-        "id"
-      ],
-      "nameExplicit": false,
-      "name": "two_factor_pk",
-      "table": "two_factor",
       "entityType": "pks"
     },
     {
@@ -5061,6 +5733,98 @@
     {
       "columns": [
         {
+          "value": "recorded_at",
+          "isExpression": false
+        },
+        {
+          "value": "id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "idx_events_recorded",
+      "entityType": "indexes",
+      "table": "events"
+    },
+    {
+      "columns": [
+        {
+          "value": "organization_id",
+          "isExpression": false
+        },
+        {
+          "value": "date",
+          "isExpression": false
+        },
+        {
+          "value": "id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "idx_events_org_date",
+      "entityType": "indexes",
+      "table": "events"
+    },
+    {
+      "columns": [
+        {
+          "value": "acting_user_id",
+          "isExpression": false
+        },
+        {
+          "value": "date",
+          "isExpression": false
+        },
+        {
+          "value": "id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "idx_events_actor_date",
+      "entityType": "indexes",
+      "table": "events"
+    },
+    {
+      "columns": [
+        {
+          "value": "organization_id",
+          "isExpression": false
+        },
+        {
+          "value": "resource_type",
+          "isExpression": false
+        },
+        {
+          "value": "resource_id",
+          "isExpression": false
+        },
+        {
+          "value": "date",
+          "isExpression": false
+        },
+        {
+          "value": "id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "idx_events_resource_date",
+      "entityType": "indexes",
+      "table": "events"
+    },
+    {
+      "columns": [
+        {
           "value": "user_id",
           "isExpression": false
         },
@@ -5138,7 +5902,7 @@
         }
       ],
       "isUnique": true,
-      "where": "\"organization_memberships\".\"user_id\" is not null",
+      "where": "(\"organization_memberships\".\"user_id\" is not null)",
       "origin": "manual",
       "name": "idx_org_memberships_user_org",
       "entityType": "indexes",
@@ -5188,7 +5952,7 @@
         }
       ],
       "isUnique": true,
-      "where": "\"organizations\".\"identifier\" is not null",
+      "where": "(\"organizations\".\"identifier\" is not null)",
       "origin": "manual",
       "name": "idx_organizations_identifier",
       "entityType": "indexes",
@@ -5297,6 +6061,34 @@
     {
       "columns": [
         {
+          "value": "group_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "idx_sm_project_groups_group",
+      "entityType": "indexes",
+      "table": "sm_project_groups"
+    },
+    {
+      "columns": [
+        {
+          "value": "membership_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "idx_sm_project_members_membership",
+      "entityType": "indexes",
+      "table": "sm_project_members"
+    },
+    {
+      "columns": [
+        {
           "value": "org_id",
           "isExpression": false
         }
@@ -5307,6 +6099,62 @@
       "name": "idx_sm_projects_org",
       "entityType": "indexes",
       "table": "sm_projects"
+    },
+    {
+      "columns": [
+        {
+          "value": "group_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "idx_sm_secret_groups_group",
+      "entityType": "indexes",
+      "table": "sm_secret_groups"
+    },
+    {
+      "columns": [
+        {
+          "value": "membership_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "idx_sm_secret_members_membership",
+      "entityType": "indexes",
+      "table": "sm_secret_members"
+    },
+    {
+      "columns": [
+        {
+          "value": "project_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "idx_sm_secret_projects_project",
+      "entityType": "indexes",
+      "table": "sm_secret_projects"
+    },
+    {
+      "columns": [
+        {
+          "value": "service_account_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "idx_sm_secret_service_accounts_service_account",
+      "entityType": "indexes",
+      "table": "sm_secret_service_accounts"
     },
     {
       "columns": [
@@ -5325,6 +6173,62 @@
       "name": "idx_sm_secrets_org_updated",
       "entityType": "indexes",
       "table": "sm_secrets"
+    },
+    {
+      "columns": [
+        {
+          "value": "group_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "idx_sm_service_account_groups_group",
+      "entityType": "indexes",
+      "table": "sm_service_account_groups"
+    },
+    {
+      "columns": [
+        {
+          "value": "membership_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "idx_sm_service_account_members_membership",
+      "entityType": "indexes",
+      "table": "sm_service_account_members"
+    },
+    {
+      "columns": [
+        {
+          "value": "project_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "idx_sm_sa_projects_project",
+      "entityType": "indexes",
+      "table": "sm_service_account_projects"
+    },
+    {
+      "columns": [
+        {
+          "value": "org_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "idx_sm_service_accounts_org",
+      "entityType": "indexes",
+      "table": "sm_service_accounts"
     },
     {
       "columns": [
@@ -5491,15 +6395,6 @@
       "name": "sso_users_identifier_unique",
       "entityType": "uniques",
       "table": "sso_users"
-    },
-    {
-      "columns": [
-        "user_id"
-      ],
-      "nameExplicit": false,
-      "name": "two_factor_user_id_unique",
-      "entityType": "uniques",
-      "table": "two_factor"
     },
     {
       "columns": [

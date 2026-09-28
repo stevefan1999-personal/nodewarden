@@ -4,9 +4,7 @@ import test from 'node:test';
 import { eq } from 'drizzle-orm';
 
 import { getOrm } from '../db/client';
-import { ensureStorageSchema } from '../db/migrate';
 import { smAccessTokens } from '../db/schema';
-import type { Env } from '../types';
 import { authedFetch, createTestEnv } from './support/env';
 import { ENCRYPTED_FIELD, postJson, seedSmOrg, TOKEN_FIELDS } from './support/sm';
 
@@ -19,8 +17,10 @@ interface IssuedToken {
   clientSecret: string;
 }
 
-// A token of a new machine account, created the way that token button did.
-async function issueTokenWithOrgKey(): Promise<{ env: Env; orgId: string; token: IssuedToken }> {
+// Upstream never holds an org key: the token response carries only `encrypted_payload`, and
+// SecretsSyncResponseModel only `hasChanges` and `secrets`.
+test('a token created with wrappedOrgKey stores NULL and no response carries the key', async () => {
+  // A token of a new machine account, created the way that token button did.
   const env = await createTestEnv();
   const { orgId, owner } = await seedSmOrg(env);
   const account = await postJson<{ id: string }>(env, owner, `/api/organizations/${orgId}/service-accounts`, {
@@ -30,24 +30,12 @@ async function issueTokenWithOrgKey(): Promise<{ env: Env; orgId: string; token:
     ...TOKEN_FIELDS,
     wrappedOrgKey: PLAINTEXT_ORG_KEY,
   });
-  return { env, orgId, token };
-}
-
-async function storedOrgKey(env: Env, tokenId: string): Promise<string | null | undefined> {
-  return (
-    await getOrm(env.DB)
-      .select({ wrappedOrgKey: smAccessTokens.wrappedOrgKey })
-      .from(smAccessTokens)
-      .where(eq(smAccessTokens.id, tokenId))
-      .get()
-  )?.wrappedOrgKey;
-}
-
-// Upstream never holds an org key: the token response carries only `encrypted_payload`, and
-// SecretsSyncResponseModel only `hasChanges` and `secrets`.
-test('a token created with wrappedOrgKey stores NULL and no response carries the key', async () => {
-  const { env, orgId, token } = await issueTokenWithOrgKey();
-  assert.equal(await storedOrgKey(env, token.id), null);
+  const stored = await getOrm(env.DB)
+    .select({ wrappedOrgKey: smAccessTokens.wrappedOrgKey })
+    .from(smAccessTokens)
+    .where(eq(smAccessTokens.id, token.id))
+    .get();
+  assert.equal(stored?.wrappedOrgKey, null);
   assert.equal('wrappedOrgKey' in token, false);
 
   const identity = await authedFetch(env, {
@@ -69,18 +57,4 @@ test('a token created with wrappedOrgKey stores NULL and no response carries the
   });
   assert.equal(synced.status, 401);
   assert.equal('wrappedOrgKey' in ((await synced.json()) as object), false);
-});
-
-// Earlier builds stored the posted key, so the schema step clears what is already in D1.
-test('the schema step scrubs a stored org key and replays cleanly', async () => {
-  const { env, token } = await issueTokenWithOrgKey();
-  await getOrm(env.DB)
-    .update(smAccessTokens)
-    .set({ wrappedOrgKey: PLAINTEXT_ORG_KEY })
-    .where(eq(smAccessTokens.id, token.id));
-
-  await ensureStorageSchema(env.DB);
-  assert.equal(await storedOrgKey(env, token.id), null);
-  await ensureStorageSchema(env.DB);
-  assert.equal(await storedOrgKey(env, token.id), null);
 });

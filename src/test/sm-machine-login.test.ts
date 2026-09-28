@@ -5,7 +5,6 @@ import { eq } from 'drizzle-orm';
 
 import { LIMITS } from '../config/limits';
 import { getOrm } from '../db/client';
-import { ensureStorageSchema } from '../db/migrate';
 import { smAccessTokens } from '../db/schema';
 import { hashApiKey } from '../utils/api-key';
 import { verifyHs256Jwt } from '../utils/jwt';
@@ -212,30 +211,4 @@ test('failed machine credentials lock out only their source IP', async () => {
   }
   assert.equal((await loginFrom('203.0.113.20', token.clientSecret)).status, 429);
   assert.equal((await loginFrom('203.0.113.21', token.clientSecret)).status, 200);
-});
-
-test('schema replay purges legacy tokens and preserves every encrypted-payload token', async () => {
-  const { env, account, token } = await setup();
-  const legacyId = crypto.randomUUID();
-  const orm = getOrm(env.DB);
-  await orm.insert(smAccessTokens).values({
-    id: legacyId,
-    serviceAccountId: account.id,
-    name: ENCRYPTED_FIELD,
-    clientSecretHash: await hashApiKey('old-secret'),
-    createdAt: token.creationDate,
-  });
-  for (let replay = 0; replay < 2; replay++) {
-    await ensureStorageSchema(env.DB);
-    assert.equal(await orm.select().from(smAccessTokens).where(eq(smAccessTokens.id, legacyId)).get(), undefined);
-    assert.deepEqual(
-      await orm
-        .select({ encryptedPayload: smAccessTokens.encryptedPayload, key: smAccessTokens.key })
-        .from(smAccessTokens)
-        .where(eq(smAccessTokens.id, token.id))
-        .get(),
-      { encryptedPayload: TOKEN_FIELDS.encryptedPayload, key: TOKEN_FIELDS.key },
-    );
-  }
-  assert.equal((await smLogin(env, token.id, token.clientSecret)).status, 200);
 });

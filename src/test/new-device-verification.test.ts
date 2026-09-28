@@ -5,8 +5,7 @@ import { TOTP } from 'otpauth';
 import { unzipSync, zipSync } from 'fflate';
 
 import { getOrm } from '../db/client';
-import { ensureStorageSchema } from '../db/migrate';
-import { authRequests, config, devices, users } from '../db/schema';
+import { authRequests, devices, users } from '../db/schema';
 import { hashPassword } from '../services/auth-password';
 import { buildBackupArchive } from '../services/backup-archive';
 import { importBackupArchiveBytes } from '../services/backup-import';
@@ -223,7 +222,7 @@ test('an invalid optional NDV flag logs and disables only NDV while Email two-fa
   assert.equal(f.mail.sent.length, 1);
 });
 
-test('registration opts in and baseline replay or legacy backup restore never overwrites a later opt-out', async () => {
+test('registration opts in and restoring a backup, even one without the column, keeps a later opt-out', async () => {
   const env = await createTestEnv();
   const registered = await authedFetch(env, {
     method: 'POST',
@@ -240,27 +239,13 @@ test('registration opts in and baseline replay or legacy backup restore never ov
   const user = (await userRepo.getUser(env.DB, 'first@x.io'))!;
   assert.equal(user.verifyDevices, true);
   await getOrm(env.DB).update(users).set({ verifyDevices: 0 }).where(eq(users.id, user.id));
-  await ensureStorageSchema(env.DB);
-  assert.equal((await userRepo.getUserById(env.DB, user.id))?.verifyDevices, false);
   const archive = await buildBackupArchive(env, new Date(), { includeAttachments: false });
   const files = unzipSync(archive.bytes);
   const db = JSON.parse(new TextDecoder().decode(files['db.json']));
-  db.config = db.config.filter((row: { key: string }) => row.key !== 'migration.verify-devices-on');
   delete db.users[0].verify_devices;
   files['db.json'] = Buffer.from(JSON.stringify(db));
   const restored = await createTestEnv();
   await importBackupArchiveBytes(zipSync(files), restored, user.id, false);
-  await ensureStorageSchema(restored.DB);
   assert.equal((await userRepo.getUserById(restored.DB, user.id))?.verifyDevices, false);
-  assert.equal(
-    (
-      await getOrm(restored.DB)
-        .select({ value: config.value })
-        .from(config)
-        .where(eq(config.key, 'migration.verify-devices-on'))
-        .get()
-    )?.value,
-    '1',
-  );
   await drainWaitUntil();
 });

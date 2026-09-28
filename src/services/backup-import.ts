@@ -243,8 +243,6 @@ export async function importBackupArchiveBytes(
       configRows = upsertConfigRow(configRows, BACKUP_SETTINGS_CONFIG_KEY, normalizedBackupSettings);
     }
     configRows = upsertConfigRow(configRows, 'registered', 'true');
-    // Imported preferences must survive a later baseline replay, including archives without this marker.
-    configRows = upsertConfigRow(configRows, 'migration.verify-devices-on', '1');
     const db: BackupPayload['db'] = {
       ...prepared.payload.db,
       config: configRows,

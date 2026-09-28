@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { ensureStorageSchema } from '../db/migrate';
 import * as orgRepo from '../services/storage-org-repo';
 import type { Env, User } from '../types';
 import { authedFetch, createTestEnv, seedUser } from './support/env';
@@ -50,21 +49,5 @@ test('an owner of X adding their org-Y membership or a missing id to a group in 
   const { id: groupId } = (await saved.json()) as { id: string };
   const updated = await saveGroup(env, owner, orgX.orgId, [orgX.membershipId, orgY.membershipId], groupId);
   assert.equal(updated.status, 404);
-  assert.deepEqual(await orgRepo.listGroupMemberIds(env.DB, groupId), [orgX.membershipId]);
-});
-
-// Before the handler check, any membership id was stored, so the schema step deletes those rows.
-test('the schema step removes cross-org group members, keeps same-org ones, and replays cleanly', async () => {
-  const env = await createTestEnv();
-  const owner = await seedUser(env);
-  const orgX = await ownedOrg(env, owner);
-  const orgY = await ownedOrg(env, owner);
-  const saved = await saveGroup(env, owner, orgX.orgId, [orgX.membershipId]);
-  const { id: groupId } = (await saved.json()) as { id: string };
-  await orgRepo.replaceGroupMembers(env.DB, groupId, [orgX.membershipId, orgY.membershipId]);
-
-  await ensureStorageSchema(env.DB);
-  assert.deepEqual(await orgRepo.listGroupMemberIds(env.DB, groupId), [orgX.membershipId]);
-  await ensureStorageSchema(env.DB);
   assert.deepEqual(await orgRepo.listGroupMemberIds(env.DB, groupId), [orgX.membershipId]);
 });

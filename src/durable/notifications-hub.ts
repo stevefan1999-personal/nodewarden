@@ -1,3 +1,4 @@
+import { encode } from '@msgpack/msgpack';
 import { z } from 'zod';
 import { DurableObject, waitUntil } from 'cloudflare:workers';
 import type { Env } from '../types';
@@ -44,82 +45,6 @@ interface WebSocketConnectionToken {
   expiresAt: number;
 }
 
-function concatBytes(chunks: Uint8Array[]): Uint8Array {
-  const total = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
-  const out = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    out.set(chunk, offset);
-    offset += chunk.length;
-  }
-  return out;
-}
-
-function encodeMsgPackString(value: string): Uint8Array {
-  const bytes = new TextEncoder().encode(value);
-  const len = bytes.length;
-  if (len < 32) {
-    return concatBytes([new Uint8Array([0xa0 | len]), bytes]);
-  }
-  if (len <= 0xff) {
-    return concatBytes([new Uint8Array([0xd9, len]), bytes]);
-  }
-  return concatBytes([new Uint8Array([0xda, (len >> 8) & 0xff, len & 0xff]), bytes]);
-}
-
-function encodeMsgPack(value: unknown): Uint8Array {
-  if (value === null || value === undefined) return new Uint8Array([0xc0]);
-  if (value instanceof Date) {
-    // MessagePack timestamp extension (type -1): nanoseconds in the high 30 bits, seconds in the low 34.
-    const seconds = BigInt(Math.floor(value.getTime() / 1000));
-    const nanos = BigInt(value.getMilliseconds()) * 1000000n;
-    const timestamp = (nanos << 34n) | seconds;
-    const payload = new Uint8Array(8);
-    for (let i = 7; i >= 0; i--) {
-      payload[i] = Number((timestamp >> BigInt((7 - i) * 8)) & 0xffn);
-    }
-    return concatBytes([new Uint8Array([0xc7, 0x08, 0xff]), payload]);
-  }
-  if (typeof value === 'string') return encodeMsgPackString(value);
-  if (typeof value === 'number') {
-    const normalized = Math.trunc(value);
-    if (normalized >= 0 && normalized <= 0x7f) {
-      return new Uint8Array([normalized]);
-    }
-    if (normalized >= 0 && normalized <= 0xff) {
-      return new Uint8Array([0xcc, normalized]);
-    }
-    if (normalized >= 0 && normalized <= 0xffff) {
-      return new Uint8Array([0xcd, normalized >> 8, normalized & 0xff]);
-    }
-    const safe = normalized >>> 0;
-    return new Uint8Array([0xce, (safe >>> 24) & 0xff, (safe >>> 16) & 0xff, (safe >>> 8) & 0xff, safe & 0xff]);
-  }
-  if (typeof value === 'boolean') return new Uint8Array([value ? 0xc3 : 0xc2]);
-  if (Array.isArray(value)) {
-    const items = value.map(encodeMsgPack);
-    const len = items.length;
-    const header = len < 16 ? new Uint8Array([0x90 | len]) : new Uint8Array([0xdc, (len >> 8) & 0xff, len & 0xff]);
-    return concatBytes([header, ...items]);
-  }
-  if (value instanceof Uint8Array) {
-    const len = value.length;
-    if (len <= 0xff) return concatBytes([new Uint8Array([0xc4, len]), value]);
-    return concatBytes([new Uint8Array([0xc5, (len >> 8) & 0xff, len & 0xff]), value]);
-  }
-  // Any other value encodes as a map of its own enumerable entries.
-  const entries = Object.entries(value as Record<string, unknown>);
-  const chunks: Uint8Array[] = [
-    entries.length < 16
-      ? new Uint8Array([0x80 | entries.length])
-      : new Uint8Array([0xde, (entries.length >> 8) & 0xff, entries.length & 0xff]),
-  ];
-  for (const [key, entryValue] of entries) {
-    chunks.push(encodeMsgPackString(key), encodeMsgPack(entryValue));
-  }
-  return concatBytes(chunks);
-}
-
 function buildSignalRJsonInvocation(
   updateType: number,
   payload: Record<string, unknown>,
@@ -141,7 +66,7 @@ function buildSignalRJsonInvocation(
   );
 }
 
-function buildSignalRMessagePackInvocation(
+export function buildSignalRMessagePackInvocation(
   updateType: number,
   messagePayload: Record<string, unknown>,
   contextId: string | null,
@@ -149,7 +74,7 @@ function buildSignalRMessagePackInvocation(
 ): Uint8Array {
   // SignalR MessagePack hub protocol uses an array-based invocation shape:
   // [type, headers, invocationId, target, arguments, streamIds]
-  const encodedPayload = encodeMsgPack([
+  const encodedPayload = encode([
     1,
     {},
     null,
@@ -172,7 +97,10 @@ function buildSignalRMessagePackInvocation(
     if (value > 0) current |= 0x80;
     prefix.push(current);
   } while (value > 0);
-  return concatBytes([new Uint8Array(prefix), encodedPayload]);
+  const frame = new Uint8Array(prefix.length + encodedPayload.length);
+  frame.set(prefix);
+  frame.set(encodedPayload, prefix.length);
+  return frame;
 }
 
 export class NotificationsHub extends DurableObject<Env> {

@@ -7,16 +7,46 @@ import { getTableConfig, type SQLiteColumn } from 'drizzle-orm/sqlite-core';
 import { getOrm } from '../db/client';
 import {
   attachments,
+  cipherCollections,
   ciphers,
+  collectionGroups,
+  collectionUsers,
+  collections,
   config,
   domainSettings,
+  emergencyAccess,
+  events,
   folders,
+  invites,
+  orgGroupMembers,
+  orgGroups,
+  orgPolicies,
+  organizationApiKeys,
+  organizationMemberships,
+  organizationScimTokens,
+  organizations,
+  pendingCollectionUsers,
+  sends,
+  smAccessTokens,
+  smProjectGroups,
+  smProjectMembers,
+  smProjects,
+  smSecretGroups,
+  smSecretMembers,
+  smSecretProjects,
+  smSecretServiceAccounts,
+  smSecrets,
+  smServiceAccountGroups,
+  smServiceAccountMembers,
+  smServiceAccountProjects,
+  smServiceAccounts,
+  ssoUsers,
   userRevisions,
   users,
   webauthnCredentials,
 } from '../db/schema';
 import { unmapped } from '../db/sql';
-import type { Env } from '../types';
+import { SendType, type Env } from '../types';
 import { APP_VERSION } from '../../shared/app-version';
 import { BACKUP_SETTINGS_CONFIG_KEY } from './backup-config';
 import { YUBICO_BOOTSTRAP_CLAIM_CONFIG_KEY } from './yubico-config';
@@ -39,7 +69,8 @@ import { getAttachmentObjectKey, getBlobStorageKind } from './blob-store';
 //   envelope must not leave the instance.
 type SqlRow = Record<string, string | number | null>;
 
-const BACKUP_FORMAT_VERSION = 1;
+// Format 2 added organizations, Sends, Secrets Manager, emergency access and event history.
+const BACKUP_FORMAT_VERSION = 2;
 const BACKUP_RUNNER_LOCK_CONFIG_KEY = 'backup.runner.lock.v1';
 const BACKUP_FILE_HASH_PREFIX_LENGTH = 5;
 // Worker-side backup export must stay well below Cloudflare CPU limits.
@@ -53,7 +84,7 @@ const MAX_BACKUP_DB_JSON_BYTES = 32 * 1024 * 1024;
 const MAX_BACKUP_PATH_SEGMENT_LENGTH = 128;
 
 export interface BackupManifest {
-  formatVersion: 1;
+  formatVersion: typeof BACKUP_FORMAT_VERSION;
   exportedAt: string;
   appVersion: string;
   storageKind: 'r2' | 'kv' | null;
@@ -81,9 +112,14 @@ const sqlRows = z.array(z.record(z.string(), z.union([z.string(), z.number(), z.
 const optionalSqlRows = sqlRows.nullish().transform((rows) => rows ?? []);
 
 // The tables an instance backup carries, in restore order: each follows the tables its rows reference.
+// Everything else stays with the instance: runtime authentication state (sessions, devices, auth requests,
+// remembered two-step devices, one-time tokens and challenges, rate limits), Better Auth's copy of the
+// master password hash, which the next password change rebuilds, and the administrator audit log, which a
+// restore must not rewrite. backup-archive.test.ts fails until a new schema table is on one side.
 // An archived row holds every column of its table except `omit`: the personal API key and the runtime user
 // key id never leave an instance, nor does Better Auth's profile image, which Bitwarden clients never set.
-// Every archive carries the `required` tables.
+// Stored credentials (organization API keys, SCIM tokens, machine access tokens) are hashes, so they travel.
+// Every archive carries the `required` tables; older ones lack the rest.
 export const BACKUP_TABLES = {
   config: { table: config, required: true },
   users: { table: users, required: true, omit: ['api_key', 'user_key_id', 'image'] },
@@ -91,8 +127,38 @@ export const BACKUP_TABLES = {
   user_revisions: { table: userRevisions, required: true },
   webauthn_credentials: { table: webauthnCredentials },
   folders: { table: folders, required: true },
+  invites: { table: invites },
+  sso_users: { table: ssoUsers },
+  emergency_access: { table: emergencyAccess },
+  sends: { table: sends },
+  organizations: { table: organizations },
+  organization_memberships: { table: organizationMemberships },
+  organization_api_keys: { table: organizationApiKeys },
+  organization_scim_tokens: { table: organizationScimTokens },
+  org_policies: { table: orgPolicies },
+  org_groups: { table: orgGroups },
+  org_group_members: { table: orgGroupMembers },
+  collections: { table: collections },
+  collection_users: { table: collectionUsers },
+  pending_collection_users: { table: pendingCollectionUsers },
+  collection_groups: { table: collectionGroups },
   ciphers: { table: ciphers, required: true },
   attachments: { table: attachments, required: true },
+  cipher_collections: { table: cipherCollections },
+  sm_projects: { table: smProjects },
+  sm_secrets: { table: smSecrets },
+  sm_secret_projects: { table: smSecretProjects },
+  sm_service_accounts: { table: smServiceAccounts },
+  sm_service_account_projects: { table: smServiceAccountProjects },
+  sm_access_tokens: { table: smAccessTokens },
+  sm_project_members: { table: smProjectMembers },
+  sm_project_groups: { table: smProjectGroups },
+  sm_secret_members: { table: smSecretMembers },
+  sm_secret_groups: { table: smSecretGroups },
+  sm_secret_service_accounts: { table: smSecretServiceAccounts },
+  sm_service_account_members: { table: smServiceAccountMembers },
+  sm_service_account_groups: { table: smServiceAccountGroups },
+  events: { table: events },
 } as const;
 export type BackupTableName = keyof typeof BACKUP_TABLES;
 export const BACKUP_TABLE_NAMES = Object.keys(BACKUP_TABLES) as BackupTableName[];
@@ -110,7 +176,7 @@ export function backupColumns(name: BackupTableName): Array<[string, SQLiteColum
 const BackupPayloadSchema = z.object({
   manifest: z.looseObject(
     {
-      formatVersion: z.literal(BACKUP_FORMAT_VERSION, { error: 'Unsupported backup format version' }),
+      formatVersion: z.literal([1, BACKUP_FORMAT_VERSION], { error: 'Unsupported backup format version' }),
       attachmentBlobs: z
         .array(BackupManifestAttachmentBlobSchema)
         .nullish()
@@ -515,6 +581,8 @@ export async function buildBackupArchive(
   const exported: Record<BackupTableName, SqlRow[]> = {
     ...rows,
     config: exportedConfigRows,
+    // A file Send is useless without its file, which archives do not carry yet.
+    sends: rows.sends.filter((row) => Number(row.type) !== SendType.File),
     attachments: exportedAttachmentRows,
   };
   const manifestBase = {

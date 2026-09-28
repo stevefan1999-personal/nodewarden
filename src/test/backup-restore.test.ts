@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { eq, getColumns, getTableName } from 'drizzle-orm';
-import type { SQLiteColumn, SQLiteTable } from 'drizzle-orm/sqlite-core';
+import { getTableConfig, type SQLiteColumn, type SQLiteTable } from 'drizzle-orm/sqlite-core';
 import { unzipSync, zipSync } from 'fflate';
 
 import { getOrm } from '../db/client';
@@ -11,13 +11,21 @@ import {
   config,
   domainSettings,
   folders,
+  organizations,
   userRevisions,
   users,
   webauthnCredentials,
 } from '../db/schema';
 import { unmapped } from '../db/sql';
-import { buildBackupArchive } from '../services/backup-archive';
+import {
+  BACKUP_TABLE_NAMES,
+  BACKUP_TABLES,
+  backupColumns,
+  buildBackupArchive,
+  type BackupTableName,
+} from '../services/backup-archive';
 import { importBackupArchiveBytes } from '../services/backup-import';
+import { SendType, type Env } from '../types';
 import { createTestEnv, interceptStatement, memoryKv, seedUser } from './support/env';
 
 type Row = Record<string, unknown>;
@@ -257,4 +265,85 @@ test('backup export reads every table in one snapshot, so a concurrent write can
   });
   const archive = await buildBackupArchive(source, new Date(), { includeAttachments: false });
   await importBackupArchiveBytes(archive.bytes, await createTestEnv(), owner.id, false);
+});
+
+// Columns that point at another table without a foreign key; restore checks that the folder exists.
+const UNLINKED: Partial<Record<BackupTableName, Record<string, BackupTableName>>> = {
+  ciphers: { folder_id: 'folders', organization_id: 'organizations' },
+};
+// Values restore validates or normalizes.
+const VALID: Partial<Record<BackupTableName, Row>> = {
+  webauthn_credentials: { purpose: 'twoFactor' },
+  sends: { type: SendType.Text },
+};
+// Tables whose rows the generic seed leaves out: config goes through its own sanitizer and attachments need
+// their files, so the first test covers those two.
+const SEEDED_TABLES = BACKUP_TABLE_NAMES.filter((name) => name !== 'config' && name !== 'attachments');
+
+// One synthetic row per archived table, in restore order: each column holds its own name and the tag
+// (integers hold 1), and each foreign key the value of the row it references.
+async function seedEveryArchivedTable(env: Env, tag: string): Promise<Map<BackupTableName, Row>> {
+  const seeded = new Map<BackupTableName, Row>();
+  for (const name of SEEDED_TABLES) {
+    const table: SQLiteTable = BACKUP_TABLES[name].table;
+    const { columns, foreignKeys } = getTableConfig(table);
+    const row: Row = Object.fromEntries(
+      columns.map((column) => [column.name, column.getSQLType() === 'integer' ? 1 : `${name}.${column.name}.${tag}`]),
+    );
+    for (const foreignKey of foreignKeys) {
+      const reference = foreignKey.reference();
+      const parent = seeded.get(getTableName(reference.foreignTable) as BackupTableName)!;
+      reference.columns.forEach((column, index) => (row[column.name] = parent[reference.foreignColumns[index].name]));
+    }
+    for (const [column, parent] of Object.entries(UNLINKED[name] ?? {})) row[column] = seeded.get(parent)!.id;
+    Object.assign(row, VALID[name]);
+    seeded.set(name, row);
+    await getOrm(env.DB)
+      .insert(table)
+      .values(Object.fromEntries(Object.entries(getColumns(table)).map(([key, column]) => [key, row[column.name]])));
+  }
+  return seeded;
+}
+
+// Every archived table's rows as the archive holds them.
+const archivedTables = (db: D1Database) =>
+  Promise.all(
+    SEEDED_TABLES.map(async (name) => [
+      name,
+      await getOrm(db)
+        .select(Object.fromEntries(backupColumns(name).map(([, column]) => [column.name, unmapped(column)])))
+        .from(BACKUP_TABLES[name].table),
+    ]),
+  );
+
+test('backup restore brings back every row of every archived table', async () => {
+  const source = await createTestEnv();
+  const seeded = await seedEveryArchivedTable(source, 'source');
+  const restored = await createTestEnv();
+  const archive = await buildBackupArchive(source, new Date(), { includeAttachments: true });
+  await importBackupArchiveBytes(archive.bytes, restored, String(seeded.get('users')!.id), false);
+  assert.deepEqual(await archivedTables(restored.DB), await archivedTables(source.DB));
+});
+
+test('a replacing restore swaps every archived table of a populated instance for the archive', async () => {
+  const source = await createTestEnv();
+  const seeded = await seedEveryArchivedTable(source, 'source');
+  const target = await createTestEnv();
+  await seedEveryArchivedTable(target, 'target');
+  const archive = await buildBackupArchive(source, new Date(), { includeAttachments: true });
+  await importBackupArchiveBytes(archive.bytes, target, String(seeded.get('users')!.id), true);
+  assert.deepEqual(await archivedTables(target.DB), await archivedTables(source.DB));
+});
+
+test('backup restore without replace refuses an instance that already has an organization', async () => {
+  const source = await createTestEnv();
+  const owner = await seedUser(source);
+  const archive = await buildBackupArchive(source, new Date(), { includeAttachments: false });
+  const target = await createTestEnv();
+  await getOrm(target.DB)
+    .insert(organizations)
+    .values({ id: 'org', name: 'enc', billingEmail: 'owner@example.test', createdAt: 'c', updatedAt: 'u' });
+  await assert.rejects(importBackupArchiveBytes(archive.bytes, target, owner.id, false), {
+    message: 'Backup import requires a fresh instance with no vault or send data',
+  });
 });

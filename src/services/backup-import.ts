@@ -4,7 +4,7 @@ import type { SQLiteTable } from 'drizzle-orm/sqlite-core';
 
 import { chunkRows, columnCount, getOrm } from '../db/client';
 import { sqliteMaster } from '../db/migrate';
-import { attachments, ciphers, folders, sends } from '../db/schema';
+import { attachments, ciphers, folders, organizations, sends } from '../db/schema';
 import type { Env, User } from '../types';
 import {
   KV_MAX_OBJECT_BYTES,
@@ -362,6 +362,7 @@ export async function importBackupArchiveBytes(
       orm.select({ count: count() }).from(folders),
       orm.select({ count: count() }).from(attachments),
       orm.select({ count: count() }).from(sends),
+      orm.select({ count: count() }).from(organizations),
     ]);
     const total = counts.reduce((sum, rows) => sum + Number(rows[0]?.count || 0), 0);
     if (total > 0) {

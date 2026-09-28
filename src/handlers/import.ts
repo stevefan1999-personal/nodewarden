@@ -20,8 +20,8 @@ import {
   normalizeCipherSshKeyForCompatibility,
   validateCipherEncryptedFieldsForCompatibility,
 } from './ciphers';
-import * as folderRepo from '../services/storage-folder-repo';
-import * as revisionRepo from '../services/storage-revision-repo';
+import { folderRepo } from '../services/storage-folder-repo';
+import { revisionRepo } from '../services/storage-revision-repo';
 
 const orNull = <T extends z.ZodType>(schema: T) => schema.nullish().transform((value) => value ?? null);
 const list = <T extends z.ZodType>(item: T) =>
@@ -189,7 +189,7 @@ export async function handleCiphersImport(request: Request, env: Env, userId: st
       cipherFolderMap.set(rel.key, folderId);
     }
   }
-  const existingFolderIds = new Set((await folderRepo.getAllFolders(env.DB, userId)).map((folder) => folder.id));
+  const existingFolderIds = new Set((await folderRepo(env.DB).getAllFolders(userId)).map((folder) => folder.id));
 
   // Create ciphers
   const cipherRows: Cipher[] = [];
@@ -262,7 +262,7 @@ export async function handleCiphersImport(request: Request, env: Env, userId: st
   }
 
   // Update revision date
-  const revisionDate = await revisionRepo.updateRevisionDate(env.DB, userId);
+  const revisionDate = await revisionRepo(env.DB).updateRevisionDate(userId);
   notifyUserVaultSync(env, userId, revisionDate, readActingDeviceIdentifier(request));
 
   if (returnCipherMap) {

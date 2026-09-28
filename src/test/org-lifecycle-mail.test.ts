@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { MembershipStatus } from '../services/org-types';
-import * as orgRepo from '../services/storage-org-repo';
+import { orgRepo } from '../services/storage-org-repo';
 import type { Env, User } from '../types';
 import { createOrgInviteToken } from '../utils/jwt';
 import {
@@ -107,7 +107,7 @@ test('organization notices failing delivery leave acceptance and confirmation su
   f.env.EMAIL = failingEmail('E_RECIPIENT_SUPPRESSED');
   const token = await createOrgInviteToken(f.env.JWT_SECRET, invited.memberId, invited.user.email);
   assert.equal((await post(f.env, invited.user, f.org.id, `${invited.memberId}/accept`, { token })).status, 200);
-  assert.equal((await orgRepo.getMembership(f.env.DB, invited.memberId))?.status, 1);
+  assert.equal((await orgRepo(f.env.DB).getMembership(invited.memberId))?.status, 1);
   assert.equal((await post(f.env, f.owner, f.org.id, `${invited.memberId}/confirm`, { key: KEY })).status, 200);
-  assert.equal((await orgRepo.getMembership(f.env.DB, invited.memberId))?.status, 2);
+  assert.equal((await orgRepo(f.env.DB).getMembership(invited.memberId))?.status, 2);
 });

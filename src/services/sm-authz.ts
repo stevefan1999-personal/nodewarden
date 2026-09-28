@@ -2,7 +2,7 @@ import type { Principal } from './auth';
 import { isUUID } from '../utils/uuid';
 import { canAccessSecretsManager } from './org-authz';
 import { MembershipType } from './org-types';
-import { getMembershipByUserAndOrg } from './storage-org-repo';
+import { orgRepo } from './storage-org-repo';
 
 export type SmActor =
   { kind: 'admin' | 'user'; membershipId: string } | { kind: 'serviceAccount'; serviceAccountId: string };
@@ -39,7 +39,7 @@ export function projectAccess(actor: SmActor, grants: SmGrants, id: string): SmA
 export async function resolveSmActor(db: D1Database, principal: Principal, orgId: string): Promise<SmActor | null> {
   if (principal.kind === 'serviceAccount')
     return principal.orgId === orgId ? { kind: 'serviceAccount', serviceAccountId: principal.serviceAccountId } : null;
-  const member = await getMembershipByUserAndOrg(db, principal.user.id, orgId);
+  const member = await orgRepo(db).getMembershipByUserAndOrg(principal.user.id, orgId);
   if (!canAccessSecretsManager(member)) return null;
   return { kind: member.type <= MembershipType.Admin ? 'admin' : 'user', membershipId: member.id };
 }

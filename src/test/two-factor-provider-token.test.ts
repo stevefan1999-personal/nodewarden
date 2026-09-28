@@ -8,8 +8,8 @@ import type { Env, User } from '../types';
 import { sha256Base64Url } from '../utils/account-passkeys';
 import { signHs256Jwt, verifyHs256Jwt } from '../utils/jwt';
 import { authedFetch, createTestEnv, interceptStatement, seedUser } from './support/env';
-import * as passkeyRepo from '../services/storage-account-passkey-repo';
-import * as userRepo from '../services/storage-user-repo';
+import { passkeyRepo } from '../services/storage-account-passkey-repo';
+import { userRepo } from '../services/storage-user-repo';
 
 const PASSWORD = 'client-master-password-hash';
 const TOTP = 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ';
@@ -46,7 +46,7 @@ test('official authenticator DELETE verifies its key-bound token and clears the 
   const disabled = await request(TOTP);
   assert.equal(disabled.status, 204);
   assert.equal(await disabled.text(), '');
-  const updated = (await userRepo.getUserById(env.DB, user.id))!;
+  const updated = (await userRepo(env.DB).getUserById(user.id))!;
   assert.equal(updated.totpSecret, null);
   assert.equal(updated.yubikeyKey1, PUBLIC_ID);
   const token = new OTPAuth.TOTP({ secret: TOTP }).generate();
@@ -84,7 +84,7 @@ test('official YubiKey token-only enable/disable keeps TOTP; legacy password dis
     body: { userVerificationToken: token, type: 0 },
   });
   assert.equal(disabled.status, 204);
-  const updated = (await userRepo.getUserById(env.DB, user.id))!;
+  const updated = (await userRepo(env.DB).getUserById(user.id))!;
   assert.equal(updated.yubikeyKey1, null);
   assert.equal(updated.totpSecret, TOTP);
   assert.equal(updated.securityStamp, user.securityStamp);
@@ -95,7 +95,7 @@ test('official YubiKey token-only enable/disable keeps TOTP; legacy password dis
     body: { type: 0, secret: PASSWORD },
   });
   assert.equal(legacy.status, 200);
-  assert.equal((await userRepo.getUserById(env.DB, user.id))!.totpSecret, null);
+  assert.equal((await userRepo(env.DB).getUserById(user.id))!.totpSecret, null);
 });
 
 test('provider tokens are scoped to a user, provider, current stamp and finite 30-minute expiry', async () => {
@@ -169,13 +169,13 @@ test('provider tokens are scoped to a user, provider, current stamp and finite 3
     body: { userVerificationToken: yubikey.UserVerificationToken },
   });
   assert.equal(stale.status, 400);
-  assert.equal((await userRepo.getUserById(env.DB, user.id))!.yubikeyKey1, PUBLIC_ID);
+  assert.equal((await userRepo(env.DB).getUserById(user.id))!.yubikeyKey1, PUBLIC_ID);
 });
 
 test('disabling WebAuthn fails and keeps the two-step key once the security stamp rotates before the delete runs', async () => {
   const env = await createTestEnv();
   const user = await seedUser(env, { masterPasswordHash: await hashPassword(PASSWORD) });
-  await passkeyRepo.saveAccountPasskeyCredential(env.DB, {
+  await passkeyRepo(env.DB).saveAccountPasskeyCredential({
     id: 'two-step-key',
     userId: user.id,
     purpose: 'twoFactor',
@@ -195,8 +195,7 @@ test('disabling WebAuthn fails and keeps the two-step key once the security stam
   });
   let rotated = false;
   interceptStatement(env, /^delete from "webauthn_credentials"/, async () => {
-    rotated = await userRepo.saveUser(
-      env.DB,
+    rotated = await userRepo(env.DB).saveUser(
       { ...user, securityStamp: crypto.randomUUID() },
       ['securityStamp'],
       user.securityStamp,
@@ -211,5 +210,5 @@ test('disabling WebAuthn fails and keeps the two-step key once the security stam
   assert.equal(rotated, true);
   assert.equal(response.status, 400);
   assert.match(await response.text(), /User verification failed\./);
-  assert.equal(await passkeyRepo.countAccountPasskeyCredentialsByUserId(env.DB, user.id, 'twoFactor'), 1);
+  assert.equal(await passkeyRepo(env.DB).countAccountPasskeyCredentialsByUserId(user.id, 'twoFactor'), 1);
 });

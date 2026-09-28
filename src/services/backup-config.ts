@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 import { jsonText } from './org-types';
-import * as configRepo from './storage-config-repo';
+import { configRepo } from './storage-config-repo';
 
 // The instance's one backup schedule travels in its archives; the status of its runs stays with the instance.
 export const BACKUP_SCHEDULE_CONFIG_KEY = 'backup.schedule';
@@ -83,23 +83,23 @@ export async function loadBackupSchedule(db: D1Database): Promise<BackupSchedule
   return jsonText
     .pipe(BackupScheduleSchema)
     .catch(DEFAULT_BACKUP_SCHEDULE)
-    .parse((await configRepo.getConfigValue(db, BACKUP_SCHEDULE_CONFIG_KEY)) ?? '');
+    .parse((await configRepo(db).getConfigValue(BACKUP_SCHEDULE_CONFIG_KEY)) ?? '');
 }
 
 export async function saveBackupSchedule(db: D1Database, schedule: BackupSchedule): Promise<void> {
-  await configRepo.setConfigValue(db, BACKUP_SCHEDULE_CONFIG_KEY, JSON.stringify(schedule));
+  await configRepo(db).setConfigValue(BACKUP_SCHEDULE_CONFIG_KEY, JSON.stringify(schedule));
 }
 
 export async function loadBackupStatus(db: D1Database): Promise<BackupStatus> {
   return jsonText
     .pipe(BackupStatusSchema)
     .catch(EMPTY_BACKUP_STATUS)
-    .parse((await configRepo.getConfigValue(db, BACKUP_STATUS_CONFIG_KEY)) ?? '');
+    .parse((await configRepo(db).getConfigValue(BACKUP_STATUS_CONFIG_KEY)) ?? '');
 }
 
 export async function updateBackupStatus(db: D1Database, change: Partial<BackupStatus>): Promise<BackupStatus> {
   const next = { ...(await loadBackupStatus(db)), ...change };
-  await configRepo.setConfigValue(db, BACKUP_STATUS_CONFIG_KEY, JSON.stringify(next));
+  await configRepo(db).setConfigValue(BACKUP_STATUS_CONFIG_KEY, JSON.stringify(next));
   return next;
 }
 

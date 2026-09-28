@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import * as orgRepo from '../services/storage-org-repo';
+import { orgRepo } from '../services/storage-org-repo';
 import type { Env, User } from '../types';
 import { authedFetch, createTestEnv, seedUser } from './support/env';
 
@@ -15,7 +15,7 @@ const RESOURCE_NOT_FOUND = 'Resource not found.';
 // An org `owner` creates, with the owner's own membership id in it.
 async function ownedOrg(env: Env, owner: User): Promise<{ orgId: string; membershipId: string }> {
   const { id: orgId } = await createOwnedOrganization(env.DB, owner, { name: 'Acme', key: TEST_ORG_KEY });
-  const membership = await orgRepo.getMembershipByUserAndOrg(env.DB, owner.id, orgId);
+  const membership = await orgRepo(env.DB).getMembershipByUserAndOrg(owner.id, orgId);
   assert.ok(membership);
   return { orgId, membershipId: membership.id };
 }
@@ -38,16 +38,16 @@ test('an owner of X adding their org-Y membership or a missing id to a group in 
   const created = await saveGroup(env, owner, orgX.orgId, [orgY.membershipId]);
   assert.equal(created.status, 404);
   assert.equal(((await created.json()) as { message: string }).message, RESOURCE_NOT_FOUND);
-  assert.deepEqual(await orgRepo.listGroupsByOrg(env.DB, orgX.orgId), []);
+  assert.deepEqual(await orgRepo(env.DB).listGroupsByOrg(orgX.orgId), []);
   const missing = await saveGroup(env, owner, orgX.orgId, [crypto.randomUUID()]);
   assert.equal(missing.status, 404);
   assert.equal(((await missing.json()) as { message: string }).message, RESOURCE_NOT_FOUND);
-  assert.deepEqual(await orgRepo.listGroupsByOrg(env.DB, orgX.orgId), []);
+  assert.deepEqual(await orgRepo(env.DB).listGroupsByOrg(orgX.orgId), []);
 
   const saved = await saveGroup(env, owner, orgX.orgId, [orgX.membershipId]);
   assert.equal(saved.status, 200);
   const { id: groupId } = (await saved.json()) as { id: string };
   const updated = await saveGroup(env, owner, orgX.orgId, [orgX.membershipId, orgY.membershipId], groupId);
   assert.equal(updated.status, 404);
-  assert.deepEqual(await orgRepo.listGroupMemberIds(env.DB, groupId), [orgX.membershipId]);
+  assert.deepEqual(await orgRepo(env.DB).listGroupMemberIds(groupId), [orgX.membershipId]);
 });

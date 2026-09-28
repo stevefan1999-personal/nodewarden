@@ -3,16 +3,16 @@ import type { Env, ProfileOrganizationResponse, ProfileResponse, User } from '..
 import { buildAccountKeys } from './user-decryption';
 import { twoFactorProviders } from '../services/two-factor-providers';
 import { isYubiKeyEnabled } from './yubico-otp';
-import * as orgRepo from '../services/storage-org-repo';
+import { orgRepo } from '../services/storage-org-repo';
 import { MembershipStatus } from '../services/org-types';
 import { isSsoEnabled } from '../handlers/sso';
 import { profileOrganizationResponse } from './org-response';
-import * as passkeyRepo from '../services/storage-account-passkey-repo';
+import { passkeyRepo } from '../services/storage-account-passkey-repo';
 
 export async function buildProfileResponse(user: User, env?: Env): Promise<ProfileResponse> {
   const organizations: ProfileOrganizationResponse[] = [];
   if (env?.DB) {
-    const memberships = await orgRepo.listMembershipsByUser(env.DB, user.id);
+    const memberships = await orgRepo(env.DB).listMembershipsByUser(user.id);
     for (const member of memberships) {
       if (
         member.status !== MembershipStatus.Confirmed &&
@@ -21,7 +21,7 @@ export async function buildProfileResponse(user: User, env?: Env): Promise<Profi
       ) {
         continue;
       }
-      const org = await orgRepo.getOrganization(env.DB, member.orgId);
+      const org = await orgRepo(env.DB).getOrganization(member.orgId);
       if (!org) continue;
       organizations.push(profileOrganizationResponse(org, member, { useSso: isSsoEnabled(env), useScim: true }));
     }
@@ -29,7 +29,7 @@ export async function buildProfileResponse(user: User, env?: Env): Promise<Profi
   const accountKeys = buildAccountKeys(user);
   const mail = env ? readMailConfig(env) : null;
   const hasTwoFactorPasskey = env?.DB
-    ? (await passkeyRepo.countAccountPasskeyCredentialsByUserId(env.DB, user.id, 'twoFactor')) > 0
+    ? (await passkeyRepo(env.DB).countAccountPasskeyCredentialsByUserId(user.id, 'twoFactor')) > 0
     : false;
 
   return {

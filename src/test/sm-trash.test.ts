@@ -5,8 +5,8 @@ import { eq } from 'drizzle-orm';
 
 import { getOrm } from '../db/client';
 import { smSecretMembers, smSecrets, smSecretServiceAccounts, smServiceAccounts } from '../db/schema';
-import * as orgRepo from '../services/storage-org-repo';
-import * as smRepo from '../services/storage-secret-repo';
+import { orgRepo } from '../services/storage-org-repo';
+import { smRepo } from '../services/storage-secret-repo';
 import { abortWrites, authedFetch, createTestEnv } from './support/env';
 import { ENCRYPTED_FIELD, postJson, seedMember, seedSmOrg } from './support/sm';
 
@@ -26,7 +26,7 @@ async function setup() {
 
 test('trash is admin-only, validates the whole org set, restores policies, and empties by cascading grants', async () => {
   const { env, orgId, owner, a, account, request, trashPath } = await setup();
-  const member = (await orgRepo.getMembershipByUserAndOrg(env.DB, a.id, orgId))!;
+  const member = (await orgRepo(env.DB).getMembershipByUserAndOrg(a.id, orgId))!;
   const secret = await postJson<{ id: string }>(env, owner, `/api/organizations/${orgId}/secrets`, {
     ...FIELDS,
     accessPoliciesRequests: {
@@ -69,7 +69,7 @@ test('trash is admin-only, validates the whole org set, restores policies, and e
       [secret.id, crypto.randomUUID()],
     ]) {
       assert.equal((await request(owner.id, `${trashPath}/${action}`, 'POST', ids)).status, 404);
-      assert.ok((await smRepo.getSecret(env.DB, secret.id))!.deletedAt);
+      assert.ok((await smRepo(env.DB).getSecret(secret.id))!.deletedAt);
     }
     assert.equal((await request(owner.id, `${trashPath}/${action}`, 'POST', { ids: [secret.id] })).status, 400);
   }
@@ -84,14 +84,14 @@ test('trash is admin-only, validates the whole org set, restores policies, and e
   assert.ok(
     await orm.select().from(smSecretServiceAccounts).where(eq(smSecretServiceAccounts.secretId, secret.id)).get(),
   );
-  assert.ok((await smRepo.getServiceAccount(env.DB, account.id))!.updatedAt > before);
+  assert.ok((await smRepo(env.DB).getServiceAccount(account.id))!.updatedAt > before);
   assert.deepEqual(((await (await request(owner.id, trashPath)).json()) as any).secrets, []);
   assert.equal((await request(owner.id, '/api/secrets/delete', 'POST', [secret.id])).status, 200);
   await orm.update(smServiceAccounts).set({ updatedAt: before }).where(eq(smServiceAccounts.id, account.id));
   const emptied = await request(owner.id, `${trashPath}/empty`, 'POST', [secret.id]);
   assert.equal(emptied.status, 200);
   assert.equal(await emptied.text(), '');
-  assert.equal(await smRepo.getSecret(env.DB, secret.id), null);
+  assert.equal(await smRepo(env.DB).getSecret(secret.id), null);
   assert.equal(
     await orm.select().from(smSecretMembers).where(eq(smSecretMembers.secretId, secret.id)).get(),
     undefined,
@@ -100,8 +100,8 @@ test('trash is admin-only, validates the whole org set, restores policies, and e
     await orm.select().from(smSecretServiceAccounts).where(eq(smSecretServiceAccounts.secretId, secret.id)).get(),
     undefined,
   );
-  assert.ok((await smRepo.getServiceAccount(env.DB, account.id))!.updatedAt > before);
-  assert.ok(await smRepo.getSecret(env.DB, outside.id));
+  assert.ok((await smRepo(env.DB).getServiceAccount(account.id))!.updatedAt > before);
+  assert.ok(await smRepo(env.DB).getSecret(outside.id));
 });
 
 test('emptying 150 trash rows stays under the D1 cap and rolls back every chunk and revision on failure', async () => {
@@ -123,13 +123,13 @@ test('emptying 150 trash rows stays under the D1 cap and rolls back every chunk 
   );
   assert.equal((await request(owner.id, `${trashPath}/empty`, 'POST', ids)).status, 500);
   assert.equal(await orm.$count(smSecrets, eq(smSecrets.orgId, orgId)), ids.length);
-  assert.equal((await smRepo.getServiceAccount(env.DB, account.id))!.updatedAt, before);
+  assert.equal((await smRepo(env.DB).getServiceAccount(account.id))!.updatedAt, before);
   await removeFault();
   const response = await request(owner.id, `${trashPath}/empty`, 'POST', ids);
   assert.equal(response.status, 200);
   assert.equal(await response.text(), '');
   assert.equal(await orm.$count(smSecrets, eq(smSecrets.orgId, orgId)), 0);
-  assert.ok((await smRepo.getServiceAccount(env.DB, account.id))!.updatedAt > before);
+  assert.ok((await smRepo(env.DB).getServiceAccount(account.id))!.updatedAt > before);
 });
 
 test('scheduled trash purge removes 31-day rows while preserving 29-day trash and live secrets', async () => {
@@ -149,8 +149,8 @@ test('scheduled trash purge removes 31-day rows while preserving 29-day trash an
         deletedAt: age === null ? null : new Date(now - age * day).toISOString(),
       })),
     );
-  await smRepo.purgeSecretsTrash(env.DB, now);
-  assert.equal(await smRepo.getSecret(env.DB, ids[0]), null);
-  assert.ok((await smRepo.getSecret(env.DB, ids[1]))!.deletedAt);
-  assert.equal((await smRepo.getSecret(env.DB, ids[2]))!.deletedAt, null);
+  await smRepo(env.DB).purgeSecretsTrash(now);
+  assert.equal(await smRepo(env.DB).getSecret(ids[0]), null);
+  assert.ok((await smRepo(env.DB).getSecret(ids[1]))!.deletedAt);
+  assert.equal((await smRepo(env.DB).getSecret(ids[2]))!.deletedAt, null);
 });

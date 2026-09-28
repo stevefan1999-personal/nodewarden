@@ -12,8 +12,8 @@ import { generateUUID } from '../utils/uuid';
 import { parsePagination, encodeContinuationToken } from '../utils/pagination';
 import { writeDataAudit } from '../services/audit-events';
 import { nonEmptyIdList } from './ciphers';
-import * as folderRepo from '../services/storage-folder-repo';
-import * as revisionRepo from '../services/storage-revision-repo';
+import { folderRepo } from '../services/storage-folder-repo';
+import { revisionRepo } from '../services/storage-revision-repo';
 
 // Convert internal folder to API response format
 function folderToResponse(folder: Folder): FolderResponse {
@@ -34,12 +34,12 @@ export async function handleGetFolders(request: Request, env: Env, userId: strin
   let folders: Folder[];
   let continuationToken: string | null = null;
   if (pagination) {
-    const pageRows = await folderRepo.getFoldersPage(env.DB, userId, pagination.limit + 1, pagination.offset);
+    const pageRows = await folderRepo(env.DB).getFoldersPage(userId, pagination.limit + 1, pagination.offset);
     const hasNext = pageRows.length > pagination.limit;
     folders = hasNext ? pageRows.slice(0, pagination.limit) : pageRows;
     continuationToken = hasNext ? encodeContinuationToken(pagination.offset + folders.length) : null;
   } else {
-    folders = await folderRepo.getAllFolders(env.DB, userId);
+    folders = await folderRepo(env.DB).getAllFolders(userId);
   }
 
   return jsonResponse({
@@ -51,7 +51,7 @@ export async function handleGetFolders(request: Request, env: Env, userId: strin
 
 // GET /api/folders/:id
 export async function handleGetFolder(request: Request, env: Env, userId: string, id: string): Promise<Response> {
-  const folder = await folderRepo.getFolderForUser(env.DB, id, userId);
+  const folder = await folderRepo(env.DB).getFolderForUser(id, userId);
 
   if (!folder || folder.userId !== userId) {
     return errorResponse('Folder not found', 404);
@@ -79,8 +79,8 @@ export async function handleCreateFolder(request: Request, env: Env, userId: str
     updatedAt: now,
   };
 
-  await folderRepo.saveFolder(env.DB, folder);
-  const revisionDate = await revisionRepo.updateRevisionDate(env.DB, userId);
+  await folderRepo(env.DB).saveFolder(folder);
+  const revisionDate = await revisionRepo(env.DB).updateRevisionDate(userId);
   notifyUserVaultSync(env, userId, revisionDate, readActingDeviceIdentifier(request));
   notifyUserFolderCreate(env, {
     userId,
@@ -94,7 +94,7 @@ export async function handleCreateFolder(request: Request, env: Env, userId: str
 
 // PUT /api/folders/:id
 export async function handleUpdateFolder(request: Request, env: Env, userId: string, id: string): Promise<Response> {
-  const folder = await folderRepo.getFolderForUser(env.DB, id, userId);
+  const folder = await folderRepo(env.DB).getFolderForUser(id, userId);
 
   if (!folder || folder.userId !== userId) {
     return errorResponse('Folder not found', 404);
@@ -108,8 +108,8 @@ export async function handleUpdateFolder(request: Request, env: Env, userId: str
   }
   folder.updatedAt = new Date().toISOString();
 
-  await folderRepo.saveFolder(env.DB, folder);
-  const revisionDate = await revisionRepo.updateRevisionDate(env.DB, userId);
+  await folderRepo(env.DB).saveFolder(folder);
+  const revisionDate = await revisionRepo(env.DB).updateRevisionDate(userId);
   notifyUserVaultSync(env, userId, revisionDate, readActingDeviceIdentifier(request));
   notifyUserFolderUpdate(env, {
     userId,
@@ -123,15 +123,15 @@ export async function handleUpdateFolder(request: Request, env: Env, userId: str
 
 // DELETE /api/folders/:id
 export async function handleDeleteFolder(request: Request, env: Env, userId: string, id: string): Promise<Response> {
-  const folder = await folderRepo.getFolderForUser(env.DB, id, userId);
+  const folder = await folderRepo(env.DB).getFolderForUser(id, userId);
 
   if (!folder || folder.userId !== userId) {
     return errorResponse('Folder not found', 404);
   }
 
-  await folderRepo.clearFolderFromCiphers(env.DB, userId, id);
-  await folderRepo.deleteFolder(env.DB, id, userId);
-  const revisionDate = await revisionRepo.updateRevisionDate(env.DB, userId);
+  await folderRepo(env.DB).clearFolderFromCiphers(userId, id);
+  await folderRepo(env.DB).deleteFolder(id, userId);
+  const revisionDate = await revisionRepo(env.DB).updateRevisionDate(userId);
   notifyUserVaultSync(env, userId, revisionDate, readActingDeviceIdentifier(request));
   notifyUserFolderDelete(env, { userId, folderId: id, revisionDate, contextId: readActingDeviceIdentifier(request) });
   await writeDataAudit(env.DB, request, userId, 'folder', 'folder.delete', {
@@ -150,12 +150,12 @@ export async function handleBulkDeleteFolders(request: Request, env: Env, userId
   const folders = (
     await Promise.all(
       ids.map(async (id) => {
-        const folder = await folderRepo.getFolderForUser(env.DB, id, userId);
+        const folder = await folderRepo(env.DB).getFolderForUser(id, userId);
         return folder;
       }),
     )
   ).filter((folder): folder is Folder => !!folder);
-  const revisionDate = await folderRepo.bulkDeleteFolders(env.DB, ids, userId);
+  const revisionDate = await folderRepo(env.DB).bulkDeleteFolders(ids, userId);
   if (revisionDate) {
     notifyUserVaultSync(env, userId, revisionDate, readActingDeviceIdentifier(request));
     for (const folder of folders) {

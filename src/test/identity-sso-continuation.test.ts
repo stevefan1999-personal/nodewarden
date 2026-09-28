@@ -10,8 +10,8 @@ import { consumeSsoContinuation, saveSsoContinuation } from '../services/sso-con
 import type { User } from '../types';
 import { verifyJWT } from '../utils/jwt';
 import { authedFetch, captureEmail, createTestEnv, seedUser, TEST_ORIGIN, MAILABLE_DOMAIN } from './support/env';
-import * as deviceRepo from '../services/storage-device-repo';
-import * as userRepo from '../services/storage-user-repo';
+import { deviceRepo } from '../services/storage-device-repo';
+import { userRepo } from '../services/storage-user-repo';
 
 const TOTP_SECRET = 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ';
 const VERIFIER = 'verified-pkce-context-'.repeat(3);
@@ -195,8 +195,7 @@ test('disabled, stamp-changed and email-reassigned accounts cannot resume verifi
 test('only one concurrent SSO completion can create sessions with a reusable remember factor', async (t) => {
   const f = await setup(t);
   await f.challenge();
-  await deviceRepo.saveTrustedTwoFactorDeviceToken(
-    f.env.DB,
+  await deviceRepo(f.env.DB).saveTrustedTwoFactorDeviceToken(
     'existing-remember-token',
     f.user.id,
     DEVICE,
@@ -227,7 +226,7 @@ test('recovery-factor rotation and continuation claim commit together, and a los
   });
   const factors = { twoFactorProvider: '8', twoFactorToken: RECOVERY };
   assert.equal((await f.login(factors)).status, 400);
-  const stored = await userRepo.getUserById(f.env.DB, f.user.id);
+  const stored = await userRepo(f.env.DB).getUserById(f.user.id);
   assert.equal(stored!.securityStamp, f.user.securityStamp);
   assert.equal(stored!.totpSecret, TOTP_SECRET);
   assert.equal(stored!.totpRecoveryCode, RECOVERY);
@@ -239,7 +238,7 @@ test('recovery-factor rotation and continuation claim commit together, and a los
     .where(eq(verification.identifier, 'sso-continuation'));
   const response = await f.login(factors);
   assert.equal(response.status, 200);
-  const finalUser = (await userRepo.getUserById(f.env.DB, f.user.id))!;
+  const finalUser = (await userRepo(f.env.DB).getUserById(f.user.id))!;
   assert.notEqual(finalUser.securityStamp, f.user.securityStamp);
   assert.equal(finalUser.totpSecret, null);
   assert.equal(
@@ -295,7 +294,7 @@ test('verified SSO is exempt from new-device verification on an old opted-in acc
   });
   f.env.ENABLE_NEW_DEVICE_VERIFICATION = 'true';
   f.env.DISABLE_EMAIL_NEW_DEVICE = 'true';
-  await deviceRepo.upsertDevice(f.env.DB, f.user.id, 'known-device', 'Known', 9);
+  await deviceRepo(f.env.DB).upsertDevice(f.user.id, 'known-device', 'Known', 9);
   assert.equal((await f.login()).status, 200);
 });
 

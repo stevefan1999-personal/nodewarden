@@ -13,7 +13,7 @@ import {
   loadBackupSchedule,
   saveBackupSchedule,
 } from './backup-config';
-import * as configRepo from './storage-config-repo';
+import { configRepo } from './storage-config-repo';
 
 const neverRun: BackupStatus = {
   lastAttemptAt: null,
@@ -30,7 +30,7 @@ test('a missing or unreadable schedule row reads as the defaults, and a saved on
   const db = await createSqliteD1();
   assert.deepEqual(await loadBackupSchedule(db), DEFAULT_BACKUP_SCHEDULE);
   for (const stored of ['{not json', JSON.stringify({ ...daily, intervalHours: 0 })]) {
-    await configRepo.setConfigValue(db, BACKUP_SCHEDULE_CONFIG_KEY, stored);
+    await configRepo(db).setConfigValue(BACKUP_SCHEDULE_CONFIG_KEY, stored);
     assert.deepEqual(await loadBackupSchedule(db), DEFAULT_BACKUP_SCHEDULE);
   }
   await saveBackupSchedule(db, daily);

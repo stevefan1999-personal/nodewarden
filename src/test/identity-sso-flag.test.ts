@@ -4,10 +4,10 @@ import test from 'node:test';
 
 import { hashPassword } from '../services/auth-password';
 import { PolicyType } from '../services/org-types';
-import * as orgRepo from '../services/storage-org-repo';
+import { orgRepo } from '../services/storage-org-repo';
 import { verifyJWT } from '../utils/jwt';
 import { authedFetch, createTestEnv, seedUser, captureEmail, drainWaitUntil, MAILABLE_DOMAIN } from './support/env';
-import * as userRepo from '../services/storage-user-repo';
+import { userRepo } from '../services/storage-user-repo';
 
 const { createOwnedOrganization } = await import('../handlers/organizations');
 
@@ -23,7 +23,7 @@ test('a client-sent sso flag cannot bypass an organization SSO policy', async ()
   const env = await createTestEnv(SSO_CONFIG);
   const user = await seedUser(env, { masterPasswordHash: await hashPassword(PASSWORD) });
   const org = await createOwnedOrganization(env.DB, user, { name: 'SSO org', key: '4.dGVzdA==' });
-  await orgRepo.savePolicy(env.DB, {
+  await orgRepo(env.DB).savePolicy({
     id: crypto.randomUUID(),
     orgId: org.id,
     type: PolicyType.RequireSso,
@@ -120,7 +120,7 @@ test('verified SSO signs in an SSO-only account with a server-hashed password an
   const result = (await accepted.json()) as { access_token: string };
   assert.equal((await verifyJWT(result.access_token, env.JWT_SECRET))?.sub, user.id);
 
-  await userRepo.saveUser(env.DB, { ...user, totpSecret: 'JBSWY3DPEHPK3PXP' }, ['totpSecret']);
+  await userRepo(env.DB).saveUser({ ...user, totpSecret: 'JBSWY3DPEHPK3PXP' }, ['totpSecret']);
   const challenged = await exchange('valid-code-2fa');
   assert.equal(challenged.status, 400);
   const challenge = (await challenged.json()) as Record<string, unknown>;

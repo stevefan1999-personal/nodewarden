@@ -24,9 +24,9 @@ import {
 import { writeDataAudit } from '../services/audit-events';
 import { loadAccessibleCipher } from './cipher-access';
 import { EventType } from '../services/events';
-import * as attachmentRepo from '../services/storage-attachment-repo';
-import * as attachmentTokenRepo from '../services/storage-attachment-token-repo';
-import * as cipherRepo from '../services/storage-cipher-repo';
+import { attachmentRepo } from '../services/storage-attachment-repo';
+import { attachmentTokenRepo } from '../services/storage-attachment-token-repo';
+import { cipherRepo } from '../services/storage-cipher-repo';
 
 const ATTACHMENT_FIELD_REQUIRED = 'fileName and key are required';
 const requiredAttachmentField = z
@@ -63,7 +63,7 @@ async function afterAttachmentChange(
   cipher: Cipher,
   cipherId: string,
 ): Promise<{ userId: string; revisionDate: string } | null> {
-  const revisionInfo = await attachmentRepo.updateCipherRevisionDate(env.DB, cipherId);
+  const revisionInfo = await attachmentRepo(env.DB).updateCipherRevisionDate(cipherId);
   if (revisionInfo) {
     notifyUserVaultSync(env, revisionInfo.userId, revisionInfo.revisionDate, readActingDeviceIdentifier(request));
     notifyUserCipherUpdate(env, cipherNotifyPayload(cipher, revisionInfo.revisionDate, request));
@@ -121,7 +121,7 @@ async function processAttachmentUpload(
   if (upload.size !== attachment.size) {
     attachment.size = upload.size;
     attachment.sizeName = formatSize(upload.size);
-    await attachmentRepo.saveAttachment(env.DB, attachment);
+    await attachmentRepo(env.DB).saveAttachment(attachment);
   }
 
   await afterAttachmentChange(request, env, cipher, cipherId);
@@ -156,22 +156,22 @@ export async function handleCreateAttachment(
   };
 
   // Save attachment metadata
-  await attachmentRepo.saveAttachment(env.DB, attachment);
+  await attachmentRepo(env.DB).saveAttachment(attachment);
 
   // Add attachment to cipher
   if (cipher.organizationId) {
-    await attachmentRepo.addAttachmentToCipher(env.DB, cipherId, attachmentId);
+    await attachmentRepo(env.DB).addAttachmentToCipher(cipherId, attachmentId);
   } else {
-    await attachmentRepo.addAttachmentToCipherForUser(env.DB, cipherId, attachmentId, userId);
+    await attachmentRepo(env.DB).addAttachmentToCipherForUser(cipherId, attachmentId, userId);
   }
 
   await afterAttachmentChange(request, env, cipher, cipherId);
 
   // Get updated cipher for response
   const updatedCipher = cipher.organizationId
-    ? await cipherRepo.getCipher(env.DB, cipherId)
-    : await cipherRepo.getCipherForUser(env.DB, cipherId, userId);
-  const attachments = await attachmentRepo.getAttachmentsByCipher(env.DB, cipherId);
+    ? await cipherRepo(env.DB).getCipher(cipherId)
+    : await cipherRepo(env.DB).getCipherForUser(cipherId, userId);
+  const attachments = await attachmentRepo(env.DB).getAttachmentsByCipher(cipherId);
   const uploadToken = await createAttachmentUploadToken(userId, cipherId, attachmentId, env.JWT_SECRET);
   // Official clients PUT the file to this Worker URL the way they upload to Azure blob storage (fileUploadType 1);
   // for the Direct type they ignore any URL and post to the server instead.
@@ -200,7 +200,7 @@ export async function handleUploadAttachment(
   const cipher = await loadAccessibleCipher(env.DB, userId, cipherId, 'edit');
   if (!cipher) return errorResponse('Cipher not found', 404);
 
-  const attachment = await attachmentRepo.getAttachment(env.DB, attachmentId);
+  const attachment = await attachmentRepo(env.DB).getAttachment(attachmentId);
   if (!attachment || attachment.cipherId !== cipherId) {
     return errorResponse('Attachment not found', 404);
   }
@@ -227,10 +227,10 @@ export async function handlePublicUploadAttachment(
     return errorResponse('Token mismatch', 401);
   }
 
-  const cipher = await cipherRepo.getCipher(env.DB, cipherId);
+  const cipher = await cipherRepo(env.DB).getCipher(cipherId);
   if (!cipher) return errorResponse('Cipher not found', 404);
 
-  const attachment = await attachmentRepo.getAttachment(env.DB, attachmentId);
+  const attachment = await attachmentRepo(env.DB).getAttachment(attachmentId);
   if (!attachment || attachment.cipherId !== cipherId) {
     return errorResponse('Attachment not found', 404);
   }
@@ -250,7 +250,7 @@ export async function handleGetAttachment(
   const cipher = await loadAccessibleCipher(env.DB, userId, cipherId, 'read');
   if (!cipher) return errorResponse('Cipher not found', 404);
 
-  const attachment = await attachmentRepo.getAttachment(env.DB, attachmentId);
+  const attachment = await attachmentRepo(env.DB).getAttachment(attachmentId);
   if (!attachment || attachment.cipherId !== cipherId) {
     return errorResponse('Attachment not found', 404);
   }
@@ -286,7 +286,7 @@ export async function handleUpdateAttachmentMetadata(
   const cipher = await loadAccessibleCipher(env.DB, userId, cipherId, 'edit');
   if (!cipher) return errorResponse('Cipher not found', 404);
 
-  const attachment = await attachmentRepo.getAttachment(env.DB, attachmentId);
+  const attachment = await attachmentRepo(env.DB).getAttachment(attachmentId);
   if (!attachment || attachment.cipherId !== cipherId) {
     return errorResponse('Attachment not found', 404);
   }
@@ -296,7 +296,7 @@ export async function handleUpdateAttachmentMetadata(
   if (body.fileName !== undefined) attachment.fileName = body.fileName;
   if (body.key !== undefined) attachment.key = body.key;
 
-  await attachmentRepo.saveAttachment(env.DB, attachment);
+  await attachmentRepo(env.DB).saveAttachment(attachment);
   await afterAttachmentChange(request, env, cipher, cipherId);
 
   return jsonResponse({
@@ -336,13 +336,13 @@ export async function handlePublicDownloadAttachment(
   }
 
   // Verify attachment exists
-  const attachment = await attachmentRepo.getAttachment(env.DB, attachmentId);
+  const attachment = await attachmentRepo(env.DB).getAttachment(attachmentId);
   if (!attachment || attachment.cipherId !== cipherId) {
     return errorResponse('Attachment not found', 404);
   }
 
   const path = getAttachmentObjectKey(cipherId, attachmentId);
-  const firstUse = await attachmentTokenRepo.consumeAttachmentDownloadToken(env.DB, claims.jti, claims.exp);
+  const firstUse = await attachmentTokenRepo(env.DB).consumeAttachmentDownloadToken(claims.jti, claims.exp);
   if (!firstUse) {
     return errorResponse('Invalid or expired token', 401);
   }
@@ -375,7 +375,7 @@ export async function handleDeleteAttachment(
   const cipher = await loadAccessibleCipher(env.DB, userId, cipherId, 'edit');
   if (!cipher) return errorResponse('Cipher not found', 404);
 
-  const attachment = await attachmentRepo.getAttachment(env.DB, attachmentId);
+  const attachment = await attachmentRepo(env.DB).getAttachment(attachmentId);
   if (!attachment || attachment.cipherId !== cipherId) {
     return errorResponse('Attachment not found', 404);
   }
@@ -384,9 +384,9 @@ export async function handleDeleteAttachment(
   await deleteBlobObject(env, path);
 
   if (cipher.organizationId) {
-    await attachmentRepo.deleteAttachment(env.DB, attachmentId);
+    await attachmentRepo(env.DB).deleteAttachment(attachmentId);
   } else {
-    await attachmentRepo.deleteAttachmentForUser(env.DB, attachmentId, userId);
+    await attachmentRepo(env.DB).deleteAttachmentForUser(attachmentId, userId);
   }
 
   const revisionInfo = await afterAttachmentChange(request, env, cipher, cipherId);
@@ -399,9 +399,9 @@ export async function handleDeleteAttachment(
   }
 
   const updatedCipher = cipher.organizationId
-    ? await cipherRepo.getCipher(env.DB, cipherId)
-    : await cipherRepo.getCipherForUser(env.DB, cipherId, userId);
-  const attachments = await attachmentRepo.getAttachmentsByCipher(env.DB, cipherId);
+    ? await cipherRepo(env.DB).getCipher(cipherId)
+    : await cipherRepo(env.DB).getCipherForUser(cipherId, userId);
+  const attachments = await attachmentRepo(env.DB).getAttachmentsByCipher(cipherId);
   const cipherResponse = cipherToResponse(updatedCipher || cipher, attachments);
   await recordCipherEvents(env, request, userId, EventType.CipherAttachmentDeleted, [cipher]);
 
@@ -416,7 +416,7 @@ export async function handleDeleteAttachment(
 // Delete all attachments for a cipher (used when deleting cipher)
 
 export async function deleteAllAttachmentsForCiphers(env: Env, cipherIds: string[]): Promise<void> {
-  const attachmentsByCipher = await attachmentRepo.getAttachmentsByCipherIds(env.DB, cipherIds);
+  const attachmentsByCipher = await attachmentRepo(env.DB).getAttachmentsByCipherIds(cipherIds);
   const attachments = Array.from(attachmentsByCipher.entries()).flatMap(([ownedCipherId, items]) =>
     items.map((attachment) => ({ attachment, cipherId: ownedCipherId })),
   );
@@ -433,8 +433,5 @@ export async function deleteAllAttachmentsForCiphers(env: Env, cipherIds: string
     );
   }
 
-  await attachmentRepo.bulkDeleteAttachmentsByIds(
-    env.DB,
-    attachments.map(({ attachment }) => attachment.id),
-  );
+  await attachmentRepo(env.DB).bulkDeleteAttachmentsByIds(attachments.map(({ attachment }) => attachment.id));
 }

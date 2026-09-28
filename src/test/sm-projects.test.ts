@@ -6,7 +6,7 @@ import { getOrm } from '../db/client';
 import { orgGroupMembers, orgGroups, smProjectGroups, smProjects } from '../db/schema';
 import { authedFetch, createTestEnv } from './support/env';
 import { ENCRYPTED_FIELD, postJson, seedMember, seedSmOrg, smUser } from './support/sm';
-import * as orgRepo from '../services/storage-org-repo';
+import { orgRepo } from '../services/storage-org-repo';
 
 test('project routes enforce creator and group grants, bulk isolation, encrypted names and counts', async () => {
   const env = await createTestEnv();
@@ -29,7 +29,7 @@ test('project routes enforce creator and group grants, bulk isolation, encrypted
     object: 'projectCounts',
   });
   assert.equal((await request(a.id, projectPath, 'POST', { name: 'plaintext' })).status, 400);
-  const member = await orgRepo.getMembershipByUserAndOrg(env.DB, b.id, orgId);
+  const member = await orgRepo(env.DB).getMembershipByUserAndOrg(b.id, orgId);
   const group = crypto.randomUUID();
   const orm = getOrm(env.DB);
   await orm.batch([

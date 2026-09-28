@@ -31,8 +31,8 @@ import {
   toInteger,
 } from './sends-shared';
 import { writeDataAudit } from '../services/audit-events';
-import * as revisionRepo from '../services/storage-revision-repo';
-import * as sendRepo from '../services/storage-send-repo';
+import { revisionRepo } from '../services/storage-revision-repo';
+import { sendRepo } from '../services/storage-send-repo';
 
 const SEND_EMAIL_AUTH_UNSUPPORTED_MESSAGE = 'Send email verification is not supported by this server.';
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -149,7 +149,7 @@ async function processSendFileUpload(request: Request, env: Env, send: Send, fil
     return errorResponse('Attachment storage is not configured', 500);
   }
 
-  const revisionDate = await revisionRepo.updateRevisionDate(env.DB, send.userId);
+  const revisionDate = await revisionRepo(env.DB).updateRevisionDate(send.userId);
   notifyUserVaultSync(env, send.userId, revisionDate, readActingDeviceIdentifier(request));
   notifyUserSendUpdate(env, {
     userId: send.userId,
@@ -168,12 +168,12 @@ export async function handleGetSends(request: Request, env: Env, userId: string)
   let sends: Send[];
   let continuationToken: string | null = null;
   if (pagination) {
-    const pageRows = await sendRepo.getSendsPage(env.DB, userId, pagination.limit + 1, pagination.offset);
+    const pageRows = await sendRepo(env.DB).getSendsPage(userId, pagination.limit + 1, pagination.offset);
     const hasNext = pageRows.length > pagination.limit;
     sends = hasNext ? pageRows.slice(0, pagination.limit) : pageRows;
     continuationToken = hasNext ? encodeContinuationToken(pagination.offset + sends.length) : null;
   } else {
-    sends = await sendRepo.getAllSends(env.DB, userId);
+    sends = await sendRepo(env.DB).getAllSends(userId);
   }
 
   const sendResponses = sends.map(sendToResponse);
@@ -186,7 +186,7 @@ export async function handleGetSends(request: Request, env: Env, userId: string)
 
 export async function handleGetSend(request: Request, env: Env, userId: string, sendId: string): Promise<Response> {
   void request;
-  const send = await sendRepo.getSendForUser(env.DB, sendId, userId);
+  const send = await sendRepo(env.DB).getSendForUser(sendId, userId);
 
   if (!send || send.userId !== userId) {
     return errorResponse('Send not found', 404);
@@ -242,8 +242,8 @@ async function parseNewSend(
 // Creating or editing a Send persists it, bumps the owner's revision, signals their devices and
 // records the matching event.
 async function saveSendAndNotify(request: Request, env: Env, send: Send, action: 'created' | 'edited'): Promise<void> {
-  await sendRepo.saveSend(env.DB, send);
-  const revisionDate = await revisionRepo.updateRevisionDate(env.DB, send.userId);
+  await sendRepo(env.DB).saveSend(send);
+  const revisionDate = await revisionRepo(env.DB).updateRevisionDate(send.userId);
   notifyUserVaultSync(env, send.userId, revisionDate, readActingDeviceIdentifier(request));
   (action === 'created' ? notifyUserSendCreate : notifyUserSendUpdate)(env, {
     userId: send.userId,
@@ -300,7 +300,7 @@ export async function handleGetSendFileUpload(
   sendId: string,
   fileId: string,
 ): Promise<Response> {
-  const send = await sendRepo.getSendForUser(env.DB, sendId, userId);
+  const send = await sendRepo(env.DB).getSendForUser(sendId, userId);
   if (!send || send.userId !== userId) return errorResponse('Send not found', 404);
   if (send.type !== SendType.File) return errorResponse('Send is not a file type send.', 400);
   if (!sendFileIdMatches(send, fileId)) return errorResponse('Send file does not match send data.', 400);
@@ -314,7 +314,7 @@ export async function handleUploadSendFile(
   sendId: string,
   fileId: string,
 ): Promise<Response> {
-  const send = await sendRepo.getSendForUser(env.DB, sendId, userId);
+  const send = await sendRepo(env.DB).getSendForUser(sendId, userId);
   if (!send || send.userId !== userId) {
     return errorResponse('Send not found. Unable to save the file.', 404);
   }
@@ -344,7 +344,7 @@ export async function handlePublicUploadSendFile(
     return errorResponse('Token mismatch', 401);
   }
 
-  const send = await sendRepo.getSendForUser(env.DB, sendId, claims.userId);
+  const send = await sendRepo(env.DB).getSendForUser(sendId, claims.userId);
   if (!send || send.userId !== claims.userId) {
     return errorResponse('Send not found. Unable to save the file.', 404);
   }
@@ -356,7 +356,7 @@ export async function handlePublicUploadSendFile(
 }
 
 export async function handleUpdateSend(request: Request, env: Env, userId: string, sendId: string): Promise<Response> {
-  const send = await sendRepo.getSendForUser(env.DB, sendId, userId);
+  const send = await sendRepo(env.DB).getSendForUser(sendId, userId);
   if (!send || send.userId !== userId) {
     return errorResponse('Send not found', 404);
   }
@@ -387,7 +387,7 @@ export async function handleUpdateSend(request: Request, env: Env, userId: strin
 }
 
 export async function handleDeleteSend(request: Request, env: Env, userId: string, sendId: string): Promise<Response> {
-  const send = await sendRepo.getSendForUser(env.DB, sendId, userId);
+  const send = await sendRepo(env.DB).getSendForUser(sendId, userId);
   if (!send || send.userId !== userId) {
     return errorResponse('Send not found', 404);
   }
@@ -395,8 +395,8 @@ export async function handleDeleteSend(request: Request, env: Env, userId: strin
   const fileId = send.type === SendType.File ? parseStoredSendData(send).id : undefined;
   if (fileId) await deleteBlobObject(env, getSendFileObjectKey(send.id, fileId));
 
-  await sendRepo.deleteSend(env.DB, sendId, userId);
-  const revisionDate = await revisionRepo.updateRevisionDate(env.DB, userId);
+  await sendRepo(env.DB).deleteSend(sendId, userId);
+  const revisionDate = await revisionRepo(env.DB).updateRevisionDate(userId);
   notifyUserVaultSync(env, userId, revisionDate, readActingDeviceIdentifier(request));
   notifyUserSendDelete(env, { userId, sendId, revisionDate, contextId: readActingDeviceIdentifier(request) });
   await recordSendEvent(env, request, send, 'deleted');
@@ -412,13 +412,13 @@ export async function handleBulkDeleteSends(request: Request, env: Env, userId: 
   const body = await parseBody(request, SendIds);
   if (body instanceof Response) return body;
 
-  const sends = await sendRepo.getSendsByIds(env.DB, body.ids, userId);
+  const sends = await sendRepo(env.DB).getSendsByIds(body.ids, userId);
   for (const send of sends) {
     const fileId = send.type === SendType.File ? parseStoredSendData(send).id : undefined;
     if (fileId) await deleteBlobObject(env, getSendFileObjectKey(send.id, fileId));
   }
 
-  const revisionDate = await sendRepo.bulkDeleteSends(env.DB, body.ids, userId);
+  const revisionDate = await sendRepo(env.DB).bulkDeleteSends(body.ids, userId);
   if (revisionDate) {
     notifyUserVaultSync(env, userId, revisionDate, readActingDeviceIdentifier(request));
     for (const send of sends) {
@@ -445,7 +445,7 @@ export async function handleRemoveSendPassword(
   userId: string,
   sendId: string,
 ): Promise<Response> {
-  const send = await sendRepo.getSendForUser(env.DB, sendId, userId);
+  const send = await sendRepo(env.DB).getSendForUser(sendId, userId);
   if (!send || send.userId !== userId) {
     return errorResponse('Send not found', 404);
   }
@@ -467,7 +467,7 @@ export async function handleRemoveSendAuth(
   userId: string,
   sendId: string,
 ): Promise<Response> {
-  const send = await sendRepo.getSendForUser(env.DB, sendId, userId);
+  const send = await sendRepo(env.DB).getSendForUser(sendId, userId);
   if (!send || send.userId !== userId) {
     return errorResponse('Send not found', 404);
   }

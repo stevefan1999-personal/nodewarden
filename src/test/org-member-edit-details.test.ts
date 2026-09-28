@@ -6,7 +6,7 @@ import { getOrm } from '../db/client';
 import { events, organizationMemberships, userRevisions } from '../db/schema';
 import { hasFullCollectionAccess } from '../services/org-authz';
 import { EMPTY_PERMISSIONS, MembershipStatus, MembershipType, type OrgPermissions } from '../services/org-types';
-import * as orgRepo from '../services/storage-org-repo';
+import { orgRepo } from '../services/storage-org-repo';
 import type { Env, User } from '../types';
 import { createOrgInviteToken } from '../utils/jwt';
 import { abortWrites, authedFetch, createTestEnv, seedUser } from './support/env';
@@ -106,7 +106,7 @@ test('an Admin can neither grant Owner nor edit or demote an Owner, on PUT or in
   const env = await createTestEnv();
   const owner = await seedUser(env);
   const orgId = await createOrg(env, owner);
-  const ownerMemberId = (await orgRepo.getMembershipByUserAndOrg(env.DB, owner.id, orgId))!.id;
+  const ownerMemberId = (await orgRepo(env.DB).getMembershipByUserAndOrg(owner.id, orgId))!.id;
   const admin = await seedMember(env, orgId, { type: MembershipType.Admin });
   const member = await seedMember(env, orgId);
 
@@ -190,7 +190,7 @@ test('PUT requires a real member type and keeps a confirmed owner', async () => 
   const env = await createTestEnv();
   const owner = await seedUser(env);
   const orgId = await createOrg(env, owner);
-  const ownerMemberId = (await orgRepo.getMembershipByUserAndOrg(env.DB, owner.id, orgId))!.id;
+  const ownerMemberId = (await orgRepo(env.DB).getMembershipByUserAndOrg(owner.id, orgId))!.id;
   const admin = await seedMember(env, orgId, { type: MembershipType.Admin });
 
   await expectRejected(putMember(env, owner, orgId, admin.memberId, {}), 400, 'The Type field is required.');
@@ -298,7 +298,7 @@ test('the last confirmed owner cannot be revoked or removed', async () => {
   const env = await createTestEnv();
   const owner = await seedUser(env);
   const orgId = await createOrg(env, owner);
-  const ownerMemberId = (await orgRepo.getMembershipByUserAndOrg(env.DB, owner.id, orgId))!.id;
+  const ownerMemberId = (await orgRepo(env.DB).getMembershipByUserAndOrg(owner.id, orgId))!.id;
   const secondOwner = await seedMember(env, orgId, { type: MembershipType.Owner });
 
   assert.equal((await setMemberRevoked(env, owner, orgId, secondOwner.memberId, 'revoke')).status, 200);
@@ -330,9 +330,9 @@ test('member actions reject self-management and repeated revoke or restore witho
   assert.equal((await details(env, owner, orgId, admin.memberId)).status, MembershipStatus.Confirmed);
   await expectRejected(setMemberRevoked(env, admin.user, orgId, member.memberId, 'restore'), 400, 'Already active.');
   assert.equal((await setMemberRevoked(env, admin.user, orgId, member.memberId, 'revoke')).status, 200);
-  const revoked = await orgRepo.getMembership(env.DB, member.memberId);
+  const revoked = await orgRepo(env.DB).getMembership(member.memberId);
   await expectRejected(setMemberRevoked(env, admin.user, orgId, member.memberId, 'revoke'), 400, 'Already revoked.');
-  assert.deepEqual(await orgRepo.getMembership(env.DB, member.memberId), revoked);
+  assert.deepEqual(await orgRepo(env.DB).getMembership(member.memberId), revoked);
   assert.equal((await setMemberRevoked(env, admin.user, orgId, member.memberId, 'restore')).status, 200);
   assert.equal((await details(env, owner, orgId, member.memberId)).status, MembershipStatus.Confirmed);
 });
@@ -341,7 +341,7 @@ test('bulk member actions report per-member errors, preserve other organizations
   const env = await createTestEnv();
   const owner = await seedUser(env);
   const orgId = await createOrg(env, owner);
-  const self = (await orgRepo.getMembershipByUserAndOrg(env.DB, owner.id, orgId))!.id;
+  const self = (await orgRepo(env.DB).getMembershipByUserAndOrg(owner.id, orgId))!.id;
   const admin = await seedMember(env, orgId, { type: MembershipType.Admin });
   const member = await seedMember(env, orgId);
   const foreignOrg = await createOrg(env, await seedUser(env));
@@ -386,10 +386,10 @@ test('bulk member actions report per-member errors, preserve other organizations
     { id: self, error: 'You cannot remove yourself.' },
   ]);
   assert.deepEqual(
-    (await orgRepo.listMembershipsByOrg(env.DB, orgId)).map((row) => row.id),
+    (await orgRepo(env.DB).listMembershipsByOrg(orgId)).map((row) => row.id),
     [self],
   );
-  assert.equal((await orgRepo.getMembership(env.DB, foreign.memberId))?.status, MembershipStatus.Confirmed);
+  assert.equal((await orgRepo(env.DB).getMembership(foreign.memberId))?.status, MembershipStatus.Confirmed);
   assert.ok(await revisionRow(env, member.user.id));
 });
 
@@ -410,7 +410,7 @@ test('bulk member writes chunk 150 ids and roll back revisions with a failed lat
   assert.equal(failed.status, 500);
   assert.equal(await getOrm(env.DB).$count(events, eq(events.organizationId, orgId)), 0);
   assert.ok(
-    (await orgRepo.listMembershipsByOrg(env.DB, orgId)).every((member) => member.status === MembershipStatus.Confirmed),
+    (await orgRepo(env.DB).listMembershipsByOrg(orgId)).every((member) => member.status === MembershipStatus.Confirmed),
   );
   assert.deepEqual(await revisionRow(env, owner.id), revisionBefore);
   await restore();
@@ -422,7 +422,7 @@ test('bulk member writes chunk 150 ids and roll back revisions with a failed lat
   assert.ok(result.data.every((item) => item.error === ''));
   assert.equal(batch.mock.callCount(), 2); // Atomic membership writes, then chunked event records.
   assert.equal(await getOrm(env.DB).$count(events, and(eq(events.organizationId, orgId), eq(events.type, 1511))), 150);
-  assert.equal((await orgRepo.listMembershipsByOrg(env.DB, orgId)).filter((member) => member.status < 0).length, 150);
+  assert.equal((await orgRepo(env.DB).listMembershipsByOrg(orgId)).filter((member) => member.status < 0).length, 150);
 });
 
 // The org creator is stored with accessAll, which official web's update request never sends, so
@@ -431,7 +431,7 @@ test('demoting the organization creator drops the full collection access it was 
   const env = await createTestEnv();
   const owner = await seedUser(env);
   const orgId = await createOrg(env, owner);
-  const creatorMemberId = (await orgRepo.getMembershipByUserAndOrg(env.DB, owner.id, orgId))!.id;
+  const creatorMemberId = (await orgRepo(env.DB).getMembershipByUserAndOrg(owner.id, orgId))!.id;
   const secondOwner = await seedMember(env, orgId, { type: MembershipType.Owner });
 
   const demotion = {
@@ -442,7 +442,7 @@ test('demoting the organization creator drops the full collection access it was 
     accessPam: false,
   };
   assert.equal((await putMember(env, secondOwner.user, orgId, creatorMemberId, demotion)).status, 200);
-  assert.equal(hasFullCollectionAccess((await orgRepo.getMembership(env.DB, creatorMemberId))!), false);
+  assert.equal(hasFullCollectionAccess((await orgRepo(env.DB).getMembership(creatorMemberId))!), false);
 });
 
 // Upstream invite and update requests carry no AccessAll, and here it grants every collection
@@ -460,7 +460,7 @@ test('accessAll in an invite or PUT body grants no full collection access', asyn
     200,
   );
 
-  const stored = await orgRepo.listMembershipsByOrg(env.DB, orgId);
+  const stored = await orgRepo(env.DB).listMembershipsByOrg(orgId);
   assert.equal(hasFullCollectionAccess(stored.find((row) => row.id === custom.memberId)!), false);
   // An invited member is not active yet, so check the flag it would carry into confirmation.
   assert.equal(stored.find((row) => row.email === email)!.accessAll, false);
@@ -473,7 +473,7 @@ test('a Custom manageUsers member grants only collections it manages, and never 
   const env = await createTestEnv();
   const owner = await seedUser(env);
   const orgId = await createOrg(env, owner);
-  const ownerMemberId = (await orgRepo.getMembershipByUserAndOrg(env.DB, owner.id, orgId))!.id;
+  const ownerMemberId = (await orgRepo(env.DB).getMembershipByUserAndOrg(owner.id, orgId))!.id;
   const [managed, unmanaged] = [await createCollection(env, owner, orgId), await createCollection(env, owner, orgId)];
   const custom = await seedMember(env, orgId, { type: MembershipType.Custom, permissions: { manageUsers: true } });
   const member = await seedMember(env, orgId);
@@ -504,7 +504,7 @@ test('a Custom manageUsers member grants only collections it manages, and never 
   assert.deepEqual((await details(env, owner, orgId, custom.memberId)).collections, [manageAccess(managed)]);
   assert.deepEqual((await details(env, owner, orgId, member.memberId)).collections, []);
   assert.equal(
-    (await orgRepo.listMembershipsByOrg(env.DB, orgId)).some((row) => row.email === email),
+    (await orgRepo(env.DB).listMembershipsByOrg(orgId)).some((row) => row.email === email),
     false,
   );
 
@@ -726,7 +726,7 @@ test('collection access larger than one D1 statement is saved in chunks for invi
   const now = new Date().toISOString();
   const collectionIds = Array.from({ length: MANY_COLLECTIONS }, () => crypto.randomUUID());
   for (const id of collectionIds) {
-    await orgRepo.saveCollection(env.DB, {
+    await orgRepo(env.DB).saveCollection({
       id,
       orgId,
       name: '2.c|c|c',
@@ -751,7 +751,7 @@ test('collection access larger than one D1 statement is saved in chunks for invi
     (await invite(env, owner, orgId, { emails: [email], type: MembershipType.User, collections })).status,
     200,
   );
-  const invited = (await orgRepo.listMembershipsByOrg(env.DB, orgId)).find((row) => row.email === email)!;
+  const invited = (await orgRepo(env.DB).listMembershipsByOrg(orgId)).find((row) => row.email === email)!;
   assert.deepEqual((await details(env, owner, orgId, invited.id)).collections.sort(byId), [...collections].sort(byId));
 });
 
@@ -762,7 +762,7 @@ test('collection access saved for an invited member waits for accept like invite
   const orgId = await createOrg(env, owner);
   const collectionId = await createCollection(env, owner, orgId);
   assert.equal((await invite(env, owner, orgId, { emails: [invitee.email], type: MembershipType.User })).status, 200);
-  const memberId = (await orgRepo.listMembershipsByOrg(env.DB, orgId)).find((row) => row.email === invitee.email)!.id;
+  const memberId = (await orgRepo(env.DB).listMembershipsByOrg(orgId)).find((row) => row.email === invitee.email)!.id;
 
   const access = { id: collectionId, readOnly: true, hidePasswords: false, manage: false };
   const collectionPath = `/api/organizations/${orgId}/collections/${collectionId}`;
@@ -810,7 +810,7 @@ test('saving a collection for many members writes their access in multi-row stat
   });
   assert.equal(saved.status, 200);
   assert.ok(Math.max(...batchSizes) < MANY_MEMBERS, `batch sizes ${batchSizes.join(', ')}`);
-  assert.equal((await orgRepo.listCollectionUsers(env.DB, collectionId)).length, MANY_MEMBERS);
+  assert.equal((await orgRepo(env.DB).listCollectionUsers(collectionId)).length, MANY_MEMBERS);
 });
 
 // collection_users is keyed by user, so removing a member leaves its rows behind for accept to clear.
@@ -837,7 +837,7 @@ test('accepting a new invite drops collection access left from an earlier member
       .status,
     200,
   );
-  const memberId = (await orgRepo.listMembershipsByOrg(env.DB, orgId)).find(
+  const memberId = (await orgRepo(env.DB).listMembershipsByOrg(orgId)).find(
     (row) => row.email === former.user.email,
   )!.id;
   const token = await createOrgInviteToken(env.JWT_SECRET, memberId, former.user.email);

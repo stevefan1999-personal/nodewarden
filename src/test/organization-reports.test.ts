@@ -3,9 +3,9 @@ import test from 'node:test';
 
 import { chunkRows, columnCount, getOrm } from '../db/client';
 import { cipherCollections, orgGroupMembers, orgGroups } from '../db/schema';
-import { cipherUpsert } from '../services/storage-cipher-repo';
+import { cipherRepo } from '../services/storage-cipher-repo';
 import { MembershipStatus, MembershipType } from '../services/org-types';
-import * as orgRepo from '../services/storage-org-repo';
+import { orgRepo } from '../services/storage-org-repo';
 import type { Cipher } from '../types';
 import { authedFetch, createTestEnv, seedUser } from './support/env';
 import { ENCRYPTED_FIELD, postJson, seedMember, seedSmOrg } from './support/sm';
@@ -54,8 +54,8 @@ async function setup() {
   });
   const target = encryptedCipher(owner.id, orgId);
   const personal = encryptedCipher(owner.id, null);
-  await getOrm(env.DB).batch([cipherUpsert(env.DB, target), cipherUpsert(env.DB, personal)]);
-  await orgRepo.replaceCipherCollections(env.DB, target.id, [collection.id]);
+  await getOrm(env.DB).batch([cipherRepo(env.DB).cipherUpsert(target), cipherRepo(env.DB).cipherUpsert(personal)]);
+  await orgRepo(env.DB).replaceCipherCollections(target.id, [collection.id]);
   const request = (userId: string, path: string) => authedFetch(env, { userId, path });
   return { env, orgId, owner, admin, collection, target, personal, request };
 }
@@ -77,7 +77,10 @@ test('organization report list returns every encrypted org cipher and collection
   ciphers[0].futureEncryptedField = ENCRYPTED_FIELD;
   ciphers[1].deletedAt = ciphers[1].updatedAt;
   ciphers[2].archivedAt = ciphers[2].updatedAt;
-  await getOrm(env.DB).batch([cipherUpsert(env.DB, outside), ...ciphers.map((cipher) => cipherUpsert(env.DB, cipher))]);
+  await getOrm(env.DB).batch([
+    cipherRepo(env.DB).cipherUpsert(outside),
+    ...ciphers.map((cipher) => cipherRepo(env.DB).cipherUpsert(cipher)),
+  ]);
   const orm = getOrm(env.DB);
   await orm.batch([
     orm.insert(cipherCollections).values({ cipherId: target.id, collectionId: foreignCollection.id }),
@@ -195,7 +198,7 @@ test('report and admin-detail gates use explicit org permissions rather than ord
 test('member list includes only same-org group IDs on includeGroups=true and omits groups by default', async () => {
   const { env, orgId, owner, admin, request } = await setup();
   const { user } = await seedMember(env, orgId);
-  const member = (await orgRepo.getMembershipByUserAndOrg(env.DB, user.id, orgId))!;
+  const member = (await orgRepo(env.DB).getMembershipByUserAndOrg(user.id, orgId))!;
   const foreign = await seedSmOrg(env);
   const groupIds = [crypto.randomUUID(), crypto.randomUUID(), crypto.randomUUID()];
   const now = new Date().toISOString();
@@ -236,12 +239,12 @@ test('a report-only Custom member can load V2 report dependencies without gainin
     permissions: { accessReports: true },
   });
   const { user: ordinary } = await seedMember(env, orgId);
-  const ownerMember = (await orgRepo.getMembershipByUserAndOrg(env.DB, owner.id, orgId))!;
+  const ownerMember = (await orgRepo(env.DB).getMembershipByUserAndOrg(owner.id, orgId))!;
   const group = await postJson<{ id: string }>(env, owner, `/api/organizations/${orgId}/groups`, {
     name: ENCRYPTED_FIELD,
     users: [ownerMember.id],
   });
-  await orgRepo.replaceCollectionAccess(env.DB, collection.id, {
+  await orgRepo(env.DB).replaceCollectionAccess(collection.id, {
     users: [{ member: ownerMember, readOnly: false, hidePasswords: false, manage: true }],
     groups: [{ groupId: group.id, readOnly: true, hidePasswords: false, manage: false }],
   });

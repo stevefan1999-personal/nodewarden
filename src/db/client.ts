@@ -47,6 +47,28 @@ export function getOrm(d1: D1Database): Orm {
   return orm;
 }
 
+// A repository groups one table family's queries around its D1 binding and that binding's orm.
+export abstract class Repository {
+  protected readonly orm: Orm;
+
+  constructor(protected readonly db: D1Database) {
+    this.orm = getOrm(db);
+  }
+}
+
+// A repository's accessor: one instance per D1 binding, built on first use and kept, as getOrm keeps the orm. Its
+// state is the binding and the orm, so an isolate can reuse it for every request on that database.
+export function repository<T extends Repository>(Class: new (db: D1Database) => T): (db: D1Database) => T {
+  const instances = new WeakMap<D1Database, T>();
+  return (db) => {
+    const existing = instances.get(db);
+    if (existing) return existing;
+    const created = new Class(db);
+    instances.set(db, created);
+    return created;
+  };
+}
+
 // D1 batches have no conditional rollback. Appending this select after a guarded write aborts the whole
 // batch when that write matched no rows: json() of a non-JSON string raises, and D1 rolls the batch back.
 export function abortUnlessChanged(orm: Orm, reason: string) {

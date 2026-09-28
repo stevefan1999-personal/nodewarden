@@ -17,8 +17,8 @@ import {
   portalFetch,
   signInToAdminPortal,
 } from './support/env';
-import * as passkeyRepo from '../services/storage-account-passkey-repo';
-import * as userRepo from '../services/storage-user-repo';
+import { passkeyRepo } from '../services/storage-account-passkey-repo';
+import { userRepo } from '../services/storage-user-repo';
 
 // Official web enrolls a two-step-login key by PUTting the deviceResponse built in
 // putTwoFactorWebAuthn (clients web-v2026.9.0 default-two-factor-api.service.ts): base64url ids
@@ -221,7 +221,7 @@ for (const action of ['reset', 'delete'] as const) {
     const enrollment = await officialEnrollment();
     const { env, user } = enrollment;
     env.ADMIN_EMAILS = 'admin@x.io';
-    await userRepo.saveUser(env.DB, { ...user, totpSecret: 'JBSWY3DPEHPK3PXP' }, ['totpSecret']);
+    await userRepo(env.DB).saveUser({ ...user, totpSecret: 'JBSWY3DPEHPK3PXP' }, ['totpSecret']);
     const portal = await signInToAdminPortal(env, 'admin@x.io');
     let interrupted = false;
     interceptStatement(env, /insert into "webauthn_credentials"/i, async () => {
@@ -245,8 +245,8 @@ for (const action of ['reset', 'delete'] as const) {
     const result = await putWebAuthn(enrollment, enrollment.deviceResponse);
     assert.equal(result.status, 400);
     assert.equal(interrupted, true);
-    assert.equal(await passkeyRepo.countAccountPasskeyCredentialsByUserId(env.DB, user.id, 'twoFactor'), 0);
-    const current = await userRepo.getUserById(env.DB, user.id);
+    assert.equal(await passkeyRepo(env.DB).countAccountPasskeyCredentialsByUserId(user.id, 'twoFactor'), 0);
+    const current = await userRepo(env.DB).getUserById(user.id);
     if (action === 'delete') assert.equal(current, null);
     else {
       assert.equal(current!.totpSecret, null);

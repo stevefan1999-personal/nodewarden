@@ -4,12 +4,16 @@ import { and, eq } from 'drizzle-orm';
 
 import { getOrm } from '../db/client';
 import { account } from '../db/schema';
-import * as emergencyRepo from '../services/storage-emergency-repo';
-import { EmergencyAccessStatus, EmergencyAccessType } from '../services/storage-emergency-repo';
+import {
+  emergencyRepo,
+  type EmergencyAccessRecord,
+  EmergencyAccessStatus,
+  EmergencyAccessType,
+} from '../services/storage-emergency-repo';
 import { AuthService } from '../services/auth';
 import type { Env, User } from '../types';
 import { authedFetch, createTestEnv, seedUser } from './support/env';
-import * as userRepo from '../services/storage-user-repo';
+import { userRepo } from '../services/storage-user-repo';
 
 // Web 2026.9 (clients e8bc60e5ba) finishes an emergency takeover with only the nested
 // authenticationData/unlockData body. The grantee sees success either way, so a server that
@@ -32,7 +36,7 @@ async function approvedTakeover(): Promise<Takeover> {
   const grantor = await seedUser(env);
   const grantee = await seedUser(env);
   const now = new Date().toISOString();
-  const record: emergencyRepo.EmergencyAccessRecord = {
+  const record: EmergencyAccessRecord = {
     id: crypto.randomUUID(),
     grantorId: grantor.id,
     granteeId: grantee.id,
@@ -46,7 +50,7 @@ async function approvedTakeover(): Promise<Takeover> {
     createdAt: now,
     updatedAt: now,
   };
-  await emergencyRepo.saveEmergencyAccess(env.DB, record);
+  await emergencyRepo(env.DB).saveEmergencyAccess(record);
   return {
     env,
     grantor,
@@ -102,7 +106,7 @@ test('the web 2026.9 nested takeover body lets the grantor log in with the new p
   const login = await passwordLogin(env, grantor.email, NEW_MASTER_PASSWORD_HASH);
   assert.equal(login.status, 200);
   assert.equal(((await login.json()) as { Key: string }).Key, NEW_WRAPPED_USER_KEY);
-  const stored = await userRepo.getUserById(env.DB, grantor.id);
+  const stored = await userRepo(env.DB).getUserById(grantor.id);
   const credential = await getOrm(env.DB)
     .select({ password: account.password })
     .from(account)
@@ -159,7 +163,7 @@ test('an incomplete, mismatched or unauthorized takeover is rejected and leaves 
     assert.equal(response.status, 400, JSON.stringify({ body, userId }));
   }
 
-  const stored = await userRepo.getUserById(env.DB, grantor.id);
+  const stored = await userRepo(env.DB).getUserById(grantor.id);
   assert.equal(stored?.masterPasswordHash, grantor.masterPasswordHash);
   assert.equal(stored?.key, grantor.key);
   assert.equal(stored?.securityStamp, grantor.securityStamp);

@@ -1,10 +1,9 @@
 import { AuthService } from '../services/auth';
-import { isAuthRequestExpired } from '../services/storage-auth-request-repo';
+import { isAuthRequestExpired, authRequestRepo } from '../services/storage-auth-request-repo';
 import type { Env, JWTPayload } from '../types';
 import { errorResponse, jsonResponse } from '../utils/response';
 import { generateUUID } from '../utils/uuid';
 import { createWebSocketConnectionToken, verifyWebSocketConnectionToken } from '../utils/websocket-connection-token';
-import * as authRequestRepo from '../services/storage-auth-request-repo';
 
 const WEBSOCKET_CONNECTION_TOKEN_TTL_MS = 60 * 1000;
 
@@ -111,7 +110,7 @@ export async function handleAnonymousNotificationsHub(request: Request, env: Env
     return errorResponse('Expected websocket', 426);
   }
 
-  const authRequest = await authRequestRepo.getAuthRequestById(env.DB, authRequestId);
+  const authRequest = await authRequestRepo(env.DB).getAuthRequestById(authRequestId);
   if (!authRequest || isAuthRequestExpired(authRequest)) {
     return errorResponse('Not found', 404);
   }

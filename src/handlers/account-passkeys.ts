@@ -33,9 +33,9 @@ import {
 import { auditRequestMetadata, writeAuditEvent } from '../services/audit-events';
 import { ensureTwoFactorRecoveryCode } from '../services/two-factor-providers';
 import { createTwoFactorUserVerificationToken, verifyTwoFactorUserVerificationToken } from '../utils/jwt';
-import * as passkeyRepo from '../services/storage-account-passkey-repo';
-import * as sessionRepo from '../services/storage-session-repo';
-import * as userRepo from '../services/storage-user-repo';
+import { passkeyRepo } from '../services/storage-account-passkey-repo';
+import { sessionRepo } from '../services/storage-session-repo';
+import { userRepo } from '../services/storage-user-repo';
 import { withoutQueryParams } from '../db/client';
 
 const MAX_ACCOUNT_PASSKEYS = 5;
@@ -119,7 +119,7 @@ async function saveChallenge(
   userId: string | null,
 ): Promise<void> {
   const now = Date.now();
-  await passkeyRepo.saveAccountPasskeyChallenge(db, {
+  await passkeyRepo(db).saveAccountPasskeyChallenge({
     challengeHash: await sha256Base64Url(challenge),
     scope,
     userId,
@@ -177,8 +177,7 @@ export async function assertAccountPasskeyCredential(
   }
 
   const challengeHash = await sha256Base64Url(payload.challenge);
-  const consumed = await passkeyRepo.consumeAccountPasskeyChallenge(
-    db,
+  const consumed = await passkeyRepo(db).consumeAccountPasskeyChallenge(
     challengeHash,
     input.scope,
     payload.userId,
@@ -188,7 +187,7 @@ export async function assertAccountPasskeyCredential(
     throw new Error('Passkey challenge has expired or was already used');
   }
 
-  const credential = await passkeyRepo.getAccountPasskeyCredentialByCredentialId(db, response.rawId);
+  const credential = await passkeyRepo(db).getAccountPasskeyCredentialByCredentialId(response.rawId);
   if (!credential) {
     throw new Error('Passkey is not registered for this server');
   }
@@ -205,7 +204,7 @@ export async function assertAccountPasskeyCredential(
     throw new Error('Passkey user handle does not match this credential');
   }
 
-  const user = await userRepo.getUserById(db, resolvedUserId);
+  const user = await userRepo(db).getUserById(resolvedUserId);
   if (!user || user.status !== 'active') {
     throw new Error('Passkey user is not available');
   }
@@ -224,8 +223,7 @@ export async function assertAccountPasskeyCredential(
     throw new Error('Passkey assertion could not be verified');
   }
 
-  await passkeyRepo.updateAccountPasskeyCounter(
-    db,
+  await passkeyRepo(db).updateAccountPasskeyCounter(
     credential.userId,
     credential.credentialId,
     verification.authenticationInfo.newCounter,
@@ -240,7 +238,7 @@ export async function handleGetAccountPasskeyCredentials(
   env: Env,
   userId: string,
 ): Promise<Response> {
-  const credentials = await passkeyRepo.listAccountPasskeyCredentialsByUserId(env.DB, userId);
+  const credentials = await passkeyRepo(env.DB).listAccountPasskeyCredentialsByUserId(userId);
   return jsonResponse({
     data: credentials.map(accountPasskeyCredentialToResponse),
     Data: credentials.map(accountPasskeyCredentialToResponse),
@@ -257,7 +255,7 @@ export async function buildTwoFactorPasskeyAssertionOptions(
   db: D1Database,
   user: User,
 ): Promise<Record<string, unknown> | null> {
-  const credentials = await passkeyRepo.listAccountPasskeyCredentialsByUserId(db, user.id, 'twoFactor');
+  const credentials = await passkeyRepo(db).listAccountPasskeyCredentialsByUserId(user.id, 'twoFactor');
   if (!credentials.length) return null;
 
   const { rpId } = getAccountPasskeyRpConfig(request, env);
@@ -283,7 +281,7 @@ export async function assertTwoFactorPasskeyCredential(
     throw new Error('Invalid passkey assertion response');
   }
 
-  const credential = await passkeyRepo.getAccountPasskeyCredentialByCredentialId(db, response.rawId);
+  const credential = await passkeyRepo(db).getAccountPasskeyCredentialByCredentialId(response.rawId);
   if (!credential || credential.userId !== user.id || credential.purpose !== 'twoFactor') {
     throw new Error('Passkey is not registered for two-step login');
   }
@@ -292,8 +290,7 @@ export async function assertTwoFactorPasskeyCredential(
   if (!challenge) {
     throw new Error('Passkey assertion challenge is missing');
   }
-  const consumed = await passkeyRepo.consumeAccountPasskeyChallenge(
-    db,
+  const consumed = await passkeyRepo(db).consumeAccountPasskeyChallenge(
     await sha256Base64Url(challenge),
     'TwoFactorAuthentication',
     user.id,
@@ -316,8 +313,7 @@ export async function assertTwoFactorPasskeyCredential(
     throw new Error('Passkey assertion could not be verified');
   }
 
-  await passkeyRepo.updateAccountPasskeyCounter(
-    db,
+  await passkeyRepo(db).updateAccountPasskeyCounter(
     credential.userId,
     credential.credentialId,
     verification.authenticationInfo.newCounter,
@@ -339,7 +335,7 @@ export async function handleGetTwoFactorWebAuthn(
     return errorResponse('User verification failed.', 400);
   }
 
-  const credentials = await passkeyRepo.listAccountPasskeyCredentialsByUserId(env.DB, userId, 'twoFactor');
+  const credentials = await passkeyRepo(env.DB).listAccountPasskeyCredentialsByUserId(userId, 'twoFactor');
   return jsonResponse({
     ...twoFactorWebAuthnResponse(credentials),
     UserVerificationToken: await createTwoFactorUserVerificationToken(env, user, 7),
@@ -358,7 +354,7 @@ export async function handleGetTwoFactorWebAuthnChallenge(
     return errorResponse('User verification failed.', 400);
   }
 
-  const credentials = await passkeyRepo.listAccountPasskeyCredentialsByUserId(env.DB, userId, 'twoFactor');
+  const credentials = await passkeyRepo(env.DB).listAccountPasskeyCredentialsByUserId(userId, 'twoFactor');
   if (credentials.length >= MAX_TWO_FACTOR_PASSKEYS) {
     return errorResponse('Maximum WebAuthn credential count reached.', 400);
   }
@@ -395,7 +391,7 @@ export async function handlePutTwoFactorWebAuthn(
     return errorResponse('User verification failed.', 400);
   }
 
-  const currentCount = await passkeyRepo.countAccountPasskeyCredentialsByUserId(env.DB, userId, 'twoFactor');
+  const currentCount = await passkeyRepo(env.DB).countAccountPasskeyCredentialsByUserId(userId, 'twoFactor');
   if (currentCount >= MAX_TWO_FACTOR_PASSKEYS) {
     return errorResponse('Maximum WebAuthn credential count reached.', 400);
   }
@@ -408,8 +404,7 @@ export async function handlePutTwoFactorWebAuthn(
   if (!challenge) {
     return errorResponse('Passkey challenge is missing', 400);
   }
-  const consumed = await passkeyRepo.consumeAccountPasskeyChallenge(
-    env.DB,
+  const consumed = await passkeyRepo(env.DB).consumeAccountPasskeyChallenge(
     await sha256Base64Url(challenge),
     'TwoFactorCreate',
     userId,
@@ -437,8 +432,7 @@ export async function handlePutTwoFactorWebAuthn(
     return errorResponse('Passkey registration could not be verified', 400);
   }
 
-  const existing = await passkeyRepo.getAccountPasskeyCredentialByCredentialId(
-    env.DB,
+  const existing = await passkeyRepo(env.DB).getAccountPasskeyCredentialByCredentialId(
     verification.registrationInfo.credential.id,
   );
   if (existing) {
@@ -449,8 +443,7 @@ export async function handlePutTwoFactorWebAuthn(
     return errorResponse('User verification failed.', 400);
   const now = new Date().toISOString();
   const transports = normalizeTransports(registrationResponse.response.transports);
-  const saved = await passkeyRepo.saveAccountPasskeyCredential(
-    env.DB,
+  const saved = await passkeyRepo(env.DB).saveAccountPasskeyCredential(
     {
       id: generateUUID(),
       userId,
@@ -473,7 +466,7 @@ export async function handlePutTwoFactorWebAuthn(
   );
   if (!saved) return errorResponse('User verification failed.', 400);
 
-  await sessionRepo.deleteRefreshTokensByUserId(env.DB, userId);
+  await sessionRepo(env.DB).deleteRefreshTokensByUserId(userId);
   AuthService.invalidateUserCache(userId);
 
   await recordUserEvent(env, request, user.id, EventType.UserUpdated2fa);
@@ -487,7 +480,7 @@ export async function handlePutTwoFactorWebAuthn(
     metadata: auditRequestMetadata(request),
   });
 
-  const credentials = await passkeyRepo.listAccountPasskeyCredentialsByUserId(env.DB, userId, 'twoFactor');
+  const credentials = await passkeyRepo(env.DB).listAccountPasskeyCredentialsByUserId(userId, 'twoFactor');
   return jsonResponse(twoFactorWebAuthnResponse(credentials, 'twoFactorWebAuthnUpdate'));
 }
 
@@ -508,7 +501,7 @@ export async function handleDeleteTwoFactorWebAuthn(
     return errorResponse('Invalid key id', 400);
   }
 
-  const credentials = await passkeyRepo.listAccountPasskeyCredentialsByUserId(env.DB, userId, 'twoFactor');
+  const credentials = await passkeyRepo(env.DB).listAccountPasskeyCredentialsByUserId(userId, 'twoFactor');
   if (credentials.length < 2) {
     return errorResponse('Unable to delete WebAuthn credential.', 400);
   }
@@ -517,9 +510,9 @@ export async function handleDeleteTwoFactorWebAuthn(
     return errorResponse('Unable to delete WebAuthn credential.', 400);
   }
 
-  const deleted = await passkeyRepo.deleteAccountPasskeyCredential(env.DB, userId, credential.id, 'twoFactor');
+  const deleted = await passkeyRepo(env.DB).deleteAccountPasskeyCredential(userId, credential.id, 'twoFactor');
   if (!deleted) return errorResponse('Unable to delete WebAuthn credential.', 400);
-  await sessionRepo.deleteRefreshTokensByUserId(env.DB, userId);
+  await sessionRepo(env.DB).deleteRefreshTokensByUserId(userId);
   AuthService.invalidateUserCache(userId);
 
   await recordUserEvent(env, request, user.id, EventType.UserUpdated2fa);
@@ -535,7 +528,7 @@ export async function handleDeleteTwoFactorWebAuthn(
 
   return jsonResponse(
     twoFactorWebAuthnResponse(
-      await passkeyRepo.listAccountPasskeyCredentialsByUserId(env.DB, userId, 'twoFactor'),
+      await passkeyRepo(env.DB).listAccountPasskeyCredentialsByUserId(userId, 'twoFactor'),
       'twoFactorWebAuthnDelete',
     ),
   );
@@ -557,7 +550,7 @@ export async function handleGetAccountPasskeyAttestationOptions(
     }
 
     stage = 'load_existing_credentials';
-    const credentials = await passkeyRepo.listAccountPasskeyCredentialsByUserId(env.DB, userId);
+    const credentials = await passkeyRepo(env.DB).listAccountPasskeyCredentialsByUserId(userId);
     if (credentials.length >= MAX_ACCOUNT_PASSKEYS) {
       return errorResponse('Maximum passkey count reached', 400);
     }
@@ -632,7 +625,7 @@ export async function handleGetAccountPasskeyUpdateAssertionOptions(
     return errorResponse('Master password verification failed', 400);
   }
 
-  let credentials = await passkeyRepo.listAccountPasskeyCredentialsByUserId(env.DB, userId);
+  let credentials = await passkeyRepo(env.DB).listAccountPasskeyCredentialsByUserId(userId);
   const requestedId = String(body.credentialId || body.id || '').trim();
   if (requestedId) {
     credentials = credentials.filter((credential) => credential.id === requestedId);
@@ -676,8 +669,7 @@ export async function handleCreateAccountPasskeyCredential(
   }
 
   const challengeHash = await sha256Base64Url(payload.challenge);
-  const consumed = await passkeyRepo.consumeAccountPasskeyChallenge(
-    env.DB,
+  const consumed = await passkeyRepo(env.DB).consumeAccountPasskeyChallenge(
     challengeHash,
     'CreateCredential',
     userId,
@@ -687,7 +679,7 @@ export async function handleCreateAccountPasskeyCredential(
     return errorResponse('Passkey challenge has expired or was already used', 400);
   }
 
-  const currentCount = await passkeyRepo.countAccountPasskeyCredentialsByUserId(env.DB, userId);
+  const currentCount = await passkeyRepo(env.DB).countAccountPasskeyCredentialsByUserId(userId);
   if (currentCount >= MAX_ACCOUNT_PASSKEYS) {
     return errorResponse('Maximum passkey count reached', 400);
   }
@@ -721,8 +713,7 @@ export async function handleCreateAccountPasskeyCredential(
     return errorResponse('Passkey registration could not be verified', 400);
   }
 
-  const existing = await passkeyRepo.getAccountPasskeyCredentialByCredentialId(
-    env.DB,
+  const existing = await passkeyRepo(env.DB).getAccountPasskeyCredentialByCredentialId(
     verification.registrationInfo.credential.id,
   );
   if (existing) {
@@ -749,7 +740,7 @@ export async function handleCreateAccountPasskeyCredential(
     updatedAt: now,
   };
 
-  await passkeyRepo.saveAccountPasskeyCredential(env.DB, credential);
+  await passkeyRepo(env.DB).saveAccountPasskeyCredential(credential);
   await writeAuditEvent(env.DB, {
     actorUserId: userId,
     action: 'account.passkey.create',
@@ -790,8 +781,7 @@ export async function handleUpdateAccountPasskeyEncryption(
     return errorResponse(error instanceof Error ? error.message : 'Passkey assertion failed', 400);
   }
 
-  const updated = await passkeyRepo.updateAccountPasskeyEncryption(
-    env.DB,
+  const updated = await passkeyRepo(env.DB).updateAccountPasskeyEncryption(
     userId,
     assertion.credential.credentialId,
     prfKeySet.data.encryptedUserKey,
@@ -825,7 +815,7 @@ export async function handleDeleteAccountPasskeyCredential(
     return errorResponse('Master password verification failed', 400);
   }
 
-  const deleted = await passkeyRepo.deleteAccountPasskeyCredential(env.DB, userId, credentialId);
+  const deleted = await passkeyRepo(env.DB).deleteAccountPasskeyCredential(userId, credentialId);
   if (!deleted) return errorResponse('Passkey not found', 404);
 
   await writeAuditEvent(env.DB, {

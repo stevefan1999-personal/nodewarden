@@ -3,7 +3,7 @@ import test from 'node:test';
 
 import { createTestEnv, seedUser } from '../test/support/env';
 import type { AccountPasskeyCredential } from '../types';
-import { saveAccountPasskeyCredential } from './storage-account-passkey-repo';
+import { passkeyRepo } from './storage-account-passkey-repo';
 
 test('a stamp-guarded passkey saves only at the current stamp, and a two-factor one only beside a recovery code', async () => {
   const env = await createTestEnv();
@@ -14,8 +14,7 @@ test('a stamp-guarded passkey saves only at the current stamp, and a two-factor 
   ] as const) {
     const user = await seedUser(env, { totpRecoveryCode });
     const save = (purpose: AccountPasskeyCredential['purpose'], securityStamp: string) =>
-      saveAccountPasskeyCredential(
-        env.DB,
+      passkeyRepo(env.DB).saveAccountPasskeyCredential(
         {
           id: crypto.randomUUID(),
           userId: user.id,

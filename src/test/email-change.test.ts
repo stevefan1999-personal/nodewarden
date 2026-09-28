@@ -19,9 +19,9 @@ import {
   MAILABLE_DOMAIN,
   seedUser,
 } from './support/env';
-import * as revisionRepo from '../services/storage-revision-repo';
-import * as sessionRepo from '../services/storage-session-repo';
-import * as userRepo from '../services/storage-user-repo';
+import { revisionRepo } from '../services/storage-revision-repo';
+import { sessionRepo } from '../services/storage-session-repo';
+import { userRepo } from '../services/storage-user-repo';
 
 const OLD_EMAIL = `old@${MAILABLE_DOMAIN}`;
 const NEW_EMAIL = `new@${MAILABLE_DOMAIN}`;
@@ -76,7 +76,7 @@ async function credentialPassword(env: Env, userId: string) {
 }
 
 async function assertOriginal(f: Awaited<ReturnType<typeof setup>>) {
-  const user = (await userRepo.getUserById(f.env.DB, f.user.id))!;
+  const user = (await userRepo(f.env.DB).getUserById(f.user.id))!;
   assert.equal(user.email, f.user.email);
   assert.equal(user.masterPasswordHash, f.user.masterPasswordHash);
   assert.equal(user.key, f.user.key);
@@ -124,7 +124,7 @@ test('malformed key/KDF changes do not burn the code, which is bound to the norm
   assert.equal(wrongAddress.status, 400);
   assert.equal(((await wrongAddress.json()) as { error: string }).error, 'Invalid token.');
   assert.equal((await f.change({ newEmail: ` ${NEW_EMAIL.toUpperCase()} ` })).status, 200);
-  assert.equal((await userRepo.getUserById(f.env.DB, f.user.id))?.email, NEW_EMAIL);
+  assert.equal((await userRepo(f.env.DB).getUserById(f.user.id))?.email, NEW_EMAIL);
   await drainWaitUntil();
 });
 
@@ -133,13 +133,13 @@ test('legacy old-email password proof becomes a new-email hash/key and revokes o
   const f = await setup({ masterPasswordHash: legacy, emailVerified: false });
   // Restored users may have no Better Auth credential row; the same batch must create it.
   await getOrm(f.env.DB).delete(account).where(eq(account.userId, f.user.id));
-  await sessionRepo.saveRefreshToken(f.env.DB, 'old-refresh', f.user.id);
+  await sessionRepo(f.env.DB).saveRefreshToken('old-refresh', f.user.id);
   const oldJwt = await new AuthService(f.env).generateAccessToken(f.user);
   assert.equal((await f.requestCode()).status, 200);
   const changed = await f.change();
   assert.equal(changed.status, 200);
   assert.equal(await changed.text(), '');
-  const updated = (await userRepo.getUserById(f.env.DB, f.user.id))!;
+  const updated = (await userRepo(f.env.DB).getUserById(f.user.id))!;
   assert.equal(updated.email, NEW_EMAIL);
   assert.equal(updated.emailVerified, true);
   assert.equal(updated.key, NEW_KEY);
@@ -147,7 +147,7 @@ test('legacy old-email password proof becomes a new-email hash/key and revokes o
   assert.notEqual(updated.securityStamp, f.user.securityStamp);
   assert.equal(await verifyPassword(NEW_HASH, updated.masterPasswordHash, NEW_EMAIL), true);
   assert.equal(await credentialPassword(f.env, f.user.id), updated.masterPasswordHash);
-  assert.equal(await sessionRepo.getRefreshTokenRecord(f.env.DB, 'old-refresh'), null);
+  assert.equal(await sessionRepo(f.env.DB).getRefreshTokenRecord('old-refresh'), null);
   assert.equal(
     (await authedFetch(f.env, { path: '/api/accounts/profile', headers: { Authorization: `Bearer ${oldJwt}` } }))
       .status,
@@ -191,7 +191,7 @@ test('legacy old-email password proof becomes a new-email hash/key and revokes o
   });
   await separate.requestCode();
   assert.equal((await separate.change()).status, 200);
-  const preserved = (await userRepo.getUserById(separate.env.DB, separate.user.id))!;
+  const preserved = (await userRepo(separate.env.DB).getUserById(separate.user.id))!;
   for (const field of ['twoFactorEmail', 'apiKey', 'privateKey', 'publicKey', 'kdfType', 'kdfIterations'] as const)
     assert.equal(preserved[field], separate.user[field]);
   await drainWaitUntil();
@@ -222,8 +222,8 @@ test('duplicate-email and audit failures roll back the entire account mutation; 
   for (const kind of ['duplicate', 'audit', 'stamp']) {
     const f = await setup();
     await f.requestCode();
-    await sessionRepo.saveRefreshToken(f.env.DB, 'existing-session', f.user.id);
-    const revision = await revisionRepo.getRevisionDate(f.env.DB, f.user.id);
+    await sessionRepo(f.env.DB).saveRefreshToken('existing-session', f.user.id);
+    const revision = await revisionRepo(f.env.DB).getRevisionDate(f.user.id);
     if (kind === 'audit') await abortWrites(f.env, { table: auditLogs, event: 'INSERT' }, 'forced email audit failure');
     const batch = f.env.DB.batch.bind(f.env.DB);
     f.env.DB.batch = async (statements) => {
@@ -237,13 +237,13 @@ test('duplicate-email and audit failures roll back the entire account mutation; 
     if (kind === 'duplicate')
       assert.equal(((await response.json()) as { error: string }).error, 'Email already in use.');
     if (kind === 'stamp') {
-      const user = (await userRepo.getUserById(f.env.DB, f.user.id))!;
+      const user = (await userRepo(f.env.DB).getUserById(f.user.id))!;
       assert.equal(user.securityStamp, 'newer-stamp');
       assert.equal(user.email, OLD_EMAIL);
       assert.equal(user.masterPasswordHash, f.user.masterPasswordHash);
     } else await assertOriginal(f);
-    assert.ok(await sessionRepo.getRefreshTokenRecord(f.env.DB, 'existing-session'));
-    assert.equal(await revisionRepo.getRevisionDate(f.env.DB, f.user.id), revision);
+    assert.ok(await sessionRepo(f.env.DB).getRefreshTokenRecord('existing-session'));
+    assert.equal(await revisionRepo(f.env.DB).getRevisionDate(f.user.id), revision);
     assert.equal(await getOrm(f.env.DB).$count(auditLogs), 0);
     await drainWaitUntil();
     assert.equal(f.mail.sent.filter((message) => String(message.subject).includes('email address changed')).length, 0);
@@ -254,11 +254,11 @@ test('verified changes onto listed addresses promote, while the last listed admi
   const promotion = await setup({}, { ADMIN_EMAILS: NEW_EMAIL });
   await promotion.requestCode();
   assert.equal((await promotion.change()).status, 200);
-  assert.equal((await userRepo.getUserById(promotion.env.DB, promotion.user.id))?.role, 'admin');
+  assert.equal((await userRepo(promotion.env.DB).getUserById(promotion.user.id))?.role, 'admin');
   const retention = await setup({ role: 'admin' }, { ADMIN_EMAILS: OLD_EMAIL });
   await retention.requestCode();
   assert.equal((await retention.change()).status, 200);
-  assert.equal((await userRepo.getUserById(retention.env.DB, retention.user.id))?.role, 'admin');
+  assert.equal((await userRepo(retention.env.DB).getUserById(retention.user.id))?.role, 'admin');
   await drainWaitUntil();
 });
 
@@ -286,11 +286,11 @@ test('an old password-change mirror cannot overwrite a later atomic email change
   });
   assert.equal(interrupted, true);
   assert.equal(delayed.status, 400);
-  const updated = (await userRepo.getUserById(f.env.DB, f.user.id))!;
+  const updated = (await userRepo(f.env.DB).getUserById(f.user.id))!;
   assert.equal(updated.email, NEW_EMAIL);
   assert.equal(await verifyPassword(NEW_HASH, updated.masterPasswordHash), true);
   assert.equal(await credentialPassword(f.env, f.user.id), updated.masterPasswordHash);
   assert.ok(newRefresh);
-  assert.ok(await sessionRepo.getRefreshTokenRecord(f.env.DB, newRefresh));
+  assert.ok(await sessionRepo(f.env.DB).getRefreshTokenRecord(newRefresh));
   await drainWaitUntil();
 });

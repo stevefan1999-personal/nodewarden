@@ -27,10 +27,10 @@ import {
   seedUser,
   signInToAdminPortal,
 } from './support/env';
-import * as sessionRepo from '../services/storage-session-repo';
-import * as passkeyRepo from '../services/storage-account-passkey-repo';
-import * as deviceRepo from '../services/storage-device-repo';
-import * as userRepo from '../services/storage-user-repo';
+import { sessionRepo } from '../services/storage-session-repo';
+import { passkeyRepo } from '../services/storage-account-passkey-repo';
+import { deviceRepo } from '../services/storage-device-repo';
+import { userRepo } from '../services/storage-user-repo';
 
 const ADMIN = 'portal@x.io';
 const TOTP = 'JBSWY3DPEHPK3PXP';
@@ -66,8 +66,8 @@ test('portal reset clears every factor and revocation token atomically, keeps lo
   });
   const loginPasskey = await passkey(env, user, 'login');
   await passkey(env, user, 'twoFactor');
-  await deviceRepo.saveTrustedTwoFactorDeviceToken(env.DB, 'old-remember', user.id, 'device', Date.now() + 60000);
-  await sessionRepo.saveRefreshToken(env.DB, 'old-session', user.id);
+  await deviceRepo(env.DB).saveTrustedTwoFactorDeviceToken('old-remember', user.id, 'device', Date.now() + 60000);
+  await sessionRepo(env.DB).saveRefreshToken('old-session', user.id);
   const oldJwt = await new AuthService(env).generateAccessToken(user);
   const view = await portalFetch(env, { path: `/admin/users/view/${user.id}`, cookie: auth.cookie });
   assert.match(await view.text(), /Authenticator, Email, YubiKey, WebAuthn/);
@@ -79,7 +79,7 @@ test('portal reset clears every factor and revocation token atomically, keeps lo
   });
   assert.equal(response.status, 303);
   assert.match(response.headers.get('Location')!, /m=two-factor-reset/);
-  const updated = (await userRepo.getUserById(env.DB, user.id))!;
+  const updated = (await userRepo(env.DB).getUserById(user.id))!;
   assert.equal(updated.totpSecret, null);
   assert.equal(updated.totpRecoveryCode, null);
   assert.equal(updated.twoFactorEmail, null);
@@ -89,7 +89,7 @@ test('portal reset clears every factor and revocation token atomically, keeps lo
     assert.equal(await getOrm(env.DB).$count(table, eq(table.userId, user.id)), 0);
   }
   assert.deepEqual(
-    (await passkeyRepo.listAccountPasskeyCredentialsByUserId(env.DB, user.id)).map((key) => key.id),
+    (await passkeyRepo(env.DB).listAccountPasskeyCredentialsByUserId(user.id)).map((key) => key.id),
     [loginPasskey],
   );
   assert.equal(
@@ -108,7 +108,7 @@ test('portal reset clears every factor and revocation token atomically, keeps lo
   assert.equal(audit?.actorUserId, null);
   assert.equal(JSON.parse(audit!.metadata!).adminEmail, ADMIN);
 
-  await userRepo.saveUser(env.DB, { ...updated, totpSecret: TOTP }, ['totpSecret']);
+  await userRepo(env.DB).saveUser({ ...updated, totpSecret: TOTP }, ['totpSecret']);
   const remembered = await authedFetch(env, {
     method: 'POST',
     path: '/identity/connect/token',
@@ -144,7 +144,7 @@ test('nothing-to-reset leaves account, audit, budgets and mail untouched', async
   assert.equal(response.status, 303);
   assert.match(response.headers.get('Location')!, /m=nothing-to-reset/);
   assert.equal(batch.mock.callCount(), 0);
-  assert.equal((await userRepo.getUserById(env.DB, user.id))?.securityStamp, user.securityStamp);
+  assert.equal((await userRepo(env.DB).getUserById(user.id))?.securityStamp, user.securityStamp);
   assert.equal(await getOrm(env.DB).$count(auditLogs), 0);
   assert.equal(await getOrm(env.DB).$count(rateLimitBuckets), before);
   await drainWaitUntil();
@@ -173,7 +173,7 @@ test('reset refuses missing CSRF, wrong email, stale step-up and the 21st sensit
   }
   await getOrm(env.DB).update(users).set({ totpSecret: TOTP }).where(eq(users.id, user.id));
   assert.equal((await post({ csrf: auth.csrf, confirmation: user.email })).status, 429);
-  assert.equal((await userRepo.getUserById(env.DB, user.id))?.totpSecret, TOTP);
+  assert.equal((await userRepo(env.DB).getUserById(user.id))?.totpSecret, TOTP);
   await drainWaitUntil();
 });
 
@@ -190,7 +190,7 @@ test('an audit failure rolls back a reset before any notification', async () => 
     form: { csrf: auth.csrf, confirmation: user.email },
   });
   assert.equal(response.status, 500);
-  const updated = (await userRepo.getUserById(env.DB, user.id))!;
+  const updated = (await userRepo(env.DB).getUserById(user.id))!;
   assert.equal(updated.totpSecret, TOTP);
   assert.equal(updated.securityStamp, user.securityStamp);
   await drainWaitUntil();

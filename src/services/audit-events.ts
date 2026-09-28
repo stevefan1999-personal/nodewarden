@@ -3,8 +3,8 @@ import { getOrm, withoutQueryParams } from '../db/client';
 import { auditLogs } from '../db/schema';
 import { SINGLE_ROW, boundRow } from '../db/sql';
 import { generateUUID } from '../utils/uuid';
-import * as adminRepo from './storage-admin-repo';
-import * as configRepo from './storage-config-repo';
+import { adminRepo } from './storage-admin-repo';
+import { configRepo } from './storage-config-repo';
 
 export type AuditLogCategory = 'auth' | 'security' | 'device' | 'data' | 'system';
 export type AuditLogLevel = 'info' | 'warn' | 'error' | 'security';
@@ -131,7 +131,7 @@ export function auditRequestMetadata(request: Request): Record<string, unknown> 
 }
 
 export async function getAuditLogSettings(db: D1Database): Promise<AuditLogSettings> {
-  const raw = await configRepo.getConfigValue(db, AUDIT_LOG_SETTINGS_KEY);
+  const raw = await configRepo(db).getConfigValue(AUDIT_LOG_SETTINGS_KEY);
   if (!raw) return { ...DEFAULT_AUDIT_LOG_SETTINGS };
   try {
     return normalizeAuditLogSettings(JSON.parse(raw));
@@ -142,7 +142,7 @@ export async function getAuditLogSettings(db: D1Database): Promise<AuditLogSetti
 
 export async function saveAuditLogSettings(db: D1Database, settings: AuditLogSettings): Promise<AuditLogSettings> {
   const normalized = normalizeAuditLogSettings(settings);
-  await configRepo.setConfigValue(db, AUDIT_LOG_SETTINGS_KEY, JSON.stringify(normalized));
+  await configRepo(db).setConfigValue(AUDIT_LOG_SETTINGS_KEY, JSON.stringify(normalized));
   await applyAuditLogRetention(db, normalized);
   return normalized;
 }
@@ -151,10 +151,10 @@ export async function applyAuditLogRetention(db: D1Database, settings?: AuditLog
   const current = settings || (await getAuditLogSettings(db));
   if (current.retentionDays) {
     const before = new Date(Date.now() - current.retentionDays * 24 * 60 * 60 * 1000).toISOString();
-    await adminRepo.pruneAuditLogs(db, before);
+    await adminRepo(db).pruneAuditLogs(before);
   }
   if (current.maxEntries) {
-    await adminRepo.pruneAuditLogsToMax(db, current.maxEntries);
+    await adminRepo(db).pruneAuditLogsToMax(current.maxEntries);
   }
 }
 

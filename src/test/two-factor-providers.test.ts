@@ -10,10 +10,10 @@ import { twoFactorClearStatements } from '../services/two-factor-providers';
 import type { Env, User } from '../types';
 import { authedFetch, createTestEnv, seedUser } from './support/env';
 import { seedMember, seedMembership } from './support/sm';
-import * as passkeyRepo from '../services/storage-account-passkey-repo';
-import * as deviceRepo from '../services/storage-device-repo';
-import * as sessionRepo from '../services/storage-session-repo';
-import * as userRepo from '../services/storage-user-repo';
+import { passkeyRepo } from '../services/storage-account-passkey-repo';
+import { deviceRepo } from '../services/storage-device-repo';
+import { sessionRepo } from '../services/storage-session-repo';
+import { userRepo } from '../services/storage-user-repo';
 
 const { createOwnedOrganization } = await import('../handlers/organizations');
 
@@ -100,9 +100,8 @@ for (const loginRecovery of [false, true]) {
     });
     const loginPasskey = await seedPasskey(env, user, 'login');
     await seedPasskey(env, user, 'twoFactor');
-    await sessionRepo.saveRefreshToken(env.DB, 'old-session', user.id);
-    await deviceRepo.saveTrustedTwoFactorDeviceToken(
-      env.DB,
+    await sessionRepo(env.DB).saveRefreshToken('old-session', user.id);
+    await deviceRepo(env.DB).saveTrustedTwoFactorDeviceToken(
       'remember-before-recovery',
       user.id,
       'device',
@@ -122,7 +121,7 @@ for (const loginRecovery of [false, true]) {
         : { email: user.email, masterPasswordHash: PASSWORD, recoveryCode: RECOVERY },
     });
     assert.equal(response.status, 200);
-    const updated = (await userRepo.getUserById(env.DB, user.id))!;
+    const updated = (await userRepo(env.DB).getUserById(user.id))!;
     assert.equal(updated.totpSecret, null);
     assert.equal(updated.yubikeyKey1, null);
     assert.notEqual(updated.totpRecoveryCode, RECOVERY);
@@ -131,14 +130,14 @@ for (const loginRecovery of [false, true]) {
       await getOrm(env.DB).$count(trustedTwoFactorDeviceTokens, eq(trustedTwoFactorDeviceTokens.userId, user.id)),
       0,
     );
-    assert.equal(await sessionRepo.getRefreshTokenUserId(env.DB, 'old-session'), null);
+    assert.equal(await sessionRepo(env.DB).getRefreshTokenUserId('old-session'), null);
     assert.equal(await getOrm(env.DB).$count(session, eq(session.userId, user.id)), loginRecovery ? 1 : 0);
     assert.deepEqual(
-      (await passkeyRepo.listAccountPasskeyCredentialsByUserId(env.DB, user.id)).map((key) => key.id),
+      (await passkeyRepo(env.DB).listAccountPasskeyCredentialsByUserId(user.id)).map((key) => key.id),
       [loginPasskey],
     );
     // Enrolling a new factor must not revive a remember token issued before recovery.
-    await userRepo.saveUser(env.DB, { ...updated, totpSecret: TOTP }, ['totpSecret']);
+    await userRepo(env.DB).saveUser({ ...updated, totpSecret: TOTP }, ['totpSecret']);
     const remembered = await authedFetch(env, {
       method: 'POST',
       path: '/identity/connect/token',
@@ -168,7 +167,7 @@ test('a failed clear batch leaves credentials and security stamp intact', async 
     ]),
     /no such table: missing_table/,
   );
-  assert.equal((await userRepo.getUserById(env.DB, user.id))?.securityStamp, user.securityStamp);
+  assert.equal((await userRepo(env.DB).getUserById(user.id))?.securityStamp, user.securityStamp);
 });
 
 test('disabling the authenticator also deletes its Better Auth secret', async () => {

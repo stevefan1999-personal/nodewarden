@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { createAuditLog, listAuditLogs, type AuditLogListOptions } from '../services/storage-admin-repo';
+import { type AuditLogListOptions, adminRepo } from '../services/storage-admin-repo';
 import { authedFetch, createTestEnv, seedUser } from './support/env';
 
 test('non-numeric audit log paging falls back to the default page instead of NaN', async () => {
@@ -23,7 +23,7 @@ test('audit log filters take the action prefix literally, bound the time range a
     createdAt: string,
     fields: { actorUserId?: string; targetType?: string; targetId?: string } = {},
   ) =>
-    createAuditLog(env.DB, {
+    adminRepo(env.DB).createAuditLog({
       id,
       action,
       createdAt,
@@ -38,7 +38,7 @@ test('audit log filters take the action prefix literally, bound the time range a
   await entry('wildcard', 'userXlogin', '2024-06-01T00:00:00.000Z', { targetType: 'user', targetId: target.id });
   await entry('cipher', 'cipher.edit', '2025-01-01T00:00:00.000Z', { targetType: 'cipher', targetId: 'CIPHER-ID' });
   const ids = async (filters: Partial<AuditLogListOptions>) =>
-    (await listAuditLogs(env.DB, { limit: 10, offset: 0, ...filters })).logs.map((log) => log.id);
+    (await adminRepo(env.DB).listAuditLogs({ limit: 10, offset: 0, ...filters })).logs.map((log) => log.id);
 
   assert.deepEqual(await ids({ actionPrefix: 'user_' }), ['underscore']);
   assert.deepEqual(await ids({ from: '2024-06-01T00:00:00.000Z', to: '2024-06-01T00:00:00.000Z' }), ['wildcard']);

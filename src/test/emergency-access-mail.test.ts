@@ -2,8 +2,11 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { LIMITS } from '../config/limits';
-import * as emergencyRepo from '../services/storage-emergency-repo';
-import { EmergencyAccessStatus as Status } from '../services/storage-emergency-repo';
+import {
+  emergencyRepo,
+  type EmergencyAccessRecord,
+  EmergencyAccessStatus as Status,
+} from '../services/storage-emergency-repo';
 import type { Env, User } from '../types';
 import { createEmergencyAccessInviteToken, createRegisterVerifyToken, signHs256Jwt } from '../utils/jwt';
 import {
@@ -16,7 +19,7 @@ import {
   seedUser,
   type SentEmail,
 } from './support/env';
-import * as userRepo from '../services/storage-user-repo';
+import { userRepo } from '../services/storage-user-repo';
 
 const { approveExpiredEmergencyAccess, remindPendingEmergencyAccess } = await import('../handlers/emergency-access');
 
@@ -64,7 +67,7 @@ function inviteParams(message: SentEmail): URLSearchParams {
 
 async function invited(f: Awaited<ReturnType<typeof setup>>) {
   assert.equal((await invite(f.env, f.grantor, f.grantee.email)).status, 200);
-  const record = await emergencyRepo.findInvite(f.env.DB, f.grantor.id, f.grantee.email);
+  const record = await emergencyRepo(f.env.DB).findInvite(f.grantor.id, f.grantee.email);
   assert.ok(record);
   return record;
 }
@@ -100,7 +103,7 @@ test('EA invite rejects invalid email, failed delivery and misconfiguration with
   assert.doesNotMatch(await failed.text(), new RegExp(`${f.grantee.email}|E_RECIPIENT`));
   f.env.EMAIL_FROM = 'invalid';
   assert.equal((await invite(f.env, f.grantor, f.grantee.email)).status, 503);
-  assert.deepEqual(await emergencyRepo.listByGrantor(f.env.DB, f.grantor.id), []);
+  assert.deepEqual(await emergencyRepo(f.env.DB).listByGrantor(f.grantor.id), []);
 });
 
 test('EA invitations spend one grantor budget across recipients', async () => {
@@ -111,7 +114,7 @@ test('EA invitations spend one grantor budget across recipients', async () => {
   const blocked = await invite(f.env, f.grantor, f.grantee.email);
   assert.equal(blocked.status, 429);
   assert.ok(Number(blocked.headers.get('Retry-After')) > 0);
-  assert.equal(await emergencyRepo.findInvite(f.env.DB, f.grantor.id, f.grantee.email), null);
+  assert.equal(await emergencyRepo(f.env.DB).findInvite(f.grantor.id, f.grantee.email), null);
 });
 
 test('EA accept requires the unexpired dedicated token bound to this record and email', async () => {
@@ -134,11 +137,11 @@ test('EA accept requires the unexpired dedicated token bound to this record and 
   ];
   for (const token of invalid) {
     assert.equal((await action(f.env, f.grantee, record.id, 'accept', { token })).status, 400);
-    assert.equal((await emergencyRepo.getEmergencyAccess(f.env.DB, record.id))?.status, Status.Invited);
+    assert.equal((await emergencyRepo(f.env.DB).getEmergencyAccess(record.id))?.status, Status.Invited);
   }
   const token = inviteParams(f.sent[0]).get('token');
   assert.equal((await action(f.env, f.grantee, record.id, 'accept', { token })).status, 200);
-  assert.equal((await emergencyRepo.getEmergencyAccess(f.env.DB, record.id))?.status, Status.Accepted);
+  assert.equal((await emergencyRepo(f.env.DB).getEmergencyAccess(record.id))?.status, Status.Accepted);
   assert.equal((await action(f.env, f.grantee, record.id, 'accept', { token })).status, 400);
 });
 
@@ -162,8 +165,8 @@ test('EA finish-signup still needs open registration and leaves the invitation p
   assert.equal((await finish()).status, 403);
   f.env.ALLOW_OPEN_REGISTRATION = '1';
   assert.equal((await finish()).status, 200);
-  assert.equal((await emergencyRepo.getEmergencyAccess(f.env.DB, id))?.status, Status.Invited);
-  const user = await userRepo.getUser(f.env.DB, email);
+  assert.equal((await emergencyRepo(f.env.DB).getEmergencyAccess(id))?.status, Status.Invited);
+  const user = await userRepo(f.env.DB).getUser(email);
   assert.ok(user);
   assert.equal((await action(f.env, user, id, 'accept', { token })).status, 200);
 });
@@ -172,14 +175,14 @@ test('EA no-mail or no-vault-origin fallback still auto-accepts existing users',
   for (const overrides of [{ EMAIL: undefined }, { WEB_VAULT_ORIGINS: undefined }]) {
     const f = await setup(overrides);
     assert.equal((await invite(f.env, f.grantor, f.grantee.email)).status, 200);
-    assert.equal((await emergencyRepo.findInvite(f.env.DB, f.grantor.id, f.grantee.email))?.status, Status.Accepted);
+    assert.equal((await emergencyRepo(f.env.DB).findInvite(f.grantor.id, f.grantee.email))?.status, Status.Accepted);
     assert.equal(f.sent.length, 0);
   }
 });
 
 test('EA transitions mail each affected party once and sanitize names with an email fallback', async () => {
   const f = await setup();
-  await userRepo.saveUser(f.env.DB, { ...f.grantee, name: null });
+  await userRepo(f.env.DB).saveUser({ ...f.grantee, name: null });
   const record = await invited(f);
   const token = inviteParams(f.sent[0]).get('token');
   f.sent.length = 0;
@@ -220,7 +223,7 @@ test('EA transitions mail each affected party once and sanitize names with an em
 
 async function confirmed(f: Awaited<ReturnType<typeof setup>>, waitTimeDays = 7) {
   const now = new Date().toISOString();
-  const record: emergencyRepo.EmergencyAccessRecord = {
+  const record: EmergencyAccessRecord = {
     id: crypto.randomUUID(),
     grantorId: f.grantor.id,
     granteeId: f.grantee.id,
@@ -234,7 +237,7 @@ async function confirmed(f: Awaited<ReturnType<typeof setup>>, waitTimeDays = 7)
     createdAt: now,
     updatedAt: now,
   };
-  await emergencyRepo.saveEmergencyAccess(f.env.DB, record);
+  await emergencyRepo(f.env.DB).saveEmergencyAccess(record);
   return record;
 }
 
@@ -255,13 +258,13 @@ test('EA wait-zero initiation sends Initiated to the grantor and Approved to the
 test('EA timeout approval mails TimedOut to the grantor and Approved to the grantee', async () => {
   const f = await setup();
   const record = await confirmed(f);
-  await emergencyRepo.saveEmergencyAccess(f.env.DB, {
+  await emergencyRepo(f.env.DB).saveEmergencyAccess({
     ...record,
     status: Status.RecoveryInitiated,
     recoveryInitiatedAt: new Date(Date.now() - 8 * DAY).toISOString(),
   });
   await approveExpiredEmergencyAccess(f.env);
-  assert.equal((await emergencyRepo.getEmergencyAccess(f.env.DB, record.id))?.status, Status.RecoveryApproved);
+  assert.equal((await emergencyRepo(f.env.DB).getEmergencyAccess(record.id))?.status, Status.RecoveryApproved);
   assert.deepEqual(
     f.sent.map(({ to, subject }) => [to, subject]),
     [
@@ -278,7 +281,7 @@ test('EA notice delivery failure does not roll back a valid transition', async (
   const record = await confirmed(f);
   f.env.EMAIL = failingEmail('E_RECIPIENT_SUPPRESSED');
   assert.equal((await action(f.env, f.grantee, record.id, 'initiate')).status, 200);
-  assert.equal((await emergencyRepo.getEmergencyAccess(f.env.DB, record.id))?.status, Status.RecoveryInitiated);
+  assert.equal((await emergencyRepo(f.env.DB).getEmergencyAccess(record.id))?.status, Status.RecoveryInitiated);
 });
 
 test('EA reminder sends once on the final day, even with overlapping cron runs', async (t) => {
@@ -286,7 +289,7 @@ test('EA reminder sends once on the final day, even with overlapping cron runs',
   const record = await confirmed(f);
   const started = Date.now();
   t.mock.timers.enable({ apis: ['Date'], now: started });
-  await emergencyRepo.saveEmergencyAccess(f.env.DB, {
+  await emergencyRepo(f.env.DB).saveEmergencyAccess({
     ...record,
     status: Status.RecoveryInitiated,
     recoveryInitiatedAt: new Date(started).toISOString(),
@@ -319,7 +322,7 @@ test('EA reminders skip other statuses, missing notification dates and newly not
     [Status.RecoveryInitiated, null],
     [Status.RecoveryInitiated, new Date().toISOString()],
   ] as const) {
-    await emergencyRepo.saveEmergencyAccess(f.env.DB, {
+    await emergencyRepo(f.env.DB).saveEmergencyAccess({
       ...record,
       status,
       recoveryInitiatedAt: started,
@@ -339,21 +342,21 @@ test('EA reminder claims need the listed recovery start and notification date, a
     recoveryInitiatedAt: started,
     lastNotificationAt: started,
   };
-  await emergencyRepo.saveEmergencyAccess(f.env.DB, initiated);
+  await emergencyRepo(f.env.DB).saveEmergencyAccess(initiated);
   const now = new Date().toISOString();
   assert.equal(
-    await emergencyRepo.claimRecoveryNotification(f.env.DB, { ...initiated, recoveryInitiatedAt: now }, now),
+    await emergencyRepo(f.env.DB).claimRecoveryNotification({ ...initiated, recoveryInitiatedAt: now }, now),
     false,
   );
-  assert.equal(await emergencyRepo.claimRecoveryNotification(f.env.DB, initiated, now), true);
+  assert.equal(await emergencyRepo(f.env.DB).claimRecoveryNotification(initiated, now), true);
   const unnotified = { ...initiated, lastNotificationAt: null };
-  await emergencyRepo.saveEmergencyAccess(f.env.DB, unnotified);
-  assert.equal(await emergencyRepo.claimRecoveryNotification(f.env.DB, unnotified, now), false);
+  await emergencyRepo(f.env.DB).saveEmergencyAccess(unnotified);
+  assert.equal(await emergencyRepo(f.env.DB).claimRecoveryNotification(unnotified, now), false);
 });
 
 test('EA invite lookup ignores the ASCII case of a stored address, as SQL lower() folds it', async () => {
   const f = await setup();
   const record = { ...(await confirmed(f)), email: 'Grantee.ÄÖ@Example.TEST' };
-  await emergencyRepo.saveEmergencyAccess(f.env.DB, record);
-  assert.equal((await emergencyRepo.findInvite(f.env.DB, f.grantor.id, 'GRANTEE.ÄÖ@EXAMPLE.TEST'))?.id, record.id);
+  await emergencyRepo(f.env.DB).saveEmergencyAccess(record);
+  assert.equal((await emergencyRepo(f.env.DB).findInvite(f.grantor.id, 'GRANTEE.ÄÖ@EXAMPLE.TEST'))?.id, record.id);
 });

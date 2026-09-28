@@ -33,12 +33,12 @@ import { canAccessSecretsManager } from './org-authz';
 import { MembershipStatus, MembershipType, publicMembershipStatus } from './org-types';
 import { RateLimitService, getClientIdentifier } from './ratelimit';
 import { isOpenRegistrationEnabled } from './register-payload';
-import * as passkeyRepo from './storage-account-passkey-repo';
-import { listAuditLogs } from './storage-admin-repo';
-import { countPersonalCiphers } from './storage-cipher-repo';
-import * as configRepo from './storage-config-repo';
-import * as orgRepo from './storage-org-repo';
-import * as userRepo from './storage-user-repo';
+import { passkeyRepo } from './storage-account-passkey-repo';
+import { adminRepo } from './storage-admin-repo';
+import { cipherRepo } from './storage-cipher-repo';
+import { configRepo } from './storage-config-repo';
+import { orgRepo } from './storage-org-repo';
+import { userRepo } from './storage-user-repo';
 import { twoFactorClearStatements, twoFactorProviders } from './two-factor-providers';
 import { markEmailVerified } from './vault-admin-role';
 import { getYubicoCredentials } from './yubico-config';
@@ -181,11 +181,15 @@ export function adminPortal(env: Env, request: Request): AdminPortal {
     async dashboard() {
       const mail = readMailConfig(env);
       const [userCount, organizationCount, events, pushId, pushKey, yubico] = await Promise.all([
-        userRepo.getUserCount(env.DB),
+        userRepo(env.DB).getUserCount(),
         getOrm(env.DB).$count(organizations),
-        listAuditLogs(env.DB, { actionPrefix: 'admin.portal.', limit: LIMITS.admin.recentAuditEvents, offset: 0 }),
-        configRepo.getConfigValue(env.DB, 'push.installation.id'),
-        configRepo.getConfigValue(env.DB, 'push.installation.key'),
+        adminRepo(env.DB).listAuditLogs({
+          actionPrefix: 'admin.portal.',
+          limit: LIMITS.admin.recentAuditEvents,
+          offset: 0,
+        }),
+        configRepo(env.DB).getConfigValue('push.installation.id'),
+        configRepo(env.DB).getConfigValue('push.installation.key'),
         getYubicoCredentials(env.DB),
       ]);
       return {
@@ -214,17 +218,17 @@ export function adminPortal(env: Env, request: Request): AdminPortal {
 
     async searchUsers(query) {
       const { page, count } = pageParams(query);
-      const rows = await userRepo.searchUsersByEmailPrefix(env.DB, query.get('email') ?? '', (page - 1) * count, count);
+      const rows = await userRepo(env.DB).searchUsersByEmailPrefix(query.get('email') ?? '', (page - 1) * count, count);
       return toPage(rows, page, count);
     },
 
     async userDetail(id) {
-      const user = await userRepo.getUserById(env.DB, id);
+      const user = await userRepo(env.DB).getUserById(id);
       if (!user) return null;
       const [personalItems, memberships, passkeys] = await Promise.all([
-        countPersonalCiphers(env.DB, user.id),
+        cipherRepo(env.DB).countPersonalCiphers(user.id),
         getOrm(env.DB).$count(organizationMemberships, eq(organizationMemberships.userId, user.id)),
-        passkeyRepo.countAccountPasskeyCredentialsByUserId(env.DB, user.id, 'twoFactor'),
+        passkeyRepo(env.DB).countAccountPasskeyCredentialsByUserId(user.id, 'twoFactor'),
       ]);
       const providers = twoFactorProviders(user, passkeys > 0);
       return {
@@ -277,7 +281,7 @@ export function adminPortal(env: Env, request: Request): AdminPortal {
     },
 
     async resetUserTwoFactor(session, id) {
-      const user = await userRepo.getUserById(env.DB, id);
+      const user = await userRepo(env.DB).getUserById(id);
       if (!user) return;
       // The factor wipe, its new stamp and the audit row commit together or not at all.
       await getOrm(env.DB).batch([
@@ -291,7 +295,7 @@ export function adminPortal(env: Env, request: Request): AdminPortal {
 
     async searchOrganizations(query) {
       const { page, count } = pageParams(query);
-      const rows = await orgRepo.searchOrganizations(env.DB, {
+      const rows = await orgRepo(env.DB).searchOrganizations({
         nameContains: query.get('name') ?? '',
         memberEmail: query.get('userEmail') ?? '',
         offset: (page - 1) * count,
@@ -301,11 +305,11 @@ export function adminPortal(env: Env, request: Request): AdminPortal {
     },
 
     async organizationDetail(id) {
-      const org = await orgRepo.getOrganization(env.DB, id);
+      const org = await orgRepo(env.DB).getOrganization(id);
       if (!org) return null;
       const [members, stats] = await Promise.all([
-        orgRepo.listMembershipsWithAccountsByOrg(env.DB, org.id),
-        orgRepo.getOrganizationPortalStats(env.DB, org.id),
+        orgRepo(env.DB).listMembershipsWithAccountsByOrg(org.id),
+        orgRepo(env.DB).getOrganizationPortalStats(org.id),
       ]);
       const statusName = (status: number) =>
         Object.entries(MembershipStatus).find(([, value]) => value === publicMembershipStatus(status))?.[0] ??

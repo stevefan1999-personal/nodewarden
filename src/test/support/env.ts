@@ -10,7 +10,7 @@ import type { Env, User } from '../../types';
 import { waitUntil } from './cloudflare-workers';
 import './workers-crypto';
 import { createSqliteD1, sqliteD1, type StatementWrapper } from './d1-sqlite';
-import * as userRepo from '../../services/storage-user-repo';
+import { userRepo } from '../../services/storage-user-repo';
 
 export const TEST_ORIGIN = 'https://vault.example.test';
 // Cloudflare always sets CF-Connecting-IP, and public routes refuse to rate-limit without it.
@@ -283,7 +283,7 @@ export async function seedUser(env: Env, overrides: Partial<User> = {}): Promise
     updatedAt: now,
     ...overrides,
   };
-  await userRepo.createUser(env.DB, user);
+  await userRepo(env.DB).createUser(user);
   return user;
 }
 
@@ -305,7 +305,7 @@ export async function authedFetch(
 ): Promise<Response> {
   const requestHeaders = new Headers({ 'CF-Connecting-IP': TEST_CLIENT_IP });
   if (userId) {
-    const user = await userRepo.getUserById(env.DB, userId);
+    const user = await userRepo(env.DB).getUserById(userId);
     if (!user) throw new Error(`authedFetch: no user ${userId}`);
     requestHeaders.set('Authorization', `Bearer ${await new AuthService(env).generateAccessToken(user)}`);
   }

@@ -6,7 +6,7 @@ import { excluded } from '../db/sql';
 import type { Env } from '../types';
 import { archivedFiles } from './backup-archive';
 import { deleteBlobObjects } from './blob-store';
-import { bumpOrgMemberRevisions } from './storage-org-repo';
+import { orgRepo } from './storage-org-repo';
 
 // Scheduled retention, as upstream Bitwarden's DeleteSendsJob and DeleteCiphersJob: Sends past their deletion
 // date and items trashed more than TRASH_RETENTION_DAYS ago go for good, files included. Each delete re-checks
@@ -97,7 +97,7 @@ export async function purgeOldTrash(env: Env): Promise<void> {
       now.toISOString(),
     ),
     ...[...new Set(trashed.flatMap((cipher) => cipher.organizationId ?? []))].map((orgId) =>
-      bumpOrgMemberRevisions(env.DB, orgId, now.toISOString()),
+      orgRepo(env.DB).bumpOrgMemberRevisions(orgId, now.toISOString()),
     ),
   ];
   const results = await orm.batch(statements as [(typeof statements)[0], ...typeof statements]);

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { MembershipType, PolicyType } from '../services/org-types';
-import * as orgRepo from '../services/storage-org-repo';
+import { orgRepo } from '../services/storage-org-repo';
 import { authedFetch, createTestEnv, seedUser } from './support/env';
 import { seedMember } from './support/sm';
 
@@ -104,7 +104,7 @@ test('a Custom policy manager reads a single policy while other members cannot r
     userId: outsider.id,
   });
   assert.equal(outsiderRead.status, 404);
-  assert.equal(await orgRepo.getPolicy(env.DB, orgId, PolicyType.TwoFactorAuthentication), null);
+  assert.equal(await orgRepo(env.DB).getPolicy(orgId, PolicyType.TwoFactorAuthentication), null);
 });
 
 test('a malformed SavePolicyRequest envelope is rejected and leaves the saved policy enabled', async () => {
@@ -130,7 +130,7 @@ test('a malformed SavePolicyRequest envelope is rejected and leaves the saved po
     assert.equal(rejected.status, 400, `policy: ${JSON.stringify(policy)}`);
     assert.equal(((await rejected.json()) as { error: string }).error, 'The Policy field is required.');
   }
-  const stored = await orgRepo.getPolicy(env.DB, orgId, PolicyType.MasterPassword);
+  const stored = await orgRepo(env.DB).getPolicy(orgId, PolicyType.MasterPassword);
   assert.equal(stored?.enabled, true);
   assert.deepEqual(stored?.data, MASTER_PASSWORD_DATA);
 });

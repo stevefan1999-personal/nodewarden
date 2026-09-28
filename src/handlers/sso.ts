@@ -4,7 +4,7 @@ import { readEnvConfig } from '../config/env';
 import type { Env } from '../types';
 import { errorResponse, jsonResponse } from '../utils/response';
 import { generateUUID } from '../utils/uuid';
-import * as orgRepo from '../services/storage-org-repo';
+import { orgRepo } from '../services/storage-org-repo';
 import { PolicyType } from '../services/org-types';
 
 export const FAKE_SSO_IDENTIFIER = '00000000-01DC-01DC-01DC-000000000000';
@@ -20,7 +20,7 @@ export function isSsoOnly(env: Env): boolean {
 
 export async function userRequiresSso(env: Env, userId: string): Promise<boolean> {
   if (isSsoOnly(env)) return true;
-  const policies = await orgRepo.listEnabledPoliciesForUser(env.DB, userId);
+  const policies = await orgRepo(env.DB).listEnabledPoliciesForUser(userId);
   return policies.some((policy) => policy.type === PolicyType.RequireSso && policy.enabled);
 }
 
@@ -54,7 +54,7 @@ export async function handleSsoAuthorize(request: Request, env: Env): Promise<Re
   if (!redirectUri) return errorResponse('Invalid redirect_uri', 400);
 
   const now = new Date().toISOString();
-  await orgRepo.saveSsoAuth(env.DB, {
+  await orgRepo(env.DB).saveSsoAuth({
     state,
     codeChallenge,
     redirectUri,
@@ -89,10 +89,10 @@ export async function handleOidcSignin(request: Request, env: Env): Promise<Resp
   const state = url.searchParams.get('state') || '';
   const code = url.searchParams.get('code');
   const error = url.searchParams.get('error');
-  const session = await orgRepo.getSsoAuth(env.DB, state);
+  const session = await orgRepo(env.DB).getSsoAuth(state);
   if (!session) return errorResponse('Unknown SSO state', 400);
   const now = new Date().toISOString();
-  await orgRepo.saveSsoAuth(env.DB, {
+  await orgRepo(env.DB).saveSsoAuth({
     ...session,
     codeChallenge: session.codeChallenge,
     redirectUri: session.redirectUri,

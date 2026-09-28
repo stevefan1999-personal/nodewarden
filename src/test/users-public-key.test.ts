@@ -2,8 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { MembershipStatus, revokeStatus } from '../services/org-types';
-import * as emergencyRepo from '../services/storage-emergency-repo';
-import { EmergencyAccessStatus, EmergencyAccessType } from '../services/storage-emergency-repo';
+import { emergencyRepo, EmergencyAccessStatus, EmergencyAccessType } from '../services/storage-emergency-repo';
 import type { Env, User } from '../types';
 import { authedFetch, createTestEnv, seedUser } from './support/env';
 import { byId, seedMember } from './support/sm';
@@ -59,7 +58,7 @@ test('an emergency access grantor reads the grantee public key and confirms with
   const grantee = await seedUser(env, { publicKey: PUBLIC_KEY });
   const now = new Date().toISOString();
   const recordId = crypto.randomUUID();
-  await emergencyRepo.saveEmergencyAccess(env.DB, {
+  await emergencyRepo(env.DB).saveEmergencyAccess({
     id: recordId,
     grantorId: grantor.id,
     granteeId: grantee.id,

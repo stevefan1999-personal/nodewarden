@@ -3,7 +3,7 @@ import test from 'node:test';
 
 import { columnCount, D1_MAX_BOUND_PARAMETERS } from '../db/client';
 import { smSecretProjects } from '../db/schema';
-import * as smRepo from '../services/storage-secret-repo';
+import { smRepo } from '../services/storage-secret-repo';
 import type { Env } from '../types';
 import { createTestEnv } from './support/env';
 import { ENCRYPTED_FIELD, seedSmOrg } from './support/sm';
@@ -29,12 +29,12 @@ const LINK_WRITERS = [
         updatedAt: now,
         deletedAt: null,
       };
-      await smRepo.saveSecret(env.DB, secret);
+      await smRepo(env.DB).saveSecret(secret);
       return {
         write: (nextProjectIds: string[]) =>
-          smRepo.saveSecret(env.DB, { ...secret, note: null, projectIds: nextProjectIds }),
+          smRepo(env.DB).saveSecret({ ...secret, note: null, projectIds: nextProjectIds }),
         read: async () => {
-          const saved = await smRepo.getSecret(env.DB, secret.id);
+          const saved = await smRepo(env.DB).getSecret(secret.id);
           return { ...saved, projectIds: new Set(saved?.projectIds) };
         },
       };
@@ -45,12 +45,12 @@ const LINK_WRITERS = [
     async (env: Env, orgId: string, projectIds: string[]) => {
       const now = new Date().toISOString();
       const account = { id: crypto.randomUUID(), orgId, name: ENCRYPTED_FIELD, createdAt: now, updatedAt: now };
-      await smRepo.saveServiceAccount(env.DB, account);
-      await smRepo.replaceServiceAccountProjects(env.DB, account.id, projectIds);
+      await smRepo(env.DB).saveServiceAccount(account);
+      await smRepo(env.DB).replaceServiceAccountProjects(account.id, projectIds);
       return {
-        write: (nextProjectIds: string[]) => smRepo.replaceServiceAccountProjects(env.DB, account.id, nextProjectIds),
+        write: (nextProjectIds: string[]) => smRepo(env.DB).replaceServiceAccountProjects(account.id, nextProjectIds),
         read: async () => ({
-          projectIds: new Set(await smRepo.listReadableServiceAccountProjectIds(env.DB, account.id)),
+          projectIds: new Set(await smRepo(env.DB).listReadableServiceAccountProjectIds(account.id)),
         }),
       };
     },
@@ -68,7 +68,7 @@ async function seedLinkedTarget(seedTarget: (typeof LINK_WRITERS)[number][1]) {
     createdAt: now,
     updatedAt: now,
   }));
-  await Promise.all(projects.map((project) => smRepo.saveProject(env.DB, project)));
+  await Promise.all(projects.map((project) => smRepo(env.DB).saveProject(project)));
   const [firstProjectId, ...manyProjectIds] = projects.map(({ id }) => id);
   return { target: await seedTarget(env, orgId, [firstProjectId]), manyProjectIds };
 }
@@ -95,18 +95,18 @@ const BULK_ID_COUNT = D1_MAX_BOUND_PARAMETERS + D1_MAX_BOUND_PARAMETERS / 2;
 
 const seedProjects = (env: Env, orgId: string, ids: string[], now: string) =>
   Promise.all(
-    ids.map((id) => smRepo.saveProject(env.DB, { id, orgId, name: ENCRYPTED_FIELD, createdAt: now, updatedAt: now })),
+    ids.map((id) => smRepo(env.DB).saveProject({ id, orgId, name: ENCRYPTED_FIELD, createdAt: now, updatedAt: now })),
   );
 const seedServiceAccounts = (env: Env, orgId: string, ids: string[], now: string) =>
   Promise.all(
     ids.map((id) =>
-      smRepo.saveServiceAccount(env.DB, { id, orgId, name: ENCRYPTED_FIELD, createdAt: now, updatedAt: now }),
+      smRepo(env.DB).saveServiceAccount({ id, orgId, name: ENCRYPTED_FIELD, createdAt: now, updatedAt: now }),
     ),
   );
 const seedSecrets = (env: Env, orgId: string, ids: string[], now: string, deletedAt: string | null) =>
   Promise.all(
     ids.map((id) =>
-      smRepo.saveSecret(env.DB, {
+      smRepo(env.DB).saveSecret({
         id,
         orgId,
         key: ENCRYPTED_FIELD,
@@ -127,63 +127,63 @@ const BULK_OPERATIONS: [string, (env: Env, orgId: string, ids: string[], now: st
     'projectsInOrg',
     async (env, orgId, ids, now) => {
       await seedProjects(env, orgId, ids, now);
-      return [...(await smRepo.projectsInOrg(env.DB, orgId, ids))];
+      return [...(await smRepo(env.DB).projectsInOrg(orgId, ids))];
     },
   ],
   [
     'getProjectsByIds',
     async (env, orgId, ids, now) => {
       await seedProjects(env, orgId, ids, now);
-      return idsOf(await smRepo.getProjectsByIds(env.DB, ids));
+      return idsOf(await smRepo(env.DB).getProjectsByIds(ids));
     },
   ],
   [
     'deleteProjects',
     async (env, orgId, ids, now) => {
       await seedProjects(env, orgId, ids, now);
-      return smRepo.deleteProjects(env.DB, orgId, ids);
+      return smRepo(env.DB).deleteProjects(orgId, ids);
     },
   ],
   [
     'getSecretsByIds',
     async (env, orgId, ids, now) => {
       await seedSecrets(env, orgId, ids, now, null);
-      return idsOf(await smRepo.getSecretsByIds(env.DB, ids));
+      return idsOf(await smRepo(env.DB).getSecretsByIds(ids));
     },
   ],
   [
     'deleteSecrets',
     async (env, orgId, ids, now) => {
       await seedSecrets(env, orgId, ids, now, null);
-      return smRepo.deleteSecrets(env.DB, orgId, ids);
+      return smRepo(env.DB).deleteSecrets(orgId, ids);
     },
   ],
   [
     'changeSecretsTrash restore',
     async (env, orgId, ids, now) => {
       await seedSecrets(env, orgId, ids, now, now);
-      return smRepo.changeSecretsTrash(env.DB, orgId, ids, true);
+      return smRepo(env.DB).changeSecretsTrash(orgId, ids, true);
     },
   ],
   [
     'changeSecretsTrash empty',
     async (env, orgId, ids, now) => {
       await seedSecrets(env, orgId, ids, now, now);
-      return smRepo.changeSecretsTrash(env.DB, orgId, ids, false);
+      return smRepo(env.DB).changeSecretsTrash(orgId, ids, false);
     },
   ],
   [
     'getServiceAccountsByIds',
     async (env, orgId, ids, now) => {
       await seedServiceAccounts(env, orgId, ids, now);
-      return idsOf(await smRepo.getServiceAccountsByIds(env.DB, ids));
+      return idsOf(await smRepo(env.DB).getServiceAccountsByIds(ids));
     },
   ],
   [
     'deleteServiceAccounts',
     async (env, orgId, ids, now) => {
       await seedServiceAccounts(env, orgId, ids, now);
-      return smRepo.deleteServiceAccounts(env.DB, orgId, ids);
+      return smRepo(env.DB).deleteServiceAccounts(orgId, ids);
     },
   ],
   [
@@ -193,7 +193,7 @@ const BULK_OPERATIONS: [string, (env: Env, orgId: string, ids: string[], now: st
       await seedServiceAccounts(env, orgId, [serviceAccountId], now);
       await Promise.all(
         ids.map((id) =>
-          smRepo.saveAccessToken(env.DB, {
+          smRepo(env.DB).saveAccessToken({
             id,
             serviceAccountId,
             name: ENCRYPTED_FIELD,
@@ -204,8 +204,8 @@ const BULK_OPERATIONS: [string, (env: Env, orgId: string, ids: string[], now: st
           }),
         ),
       );
-      await smRepo.revokeAccessTokens(env.DB, serviceAccountId, ids);
-      const remaining = new Set(idsOf(await smRepo.listAccessTokens(env.DB, serviceAccountId)));
+      await smRepo(env.DB).revokeAccessTokens(serviceAccountId, ids);
+      const remaining = new Set(idsOf(await smRepo(env.DB).listAccessTokens(serviceAccountId)));
       return ids.filter((id) => !remaining.has(id));
     },
   ],

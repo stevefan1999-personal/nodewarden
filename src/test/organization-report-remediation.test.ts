@@ -4,10 +4,10 @@ import test from 'node:test';
 import { getOrm } from '../db/client';
 import { cipherCollections } from '../db/schema';
 import { MembershipStatus, MembershipType } from '../services/org-types';
-import * as orgRepo from '../services/storage-org-repo';
+import { orgRepo } from '../services/storage-org-repo';
 import { authedFetch, createTestEnv, seedUser } from './support/env';
 import { ENCRYPTED_FIELD, postJson, seedMember, seedSmOrg } from './support/sm';
-import * as cipherRepo from '../services/storage-cipher-repo';
+import { cipherRepo } from '../services/storage-cipher-repo';
 
 const CHANGED = '2.Y2hhbmdlZA==|Y2hhbmdlZA==|Y2hhbmdlZA==';
 const FIELDS = {
@@ -58,29 +58,29 @@ test('confirmed owners, admins and edit-any Custom members can remediate assigne
       assert.equal(body.name, CHANGED);
       assert.equal(body.login.password, CHANGED);
       assert.deepEqual(body.collectionIds, assigned ? [collection.id] : []);
-      assert.equal((await cipherRepo.getCipher(storage, cipher.id))!.userId, owner.id);
-      assert.deepEqual(await orgRepo.listCipherCollectionIds(env.DB, cipher.id), assigned ? [collection.id] : []);
+      assert.equal((await cipherRepo(storage).getCipher(cipher.id))!.userId, owner.id);
+      assert.deepEqual(await orgRepo(env.DB).listCipherCollectionIds(cipher.id), assigned ? [collection.id] : []);
       const deleted = await request(actor.id, cipher.id, 'PUT', 'delete-admin');
       assert.equal(deleted.status, 200);
       assert.equal(await deleted.text(), '');
-      assert.ok((await cipherRepo.getCipher(storage, cipher.id))!.deletedAt);
-      assert.deepEqual(await orgRepo.listCipherCollectionIds(env.DB, cipher.id), assigned ? [collection.id] : []);
+      assert.ok((await cipherRepo(storage).getCipher(cipher.id))!.deletedAt);
+      assert.deepEqual(await orgRepo(env.DB).listCipherCollectionIds(cipher.id), assigned ? [collection.id] : []);
       const removed = await request(actor.id, cipher.id, 'DELETE');
       assert.equal(removed.ok, true);
       assert.equal(await removed.text(), '');
-      assert.equal(await cipherRepo.getCipher(storage, cipher.id), null);
-      assert.deepEqual(await orgRepo.listCipherCollectionIds(env.DB, cipher.id), []);
+      assert.equal(await cipherRepo(storage).getCipher(cipher.id), null);
+      assert.deepEqual(await orgRepo(env.DB).listCipherCollectionIds(cipher.id), []);
     }
   }
   const active = await create(false);
   assert.equal((await request(owner.id, active.id, 'DELETE')).status, 204);
-  assert.equal(await cipherRepo.getCipher(storage, active.id), null);
+  assert.equal(await cipherRepo(storage).getCipher(active.id), null);
 });
 
 test('admin remediation denies report, export, delete-only and ordinary roles without changing cipher state', async () => {
   const { env, orgId, owner, create, updateBody, request, storage } = await setup();
   const cipher = await create();
-  const original = await cipherRepo.getCipher(storage, cipher.id);
+  const original = await cipherRepo(storage).getCipher(cipher.id);
   const denied = [
     (await seedMember(env, orgId, { type: MembershipType.Custom, permissions: { accessReports: true } })).user,
     (await seedMember(env, orgId, { type: MembershipType.Custom, permissions: { accessImportExport: true } })).user,
@@ -94,7 +94,7 @@ test('admin remediation denies report, export, delete-only and ordinary roles wi
     assert.equal((await request(actor.id, cipher.id, 'PUT', 'admin', updateBody(cipher.revisionDate))).status, 404);
     assert.equal((await request(actor.id, cipher.id, 'PUT', 'delete-admin')).status, 404);
     assert.equal((await request(actor.id, cipher.id, 'DELETE')).status, 404);
-    assert.deepEqual(await cipherRepo.getCipher(storage, cipher.id), original);
+    assert.deepEqual(await cipherRepo(storage).getCipher(cipher.id), original);
   }
   const personal = await create(false, null);
   const foreign = await seedSmOrg(env);
@@ -103,18 +103,18 @@ test('admin remediation denies report, export, delete-only and ordinary roles wi
     collectionIds: [],
   });
   for (const id of [personal.id, outside.id]) {
-    const before = await cipherRepo.getCipher(storage, id);
+    const before = await cipherRepo(storage).getCipher(id);
     assert.equal((await request(owner.id, id, 'PUT', 'admin', updateBody(cipher.revisionDate))).status, 404);
     assert.equal((await request(owner.id, id, 'PUT', 'delete-admin')).status, 404);
     assert.equal((await request(owner.id, id, 'DELETE')).status, 404);
-    assert.deepEqual(await cipherRepo.getCipher(storage, id), before);
+    assert.deepEqual(await cipherRepo(storage).getCipher(id), before);
   }
 });
 
 test('admin PUT validates revisions and organization ownership while preserving collection assignments', async () => {
   const { env, orgId, owner, collection, create, updateBody, request, storage } = await setup();
   const cipher = await create();
-  const before = await cipherRepo.getCipher(storage, cipher.id);
+  const before = await cipherRepo(storage).getCipher(cipher.id);
   const stale = await request(
     owner.id,
     cipher.id,
@@ -131,7 +131,7 @@ test('admin PUT validates revisions and organization ownership while preserving 
   });
   assert.equal(moved.status, 400);
   assert.match(((await moved.json()) as any).message, /Organization mismatch/);
-  assert.deepEqual(await cipherRepo.getCipher(storage, cipher.id), before);
+  assert.deepEqual(await cipherRepo(storage).getCipher(cipher.id), before);
   const otherCollection = await postJson<{ id: string }>(env, owner, `/api/organizations/${orgId}/collections`, {
     name: ENCRYPTED_FIELD,
   });
@@ -141,7 +141,7 @@ test('admin PUT validates revisions and organization ownership while preserving 
   });
   assert.equal(changed.status, 200);
   assert.deepEqual(((await changed.json()) as any).collectionIds, [collection.id]);
-  assert.deepEqual(await orgRepo.listCipherCollectionIds(env.DB, cipher.id), [collection.id]);
+  assert.deepEqual(await orgRepo(env.DB).listCipherCollectionIds(cipher.id), [collection.id]);
 });
 
 test('ordinary personal and collection-authorized org mutation routes keep their original permission rules', async () => {
@@ -151,8 +151,8 @@ test('ordinary personal and collection-authorized org mutation routes keep their
     type: MembershipType.Custom,
     permissions: { accessReports: true },
   });
-  const editorMember = (await orgRepo.getMembershipByUserAndOrg(env.DB, editor.id, orgId))!;
-  await orgRepo.replaceCollectionAccess(env.DB, collection.id, {
+  const editorMember = (await orgRepo(env.DB).getMembershipByUserAndOrg(editor.id, orgId))!;
+  await orgRepo(env.DB).replaceCollectionAccess(collection.id, {
     users: [{ member: editorMember, readOnly: false, hidePasswords: false, manage: false }],
   });
   const cipher = await create();
@@ -162,9 +162,9 @@ test('ordinary personal and collection-authorized org mutation routes keep their
   assert.equal(edited.status, 200);
   assert.equal(((await edited.json()) as any).object, 'cipherDetails');
   assert.equal((await request(editor.id, cipher.id, 'PUT', 'delete')).status, 200);
-  assert.ok((await cipherRepo.getCipher(storage, cipher.id))!.deletedAt);
+  assert.ok((await cipherRepo(storage).getCipher(cipher.id))!.deletedAt);
   assert.equal((await request(editor.id, cipher.id, 'DELETE', '')).status, 204);
-  assert.equal(await cipherRepo.getCipher(storage, cipher.id), null);
+  assert.equal(await cipherRepo(storage).getCipher(cipher.id), null);
   const personal = await create(false, null);
   assert.equal((await request(editor.id, personal.id, 'PUT', '', { ...FIELDS, organizationId: null })).status, 404);
   assert.equal(
@@ -185,7 +185,7 @@ test('ordinary personal and collection-authorized org mutation routes keep their
 test('legacy foreign collection links stay excluded from admin edit responses', async () => {
   const { env, owner, collection, create, updateBody, request } = await setup();
   const foreign = await seedSmOrg(env);
-  const foreignCollection = (await orgRepo.listCollectionsByOrg(env.DB, foreign.orgId))[0];
+  const foreignCollection = (await orgRepo(env.DB).listCollectionsByOrg(foreign.orgId))[0];
   const cipher = await create();
   await getOrm(env.DB).insert(cipherCollections).values({ cipherId: cipher.id, collectionId: foreignCollection.id });
   const updated = await request(owner.id, cipher.id, 'PUT', 'admin', updateBody(cipher.revisionDate));

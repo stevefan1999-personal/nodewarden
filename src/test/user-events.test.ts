@@ -7,7 +7,7 @@ import { authedFetch, createTestEnv, drainWaitUntil, seedUser } from './support/
 import { seedMembership } from './support/sm';
 import { hashPassword } from '../services/auth-password';
 import { MembershipStatus } from '../services/org-types';
-import * as userRepo from '../services/storage-user-repo';
+import { userRepo } from '../services/storage-user-repo';
 const { createOwnedOrganization } = await import('../handlers/organizations');
 const PASSWORD = 'event-test-password';
 const KEY = '2.dGVzdA==|dGVzdA==|dGVzdA==';
@@ -115,7 +115,7 @@ test('client export events fan out only to confirmed organizations and factor fa
   assert.equal(rows.filter((row) => row.organizationId === null).length, 2);
   assert.ok(rows.every((row) => row.type === 1006 || row.type === 1007));
   assert.ok(!rows.some((row) => row.organizationId === acceptedOrg.id));
-  assert.equal((await userRepo.getUserById(env.DB, user.id))!.totpSecret, user.totpSecret);
+  assert.equal((await userRepo(env.DB).getUserById(user.id))!.totpSecret, user.totpSecret);
 });
 
 test('a backdated client export keeps its date only on the personal row', async () => {

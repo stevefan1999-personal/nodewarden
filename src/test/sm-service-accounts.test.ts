@@ -14,8 +14,8 @@ import {
   smServiceAccountProjects,
 } from '../db/schema';
 import { handleCreateServiceAccount } from '../handlers/secrets-manager';
-import * as orgRepo from '../services/storage-org-repo';
-import * as smRepo from '../services/storage-secret-repo';
+import { orgRepo } from '../services/storage-org-repo';
+import { smRepo } from '../services/storage-secret-repo';
 import { abortWrites, authedFetch, createTestEnv } from './support/env';
 import { ENCRYPTED_FIELD, postJson, seedMember, seedSmOrg, smLogin, smUser, TOKEN_FIELDS } from './support/sm';
 
@@ -36,7 +36,7 @@ test('machine-account creator and group policies gate management, and revocation
   const { env, orgId, a, b, path, request, account } = await setup();
   const sa = await account();
   const detailPath = `/api/service-accounts/${sa.id}`;
-  const aMember = await orgRepo.getMembershipByUserAndOrg(env.DB, a.id, orgId);
+  const aMember = await orgRepo(env.DB).getMembershipByUserAndOrg(a.id, orgId);
   const orm = getOrm(env.DB);
   assert.ok(
     await orm
@@ -78,7 +78,7 @@ test('machine-account creator and group policies gate management, and revocation
     object: 'serviceAccountCounts',
   });
   const groupId = crypto.randomUUID();
-  const bMember = await orgRepo.getMembershipByUserAndOrg(env.DB, b.id, orgId);
+  const bMember = await orgRepo(env.DB).getMembershipByUserAndOrg(b.id, orgId);
   const now = new Date().toISOString();
   await orm.batch([
     orm.insert(orgGroups).values({ id: groupId, orgId, name: 'Operators', createdAt: now, updatedAt: now }),
@@ -111,8 +111,8 @@ test('machine-account creator and group policies gate management, and revocation
   const revoked = await request(b.id, `${detailPath}/access-tokens/revoke`, 'POST', { ids: [token.id, otherToken.id] });
   assert.equal(revoked.status, 200);
   assert.equal(await revoked.text(), '');
-  assert.equal(await smRepo.getAccessToken(env.DB, token.id), null);
-  assert.ok(await smRepo.getAccessToken(env.DB, otherToken.id));
+  assert.equal(await smRepo(env.DB).getAccessToken(token.id), null);
+  assert.ok(await smRepo(env.DB).getAccessToken(otherToken.id));
   assert.deepEqual(((await (await request(a.id, `${detailPath}/access-tokens`)).json()) as any).data, []);
   const rejectedLogin = await smLogin(env, token.id, token.clientSecret);
   assert.equal(rejectedLogin.status, 400);
@@ -204,13 +204,13 @@ test('machine creation ignores legacy projectIds, rolls back creator grants atom
       ),
     /test machine rollback/,
   );
-  assert.equal((await smRepo.listServiceAccounts(env.DB, orgId)).length, 0);
+  assert.equal((await smRepo(env.DB).listServiceAccounts(orgId)).length, 0);
   assert.equal(await getOrm(env.DB).$count(smServiceAccountMembers), 0);
   await removeFault();
   const own = await account(a, [ownProject.id, deniedProject.id, crypto.randomUUID()]);
   const denied = await account(owner);
   const token = await postJson<{ id: string }>(env, a, `/api/service-accounts/${own.id}/access-tokens`, TOKEN_FIELDS);
-  assert.deepEqual(await smRepo.listReadableServiceAccountProjectIds(env.DB, own.id), []);
+  assert.deepEqual(await smRepo(env.DB).listReadableServiceAccountProjectIds(own.id), []);
   const foreign = await seedSmOrg(env);
   const foreignAccount = await postJson<{ id: string }>(
     env,
@@ -222,7 +222,7 @@ test('machine creation ignores legacy projectIds, rolls back creator grants atom
     (await request(owner.id, '/api/service-accounts/delete', 'POST', [own.id, foreignAccount.id])).status,
     404,
   );
-  assert.ok(await smRepo.getServiceAccount(env.DB, own.id));
+  assert.ok(await smRepo(env.DB).getServiceAccount(own.id));
   const deleted = await request(a.id, '/api/service-accounts/delete', 'POST', [own.id, denied.id]);
   assert.equal(deleted.status, 200);
   const data = ((await deleted.json()) as any).data;
@@ -234,7 +234,7 @@ test('machine creation ignores legacy projectIds, rolls back creator grants atom
     ]),
   );
   assert.ok(data.every((item: any) => item.object === 'BulkDeleteResponseModel'));
-  assert.equal(await smRepo.getServiceAccount(env.DB, own.id), null);
-  assert.equal(await smRepo.getAccessToken(env.DB, token.id), null);
-  assert.ok(await smRepo.getServiceAccount(env.DB, denied.id));
+  assert.equal(await smRepo(env.DB).getServiceAccount(own.id), null);
+  assert.equal(await smRepo(env.DB).getAccessToken(token.id), null);
+  assert.ok(await smRepo(env.DB).getServiceAccount(denied.id));
 });

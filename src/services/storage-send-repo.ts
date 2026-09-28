@@ -1,10 +1,10 @@
 import { and, desc, eq, gt, inArray, isNull, lt, or } from 'drizzle-orm';
 
-import { getOrm, statementChunks } from '../db/client';
+import { Repository, repository, statementChunks } from '../db/client';
 import { sends } from '../db/schema';
 import { plus } from '../db/sql';
 import type { Send } from '../types';
-import { updateRevisionDate } from './storage-revision-repo';
+import { revisionRepo } from './storage-revision-repo';
 
 function mapSendRow(row: typeof sends.$inferSelect): Send {
   return {
@@ -31,140 +31,141 @@ function mapSendRow(row: typeof sends.$inferSelect): Send {
   };
 }
 
-export async function getSend(db: D1Database, id: string): Promise<Send | null> {
-  const [row] = await getOrm(db).select().from(sends).where(eq(sends.id, id)).limit(1);
-  return row ? mapSendRow(row) : null;
-}
+export class SendRepository extends Repository {
+  async getSend(id: string): Promise<Send | null> {
+    const [row] = await this.orm.select().from(sends).where(eq(sends.id, id)).limit(1);
+    return row ? mapSendRow(row) : null;
+  }
 
-export async function getSendForUser(db: D1Database, id: string, userId: string): Promise<Send | null> {
-  const [row] = await getOrm(db)
-    .select()
-    .from(sends)
-    .where(and(eq(sends.id, id), eq(sends.userId, userId)))
-    .limit(1);
-  return row ? mapSendRow(row) : null;
-}
-
-export async function saveSend(db: D1Database, send: Send): Promise<void> {
-  const values = {
-    id: send.id,
-    userId: send.userId,
-    type: Number(send.type) || 0,
-    name: send.name,
-    notes: send.notes,
-    data: send.data,
-    key: send.key,
-    passwordHash: send.passwordHash,
-    passwordSalt: send.passwordSalt,
-    passwordIterations: send.passwordIterations,
-    authType: send.authType,
-    emails: send.emails,
-    maxAccessCount: send.maxAccessCount,
-    accessCount: send.accessCount,
-    disabled: send.disabled ? 1 : 0,
-    hideEmail: send.hideEmail === null || send.hideEmail === undefined ? null : send.hideEmail ? 1 : 0,
-    createdAt: send.createdAt,
-    updatedAt: send.updatedAt,
-    expirationDate: send.expirationDate,
-    deletionDate: send.deletionDate,
-  };
-  await getOrm(db)
-    .insert(sends)
-    .values(values)
-    .onConflictDoUpdate({
-      target: sends.id,
-      set: {
-        type: values.type,
-        name: values.name,
-        notes: values.notes,
-        data: values.data,
-        key: values.key,
-        passwordHash: values.passwordHash,
-        passwordSalt: values.passwordSalt,
-        passwordIterations: values.passwordIterations,
-        authType: values.authType,
-        emails: values.emails,
-        maxAccessCount: values.maxAccessCount,
-        accessCount: values.accessCount,
-        disabled: values.disabled,
-        hideEmail: values.hideEmail,
-        updatedAt: values.updatedAt,
-        expirationDate: values.expirationDate,
-        deletionDate: values.deletionDate,
-      },
-      where: eq(sends.userId, send.userId),
-    });
-}
-
-export async function incrementSendAccessCount(db: D1Database, sendId: string): Promise<boolean> {
-  const now = new Date().toISOString();
-  const result = await getOrm(db)
-    .update(sends)
-    .set({
-      accessCount: plus(sends.accessCount, 1),
-      updatedAt: now,
-    })
-    .where(
-      and(
-        eq(sends.id, sendId),
-        eq(sends.disabled, 0),
-        or(isNull(sends.maxAccessCount), lt(sends.accessCount, sends.maxAccessCount)),
-        or(isNull(sends.expirationDate), gt(sends.expirationDate, now)),
-        gt(sends.deletionDate, now),
-      ),
-    )
-    .run();
-  return (result.meta.changes ?? 0) > 0;
-}
-
-export async function deleteSend(db: D1Database, id: string, userId: string): Promise<void> {
-  await getOrm(db)
-    .delete(sends)
-    .where(and(eq(sends.id, id), eq(sends.userId, userId)));
-}
-
-export async function getSendsByIds(db: D1Database, ids: string[], userId: string): Promise<Send[]> {
-  const uniqueIds = Array.from(new Set(ids.map((id) => String(id || '').trim()).filter(Boolean)));
-  if (!uniqueIds.length) return [];
-  const orm = getOrm(db);
-  const read = (chunk: string[]) =>
-    orm
+  async getSendForUser(id: string, userId: string): Promise<Send | null> {
+    const [row] = await this.orm
       .select()
       .from(sends)
-      .where(and(eq(sends.userId, userId), inArray(sends.id, chunk)));
-  const out: Send[] = [];
-
-  for (const chunk of statementChunks(uniqueIds, read)) {
-    out.push(...(await read(chunk)).map(mapSendRow));
+      .where(and(eq(sends.id, id), eq(sends.userId, userId)))
+      .limit(1);
+    return row ? mapSendRow(row) : null;
   }
 
-  return out;
-}
-
-export async function bulkDeleteSends(db: D1Database, ids: string[], userId: string): Promise<string | null> {
-  const uniqueIds = Array.from(new Set(ids.map((id) => String(id || '').trim()).filter(Boolean)));
-  if (!uniqueIds.length) return null;
-  const orm = getOrm(db);
-  const remove = (chunk: string[]) => orm.delete(sends).where(and(eq(sends.userId, userId), inArray(sends.id, chunk)));
-  for (const chunk of statementChunks(uniqueIds, remove)) {
-    await remove(chunk);
+  async saveSend(send: Send): Promise<void> {
+    const values = {
+      id: send.id,
+      userId: send.userId,
+      type: Number(send.type) || 0,
+      name: send.name,
+      notes: send.notes,
+      data: send.data,
+      key: send.key,
+      passwordHash: send.passwordHash,
+      passwordSalt: send.passwordSalt,
+      passwordIterations: send.passwordIterations,
+      authType: send.authType,
+      emails: send.emails,
+      maxAccessCount: send.maxAccessCount,
+      accessCount: send.accessCount,
+      disabled: send.disabled ? 1 : 0,
+      hideEmail: send.hideEmail === null || send.hideEmail === undefined ? null : send.hideEmail ? 1 : 0,
+      createdAt: send.createdAt,
+      updatedAt: send.updatedAt,
+      expirationDate: send.expirationDate,
+      deletionDate: send.deletionDate,
+    };
+    await this.orm
+      .insert(sends)
+      .values(values)
+      .onConflictDoUpdate({
+        target: sends.id,
+        set: {
+          type: values.type,
+          name: values.name,
+          notes: values.notes,
+          data: values.data,
+          key: values.key,
+          passwordHash: values.passwordHash,
+          passwordSalt: values.passwordSalt,
+          passwordIterations: values.passwordIterations,
+          authType: values.authType,
+          emails: values.emails,
+          maxAccessCount: values.maxAccessCount,
+          accessCount: values.accessCount,
+          disabled: values.disabled,
+          hideEmail: values.hideEmail,
+          updatedAt: values.updatedAt,
+          expirationDate: values.expirationDate,
+          deletionDate: values.deletionDate,
+        },
+        where: eq(sends.userId, send.userId),
+      });
   }
 
-  return updateRevisionDate(db, userId);
+  async incrementSendAccessCount(sendId: string): Promise<boolean> {
+    const now = new Date().toISOString();
+    const result = await this.orm
+      .update(sends)
+      .set({
+        accessCount: plus(sends.accessCount, 1),
+        updatedAt: now,
+      })
+      .where(
+        and(
+          eq(sends.id, sendId),
+          eq(sends.disabled, 0),
+          or(isNull(sends.maxAccessCount), lt(sends.accessCount, sends.maxAccessCount)),
+          or(isNull(sends.expirationDate), gt(sends.expirationDate, now)),
+          gt(sends.deletionDate, now),
+        ),
+      )
+      .run();
+    return (result.meta.changes ?? 0) > 0;
+  }
+
+  async deleteSend(id: string, userId: string): Promise<void> {
+    await this.orm.delete(sends).where(and(eq(sends.id, id), eq(sends.userId, userId)));
+  }
+
+  async getSendsByIds(ids: string[], userId: string): Promise<Send[]> {
+    const uniqueIds = Array.from(new Set(ids.map((id) => String(id || '').trim()).filter(Boolean)));
+    if (!uniqueIds.length) return [];
+    const read = (chunk: string[]) =>
+      this.orm
+        .select()
+        .from(sends)
+        .where(and(eq(sends.userId, userId), inArray(sends.id, chunk)));
+    const out: Send[] = [];
+
+    for (const chunk of statementChunks(uniqueIds, read)) {
+      out.push(...(await read(chunk)).map(mapSendRow));
+    }
+
+    return out;
+  }
+
+  async bulkDeleteSends(ids: string[], userId: string): Promise<string | null> {
+    const uniqueIds = Array.from(new Set(ids.map((id) => String(id || '').trim()).filter(Boolean)));
+    if (!uniqueIds.length) return null;
+    const remove = (chunk: string[]) =>
+      this.orm.delete(sends).where(and(eq(sends.userId, userId), inArray(sends.id, chunk)));
+    for (const chunk of statementChunks(uniqueIds, remove)) {
+      await remove(chunk);
+    }
+
+    return revisionRepo(this.db).updateRevisionDate(userId);
+  }
+
+  async getAllSends(userId: string): Promise<Send[]> {
+    const rows = await this.orm.select().from(sends).where(eq(sends.userId, userId)).orderBy(desc(sends.updatedAt));
+    return rows.map(mapSendRow);
+  }
+
+  async getSendsPage(userId: string, limit: number, offset: number): Promise<Send[]> {
+    const rows = await this.orm
+      .select()
+      .from(sends)
+      .where(eq(sends.userId, userId))
+      .orderBy(desc(sends.updatedAt))
+      .limit(limit)
+      .offset(offset);
+    return rows.map(mapSendRow);
+  }
 }
 
-export async function getAllSends(db: D1Database, userId: string): Promise<Send[]> {
-  const rows = await getOrm(db).select().from(sends).where(eq(sends.userId, userId)).orderBy(desc(sends.updatedAt));
-  return rows.map(mapSendRow);
-}
-
-export async function getSendsPage(db: D1Database, userId: string, limit: number, offset: number): Promise<Send[]> {
-  const rows = await getOrm(db)
-    .select()
-    .from(sends)
-    .where(eq(sends.userId, userId))
-    .orderBy(desc(sends.updatedAt))
-    .limit(limit)
-    .offset(offset);
-  return rows.map(mapSendRow);
-}
+export const sendRepo = repository(SendRepository);

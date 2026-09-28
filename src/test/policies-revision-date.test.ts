@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import * as orgRepo from '../services/storage-org-repo';
+import { orgRepo } from '../services/storage-org-repo';
 import { MembershipType, PolicyType } from '../services/org-types';
 import { authedFetch, createTestEnv, seedUser } from './support/env';
 import { seedMembership } from './support/sm';
@@ -30,7 +30,7 @@ test('saved policies carry the same ISO revisionDate in the PUT response, the or
   const member = await seedUser(env);
   const orgId = crypto.randomUUID();
   const now = new Date().toISOString();
-  await orgRepo.insertOrganization(env.DB, {
+  await orgRepo(env.DB).insertOrganization({
     id: orgId,
     name: 'Policy Org',
     billingEmail: owner.email,

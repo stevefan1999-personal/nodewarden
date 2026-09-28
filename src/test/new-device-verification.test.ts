@@ -10,8 +10,8 @@ import { readMailConfig } from '../services/mail';
 import type { Env, User } from '../types';
 import { archiveDb, archiveOf, restoreArchive, withArchiveDb } from './support/backup';
 import { authedFetch, captureEmail, createTestEnv, drainWaitUntil, MAILABLE_DOMAIN, seedUser } from './support/env';
-import * as deviceRepo from '../services/storage-device-repo';
-import * as userRepo from '../services/storage-user-repo';
+import { deviceRepo } from '../services/storage-device-repo';
+import { userRepo } from '../services/storage-user-repo';
 
 const PASSWORD = 'client-master-password-hash';
 const OLD = new Date(Date.now() - 2 * 86400_000).toISOString();
@@ -42,7 +42,7 @@ async function setup(overrides: Partial<User> = {}, envOverrides: Partial<Env> =
     emailVerified: false,
     ...overrides,
   });
-  await deviceRepo.upsertDevice(env.DB, user.id, 'known-device', 'Known device', 9);
+  await deviceRepo(env.DB).upsertDevice(user.id, 'known-device', 'Known device', 9);
   const login = (extra: Record<string, string> = {}) =>
     authedFetch(env, {
       method: 'POST',
@@ -68,17 +68,17 @@ test('new-device OTP uses exact errors, sends in the background, verifies email 
   const required = await f.login({ sso: '1', deviceIdentifier: '' });
   assert.equal(required.status, 400);
   assert.deepEqual(await required.json(), REQUIRED);
-  assert.equal(await deviceRepo.isKnownDevice(f.env.DB, f.user.id, 'new-device'), false);
+  assert.equal(await deviceRepo(f.env.DB).isKnownDevice(f.user.id, 'new-device'), false);
   await drainWaitUntil();
   assert.equal(f.mail.sent.length, 1);
   assert.equal(f.mail.sent[0].to, f.user.email);
   assert.match(String(f.mail.sent[0].text), /Consider enabling two-step login/);
   const wrong = await f.login({ newDeviceOtp: f.code() === '000000' ? '111111' : '000000' });
   assert.deepEqual(await wrong.json(), INVALID);
-  assert.equal(await deviceRepo.isKnownDevice(f.env.DB, f.user.id, 'new-device'), false);
+  assert.equal(await deviceRepo(f.env.DB).isKnownDevice(f.user.id, 'new-device'), false);
   assert.equal((await f.login({ newDeviceOtp: f.code() })).status, 200);
-  assert.equal(await deviceRepo.isKnownDevice(f.env.DB, f.user.id, 'new-device'), true);
-  assert.equal((await userRepo.getUserById(f.env.DB, f.user.id))?.emailVerified, true);
+  assert.equal(await deviceRepo(f.env.DB).isKnownDevice(f.user.id, 'new-device'), true);
+  assert.equal((await userRepo(f.env.DB).getUserById(f.user.id))?.emailVerified, true);
   const replay = await f.login({ newDeviceOtp: f.code() });
   assert.deepEqual(await replay.json(), INVALID);
   await drainWaitUntil();
@@ -234,7 +234,7 @@ test('registration opts in and restoring a backup, even one without the column, 
     },
   });
   assert.equal(registered.status, 200);
-  const user = (await userRepo.getUser(env.DB, 'first@x.io'))!;
+  const user = (await userRepo(env.DB).getUser('first@x.io'))!;
   assert.equal(user.verifyDevices, true);
   await getOrm(env.DB).update(users).set({ verifyDevices: 0 }).where(eq(users.id, user.id));
   const { bytes } = await archiveOf(env, false);
@@ -242,6 +242,6 @@ test('registration opts in and restoring a backup, even one without the column, 
   delete db.users[0].verify_devices;
   const restored = await createTestEnv();
   await restoreArchive(restored, withArchiveDb(bytes, db), user.id);
-  assert.equal((await userRepo.getUserById(restored.DB, user.id))?.verifyDevices, false);
+  assert.equal((await userRepo(restored.DB).getUserById(user.id))?.verifyDevices, false);
   await drainWaitUntil();
 });

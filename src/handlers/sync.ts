@@ -7,17 +7,17 @@ import { buildUserDecryptionCompat, buildUserDecryptionOptions } from '../utils/
 import { buildDomainsResponse } from '../services/domain-rules';
 import { buildWebAuthnPrfOption } from '../utils/account-passkeys';
 import { buildProfileResponse } from '../utils/profile-response';
-import * as orgRepo from '../services/storage-org-repo';
+import { orgRepo } from '../services/storage-org-repo';
 import { canViewCipher, hasFullCollectionAccess, resolveCollectionPermission } from '../services/org-authz';
 import { policyResponse } from '../utils/org-response';
-import * as passkeyRepo from '../services/storage-account-passkey-repo';
-import * as attachmentRepo from '../services/storage-attachment-repo';
-import * as cipherRepo from '../services/storage-cipher-repo';
-import * as domainRulesRepo from '../services/storage-domain-rules-repo';
-import * as folderRepo from '../services/storage-folder-repo';
-import * as revisionRepo from '../services/storage-revision-repo';
-import * as sendRepo from '../services/storage-send-repo';
-import * as userRepo from '../services/storage-user-repo';
+import { passkeyRepo } from '../services/storage-account-passkey-repo';
+import { attachmentRepo } from '../services/storage-attachment-repo';
+import { cipherRepo } from '../services/storage-cipher-repo';
+import { domainRulesRepo } from '../services/storage-domain-rules-repo';
+import { folderRepo } from '../services/storage-folder-repo';
+import { revisionRepo } from '../services/storage-revision-repo';
+import { sendRepo } from '../services/storage-send-repo';
+import { userRepo } from '../services/storage-user-repo';
 
 // CONTRACT:
 // /api/sync reuses cipherToResponse() as the single cipher response shaper.
@@ -36,8 +36,8 @@ export async function handleSync(request: Request, env: Env, userId: string): Pr
   // Read the revision before the user row: writers change the row first and bump the
   // revision second, so a body cached under a revision can never predate that revision.
   const [revisionDate, accountPasskeys] = await Promise.all([
-    revisionRepo.getRevisionDate(env.DB, userId),
-    passkeyRepo.listAccountPasskeyCredentialsByUserId(env.DB, userId),
+    revisionRepo(env.DB).getRevisionDate(userId),
+    passkeyRepo(env.DB).listAccountPasskeyCredentialsByUserId(userId),
   ]);
   const accountPasskeyCacheTag = accountPasskeys
     .map((credential) =>
@@ -62,22 +62,21 @@ export async function handleSync(request: Request, env: Env, userId: string): Pr
     return new Response(cachedResponse.body, cachedResponse);
   }
 
-  const user = await userRepo.getUserById(env.DB, userId);
+  const user = await userRepo(env.DB).getUserById(userId);
   if (!user) {
     return errorResponse('User not found', 404);
   }
 
   const [ciphers, folders, sends, personalAttachments, domainSettings, orgCiphersForAttachments] = await Promise.all([
-    cipherRepo.getAllCiphers(env.DB, userId),
-    folderRepo.getAllFolders(env.DB, userId),
-    excludeSends ? Promise.resolve([]) : sendRepo.getAllSends(env.DB, userId),
-    attachmentRepo.getAttachmentsByUserId(env.DB, userId),
-    excludeDomains ? Promise.resolve(null) : domainRulesRepo.getUserDomainSettings(env.DB, userId),
-    orgRepo.listAccessibleOrgCiphers(env.DB, userId),
+    cipherRepo(env.DB).getAllCiphers(userId),
+    folderRepo(env.DB).getAllFolders(userId),
+    excludeSends ? Promise.resolve([]) : sendRepo(env.DB).getAllSends(userId),
+    attachmentRepo(env.DB).getAttachmentsByUserId(userId),
+    excludeDomains ? Promise.resolve(null) : domainRulesRepo(env.DB).getUserDomainSettings(userId),
+    orgRepo(env.DB).listAccessibleOrgCiphers(userId),
   ]);
   const attachmentsByCipher = new Map(personalAttachments);
-  const extraAttachmentMap = await attachmentRepo.getAttachmentsByCipherIds(
-    env.DB,
+  const extraAttachmentMap = await attachmentRepo(env.DB).getAttachmentsByCipherIds(
     orgCiphersForAttachments.map((cipher) => cipher.id),
   );
   for (const [cipherId, attachments] of extraAttachmentMap.entries()) {
@@ -93,12 +92,12 @@ export async function handleSync(request: Request, env: Env, userId: string): Pr
   const orgCiphers = orgCiphersForAttachments;
   const visibleOrgCiphers = [];
   const collectionDetails = [];
-  const policies = await orgRepo.listEnabledPoliciesForUser(env.DB, userId);
-  const memberships = await orgRepo.listMembershipsByUser(env.DB, userId);
+  const policies = await orgRepo(env.DB).listEnabledPoliciesForUser(userId);
+  const memberships = await orgRepo(env.DB).listMembershipsByUser(userId);
   for (const member of memberships) {
     if (member.status !== 2) continue;
-    const collections = await orgRepo.listCollectionsByOrg(env.DB, member.orgId);
-    const assigned = await orgRepo.listUserCollectionAccess(env.DB, userId, member.orgId);
+    const collections = await orgRepo(env.DB).listCollectionsByOrg(member.orgId);
+    const assigned = await orgRepo(env.DB).listUserCollectionAccess(userId, member.orgId);
     const assignedMap = new Map(assigned.map((item) => [item.collectionId, item]));
     for (const collection of collections) {
       const permission = resolveCollectionPermission(member, assignedMap.get(collection.id) || null);

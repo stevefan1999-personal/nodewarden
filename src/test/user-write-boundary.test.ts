@@ -13,7 +13,7 @@ import {
   seedUser,
   signInToAdminPortal,
 } from './support/env';
-import * as userRepo from '../services/storage-user-repo';
+import { userRepo } from '../services/storage-user-repo';
 
 const PASSWORD = 'old-client-password';
 const NEXT_PASSWORD = 'new-client-password';
@@ -62,7 +62,7 @@ test('a pending profile save cannot restore password/key material, API keys or c
       form: { csrf: portalAuth.csrf, confirmation: user.email },
     });
     assert.equal(reset.status, 303);
-    securityState = (await userRepo.getUserById(env.DB, user.id))!;
+    securityState = (await userRepo(env.DB).getUserById(user.id))!;
   });
   const profile = await authedFetch(env, {
     method: 'PUT',
@@ -72,7 +72,7 @@ test('a pending profile save cannot restore password/key material, API keys or c
   });
   assert.equal(profile.status, 400);
   assert.equal(interrupted, true);
-  const current = (await userRepo.getUserById(env.DB, user.id))!;
+  const current = (await userRepo(env.DB).getUserById(user.id))!;
   assert.equal(current.masterPasswordHint, user.masterPasswordHint);
   for (const field of [
     'masterPasswordHash',
@@ -113,8 +113,8 @@ test('a pending profile save cannot restore password/key material, API keys or c
 test('a pending profile save cannot resurrect a deleted account and account creation never overwrites one', async () => {
   const env = await createTestEnv();
   const user = await seedUser(env);
-  await assert.rejects(userRepo.createUser(env.DB, { ...user, name: 'Duplicate account' }));
-  assert.equal((await userRepo.getUserById(env.DB, user.id))?.name, user.name);
+  await assert.rejects(userRepo(env.DB).createUser({ ...user, name: 'Duplicate account' }));
+  assert.equal((await userRepo(env.DB).getUserById(user.id))?.name, user.name);
   const oldJwt = await new AuthService(env).generateAccessToken(user);
   interceptStatement(env, /update "users" set .*"master_password_hint"/i, async () => {
     const deleted = await authedFetch(env, {
@@ -132,7 +132,7 @@ test('a pending profile save cannot resurrect a deleted account and account crea
     body: { masterPasswordHint: 'After deletion' },
   });
   assert.equal(profile.status, 400);
-  assert.equal(await userRepo.getUserById(env.DB, user.id), null);
+  assert.equal(await userRepo(env.DB).getUserById(user.id), null);
   assert.equal(
     (await authedFetch(env, { path: '/api/accounts/profile', headers: { Authorization: `Bearer ${oldJwt}` } })).status,
     401,
@@ -171,5 +171,5 @@ test('an API-key request authorized against an old password cannot write after a
   assert.equal(interrupted, true);
   assert.equal(delayed.status, 400);
   assert.equal(((await delayed.json()) as { error: string }).error, 'User verification failed.');
-  assert.equal((await userRepo.getUserById(env.DB, user.id))?.apiKey, 'existing-api-key');
+  assert.equal((await userRepo(env.DB).getUserById(user.id))?.apiKey, 'existing-api-key');
 });

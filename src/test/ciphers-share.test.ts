@@ -5,8 +5,8 @@ import { LIMITS } from '../config/limits';
 import type { Env, User } from '../types';
 import { authedFetch, createTestEnv, seedUser } from './support/env';
 import { createCollection, errorMessage, seedMember } from './support/sm';
-import * as attachmentRepo from '../services/storage-attachment-repo';
-import * as cipherRepo from '../services/storage-cipher-repo';
+import { attachmentRepo } from '../services/storage-attachment-repo';
+import { cipherRepo } from '../services/storage-cipher-repo';
 
 const { createOwnedOrganization } = await import('../handlers/organizations');
 
@@ -64,7 +64,7 @@ async function createPersonalCipher(env: Env, user: User): Promise<string> {
 
 async function addAttachment(env: Env, cipherId: string): Promise<string> {
   const attachmentId = crypto.randomUUID();
-  await attachmentRepo.saveAttachment(env.DB, {
+  await attachmentRepo(env.DB).saveAttachment({
     id: attachmentId,
     cipherId,
     fileName: USER_ENCRYPTED,
@@ -129,7 +129,7 @@ function shareMany(
 }
 
 async function storedOrganizationId(env: Env, cipherId: string): Promise<string | null> {
-  return (await cipherRepo.getCipher(env.DB, cipherId))?.organizationId ?? null;
+  return (await cipherRepo(env.DB).getCipher(cipherId))?.organizationId ?? null;
 }
 
 async function syncedCipherIds(env: Env, user: User): Promise<string[]> {

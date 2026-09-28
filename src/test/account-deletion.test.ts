@@ -24,15 +24,15 @@ import { deleteOrganizationAccount, deleteUserAccount } from '../services/accoun
 import { AuthService } from '../services/auth';
 import { type AuditEventInput } from '../services/audit-events';
 import { getAttachmentObjectKey, getSendFileObjectKey } from '../services/blob-store';
-import * as orgRepo from '../services/storage-org-repo';
+import { orgRepo } from '../services/storage-org-repo';
 import type { Env } from '../types';
 import { abortWrites, authedFetch, createTestEnv, drainWaitUntil, memoryKv, seedUser } from './support/env';
 import { seedMember } from './support/sm';
-import * as attachmentRepo from '../services/storage-attachment-repo';
-import * as cipherRepo from '../services/storage-cipher-repo';
-import * as revisionRepo from '../services/storage-revision-repo';
-import * as sessionRepo from '../services/storage-session-repo';
-import * as userRepo from '../services/storage-user-repo';
+import { attachmentRepo } from '../services/storage-attachment-repo';
+import { cipherRepo } from '../services/storage-cipher-repo';
+import { revisionRepo } from '../services/storage-revision-repo';
+import { sessionRepo } from '../services/storage-session-repo';
+import { userRepo } from '../services/storage-user-repo';
 
 const { createOwnedOrganization } = await import('../handlers/organizations');
 
@@ -58,7 +58,7 @@ async function addCipher(env: Env, userId: string, organizationId: string | null
     createdAt: PAST,
     updatedAt: PAST,
   });
-  await attachmentRepo.saveAttachment(env.DB, {
+  await attachmentRepo(env.DB).saveAttachment({
     id: attachmentId,
     cipherId: id,
     fileName: ENCRYPTED,
@@ -97,7 +97,7 @@ async function setup() {
       deletionDate: '2099-01-01T00:00:00.000Z',
     });
   await env.ATTACHMENTS_KV!.put(sendKey, 'encrypted Send');
-  await sessionRepo.saveRefreshToken(env.DB, 'refresh-token', target.id);
+  await sessionRepo(env.DB).saveRefreshToken('refresh-token', target.id);
   const eaId = crypto.randomUUID();
   await getOrm(env.DB).insert(emergencyAccess).values({
     id: eaId,
@@ -121,10 +121,10 @@ async function setup() {
 }
 
 async function assertIntact(f: Awaited<ReturnType<typeof setup>>) {
-  assert.ok(await userRepo.getUserById(f.env.DB, f.target.id));
-  assert.equal((await cipherRepo.getCipher(f.env.DB, f.orgCipher.id))?.userId, f.target.id);
-  assert.ok(await cipherRepo.getCipher(f.env.DB, f.personalCipher.id));
-  assert.ok(await sessionRepo.getRefreshTokenRecord(f.env.DB, 'refresh-token'));
+  assert.ok(await userRepo(f.env.DB).getUserById(f.target.id));
+  assert.equal((await cipherRepo(f.env.DB).getCipher(f.orgCipher.id))?.userId, f.target.id);
+  assert.ok(await cipherRepo(f.env.DB).getCipher(f.personalCipher.id));
+  assert.ok(await sessionRepo(f.env.DB).getRefreshTokenRecord('refresh-token'));
   assert.ok(
     await getOrm(f.env.DB)
       .select({ id: emergencyAccess.id })
@@ -148,13 +148,13 @@ test('admin user delete keeps org items with the oldest other Owner and cleans p
     body: { masterPasswordHash: f.admin.masterPasswordHash },
   });
   assert.equal(response.status, 204);
-  assert.equal((await cipherRepo.getCipher(f.env.DB, f.orgCipher.id))?.userId, f.successor.id);
+  assert.equal((await cipherRepo(f.env.DB).getCipher(f.orgCipher.id))?.userId, f.successor.id);
   assert.ok(f.blobs.values.has(f.orgCipher.key));
   assert.equal(f.blobs.values.has(f.personalCipher.key), false);
   assert.equal(f.blobs.values.has(f.sendKey), false);
-  assert.equal(await userRepo.getUserById(f.env.DB, f.target.id), null);
-  assert.equal(await cipherRepo.getCipher(f.env.DB, f.personalCipher.id), null);
-  assert.equal(await sessionRepo.getRefreshTokenRecord(f.env.DB, 'refresh-token'), null);
+  assert.equal(await userRepo(f.env.DB).getUserById(f.target.id), null);
+  assert.equal(await cipherRepo(f.env.DB).getCipher(f.personalCipher.id), null);
+  assert.equal(await sessionRepo(f.env.DB).getRefreshTokenRecord('refresh-token'), null);
   assert.equal(await getOrm(f.env.DB).$count(emergencyAccess), 0);
   assert.equal(await getOrm(f.env.DB).$count(invites), 0);
   const event = await getOrm(f.env.DB).select().from(auditLogs).get();
@@ -168,7 +168,7 @@ test('user delete falls back to the oldest confirmed member when no other Owner 
   await getOrm(f.env.DB).update(organizationMemberships).set({ type: 1 });
   await addMember(f.env, f.org.id, 1, '2021-01-01T00:00:00.000Z');
   assert.deepEqual(await deleteUserAccount(f.env, f.target.id, audit), { kind: 'deleted' });
-  assert.equal((await cipherRepo.getCipher(f.env.DB, f.orgCipher.id))?.userId, f.successor.id);
+  assert.equal((await cipherRepo(f.env.DB).getCipher(f.orgCipher.id))?.userId, f.successor.id);
   assert.ok(f.blobs.values.has(f.orgCipher.key));
 });
 
@@ -210,7 +210,7 @@ test('an administrator is deleted while another active administrator remains', a
   const f = await setup();
   await getOrm(f.env.DB).update(users).set({ role: 'admin' }).where(eq(users.id, f.target.id));
   assert.deepEqual(await deleteUserAccount(f.env, f.target.id, audit), { kind: 'deleted' });
-  assert.equal(await userRepo.getUserById(f.env.DB, f.target.id), null);
+  assert.equal(await userRepo(f.env.DB).getUserById(f.target.id), null);
 });
 
 test('a concurrent successor revocation or admin deactivation makes every batch write a no-op', async () => {
@@ -245,7 +245,7 @@ test('a cipher shared after the refusal check keeps its attachment blob', async 
     return batch(statements);
   };
   assert.deepEqual(await deleteUserAccount(f.env, f.target.id, audit), { kind: 'deleted' });
-  assert.equal((await cipherRepo.getCipher(f.env.DB, f.personalCipher.id))?.userId, f.successor.id);
+  assert.equal((await cipherRepo(f.env.DB).getCipher(f.personalCipher.id))?.userId, f.successor.id);
   assert.ok(f.blobs.values.has(f.personalCipher.key));
 });
 
@@ -259,7 +259,7 @@ test('an audit write failure rolls back user deletion and leaves every blob in p
 test('blob cleanup is best effort after commit and continues after a deletion failure', async () => {
   const f = await setup();
   f.env.ATTACHMENTS_KV!.delete = async (key) => {
-    assert.equal(await userRepo.getUserById(f.env.DB, f.target.id), null);
+    assert.equal(await userRepo(f.env.DB).getUserById(f.target.id), null);
     if (key === f.personalCipher.key) throw new Error('blob unavailable');
     f.blobs.values.delete(key);
   };
@@ -293,12 +293,12 @@ test('self-deletion requires the master password and refuses sole Owners and the
     const response = await authedFetch(env, { method: 'DELETE', path: '/api/accounts', userId: user.id, body });
     assert.equal(response.status, 400);
     assert.equal(((await response.json()) as { error: string }).error, 'User verification failed.');
-    assert.ok(await userRepo.getUserById(env.DB, user.id));
+    assert.ok(await userRepo(env.DB).getUserById(user.id));
   }
   for (const body of [null, [], 'invalid', undefined]) {
     const response = await authedFetch(env, { method: 'DELETE', path: '/api/accounts', userId: user.id, body });
     assert.equal(response.status, 400);
-    assert.ok(await userRepo.getUserById(env.DB, user.id));
+    assert.ok(await userRepo(env.DB).getUserById(user.id));
   }
   const org = await createOwnedOrganization(env.DB, user, { name: 'Sole Owner', key: '4.dGVzdA==' });
   const owner = await authedFetch(env, {
@@ -309,8 +309,8 @@ test('self-deletion requires the master password and refuses sole Owners and the
   });
   assert.equal(owner.status, 400);
   assert.match(await owner.text(), /sole owner/);
-  assert.ok(await orgRepo.getOrganization(env.DB, org.id));
-  assert.ok(await userRepo.getUserById(env.DB, user.id));
+  assert.ok(await orgRepo(env.DB).getOrganization(org.id));
+  assert.ok(await userRepo(env.DB).getUserById(user.id));
   const admin = await seedUser(env, { role: 'admin' });
   const lastAdmin = await authedFetch(env, {
     method: 'DELETE',
@@ -323,7 +323,7 @@ test('self-deletion requires the master password and refuses sole Owners and the
     ((await lastAdmin.json()) as { error: string }).error,
     'You cannot delete the last instance administrator.',
   );
-  assert.ok(await userRepo.getUserById(env.DB, admin.id));
+  assert.ok(await userRepo(env.DB).getUserById(admin.id));
   assert.equal(await getOrm(env.DB).$count(auditLogs), 0);
 });
 
@@ -338,9 +338,9 @@ test('self-deletion transfers org items, cleans personal blobs and revokes acces
   });
   assert.equal(response.status, 200);
   assert.equal(await response.text(), '');
-  assert.equal(await userRepo.getUserById(f.env.DB, f.target.id), null);
-  assert.equal(await cipherRepo.getCipher(f.env.DB, f.personalCipher.id), null);
-  assert.equal((await cipherRepo.getCipher(f.env.DB, f.orgCipher.id))?.userId, f.successor.id);
+  assert.equal(await userRepo(f.env.DB).getUserById(f.target.id), null);
+  assert.equal(await cipherRepo(f.env.DB).getCipher(f.personalCipher.id), null);
+  assert.equal((await cipherRepo(f.env.DB).getCipher(f.orgCipher.id))?.userId, f.successor.id);
   assert.equal(f.blobs.values.has(f.personalCipher.key), false);
   assert.equal(
     (await authedFetch(f.env, { path: '/api/accounts/profile', headers: { Authorization: `Bearer ${token}` } })).status,
@@ -374,7 +374,7 @@ test('the accounts root and POST delete aliases use the same guarded deletion', 
       body: { masterPasswordHash: user.masterPasswordHash },
     });
     assert.equal(response.status, 200);
-    assert.equal(await userRepo.getUserById(env.DB, user.id), null);
+    assert.equal(await userRepo(env.DB).getUserById(user.id), null);
     await drainWaitUntil();
   }
 });
@@ -393,7 +393,7 @@ test('Better Auth cannot delete accounts or change email outside the vault adapt
       body: { password: user.masterPasswordHash, newEmail: 'replacement@example.test' },
     });
     assert.equal(response.ok, false);
-    assert.equal((await userRepo.getUserById(env.DB, user.id))?.email, user.email);
+    assert.equal((await userRepo(env.DB).getUserById(user.id))?.email, user.email);
   }
 });
 
@@ -428,7 +428,7 @@ test('Owner org deletion cleans blobs and Secrets Manager data and bumps over 10
   await getOrm(f.env.DB).update(userRevisions).set({ revisionDate: PAST });
   // Leave one member with no revision row, which the batch must create.
   await getOrm(f.env.DB).delete(userRevisions).where(eq(userRevisions.userId, f.successor.id));
-  const members = await orgRepo.listMembershipsByOrg(f.env.DB, f.org.id);
+  const members = await orgRepo(f.env.DB).listMembershipsByOrg(f.org.id);
   assert.equal(members.length, 102);
 
   const response = await authedFetch(f.env, {
@@ -437,15 +437,15 @@ test('Owner org deletion cleans blobs and Secrets Manager data and bumps over 10
     userId: f.target.id,
   });
   assert.equal(response.status, 200);
-  assert.equal(await orgRepo.getOrganization(f.env.DB, f.org.id), null);
-  assert.equal(await cipherRepo.getCipher(f.env.DB, f.orgCipher.id), null);
+  assert.equal(await orgRepo(f.env.DB).getOrganization(f.org.id), null);
+  assert.equal(await cipherRepo(f.env.DB).getCipher(f.orgCipher.id), null);
   assert.equal(f.blobs.values.has(f.orgCipher.key), false);
   assert.ok(f.blobs.values.has(f.personalCipher.key));
   assert.ok(f.blobs.values.has(f.sendKey));
-  for (const member of members) assert.ok((await revisionRepo.getRevisionDate(f.env.DB, member.userId!)) > PAST);
-  assert.equal(await revisionRepo.getRevisionDate(f.env.DB, otherOwner.id), PAST);
-  assert.ok(await orgRepo.getOrganization(f.env.DB, otherOrg.id));
-  assert.ok(await cipherRepo.getCipher(f.env.DB, otherCipher.id));
+  for (const member of members) assert.ok((await revisionRepo(f.env.DB).getRevisionDate(member.userId!)) > PAST);
+  assert.equal(await revisionRepo(f.env.DB).getRevisionDate(otherOwner.id), PAST);
+  assert.ok(await orgRepo(f.env.DB).getOrganization(otherOrg.id));
+  assert.ok(await cipherRepo(f.env.DB).getCipher(otherCipher.id));
   assert.ok(f.blobs.values.has(otherCipher.key));
   for (const table of [
     smProjects,
@@ -475,7 +475,7 @@ test('a non-owner cannot delete an organization', async () => {
     userId: f.successor.id,
   });
   assert.equal(response.status, 403);
-  assert.ok(await orgRepo.getOrganization(f.env.DB, f.org.id));
+  assert.ok(await orgRepo(f.env.DB).getOrganization(f.org.id));
   await assertIntact(f);
 });
 
@@ -484,8 +484,8 @@ test('an org deletion audit failure rolls back revisions, ciphers and the org be
   await getOrm(f.env.DB).update(userRevisions).set({ revisionDate: PAST });
   await abortWrites(f.env, { table: auditLogs, event: 'INSERT' }, 'audit failure');
   await assert.rejects(deleteOrganizationAccount(f.env, f.org.id, audit), /audit failure/);
-  assert.ok(await orgRepo.getOrganization(f.env.DB, f.org.id));
-  assert.equal(await revisionRepo.getRevisionDate(f.env.DB, f.target.id), PAST);
+  assert.ok(await orgRepo(f.env.DB).getOrganization(f.org.id));
+  assert.equal(await revisionRepo(f.env.DB).getRevisionDate(f.target.id), PAST);
   await assertIntact(f);
 });
 

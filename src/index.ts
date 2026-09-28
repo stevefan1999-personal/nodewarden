@@ -1,6 +1,6 @@
 import { pruneEvents } from './services/events';
 import { purgeExpiredEmailOtps } from './services/email-otp';
-import { purgeSecretsTrash } from './services/storage-secret-repo';
+import { smRepo } from './services/storage-secret-repo';
 import { purgeExpiredSends, purgeOldTrash } from './services/retention';
 import { syncVaultAdminRoles } from './services/vault-admin-role';
 import { ensurePushInstallationCredentials } from './services/push-relay';
@@ -110,7 +110,7 @@ export default {
       'event cleanup': () => pruneEvents(env.DB),
       'email code cleanup': () => purgeExpiredEmailOtps(env.DB),
       'scheduled backup': () => runScheduledBackupIfDue(env),
-      'Secrets Manager trash purge': () => purgeSecretsTrash(env.DB),
+      'Secrets Manager trash purge': () => smRepo(env.DB).purgeSecretsTrash(),
       'emergency access timeouts': () => approveExpiredEmergencyAccess(env),
       'emergency access reminders': () => remindPendingEmergencyAccess(env),
       'expired Send purge': () => purgeExpiredSends(env),

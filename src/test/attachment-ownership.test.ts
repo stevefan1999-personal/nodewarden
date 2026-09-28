@@ -3,7 +3,7 @@ import test from 'node:test';
 
 import { D1_MAX_BOUND_PARAMETERS, getOrm } from '../db/client';
 import { ciphers } from '../db/schema';
-import * as attachmentRepo from '../services/storage-attachment-repo';
+import { attachmentRepo } from '../services/storage-attachment-repo';
 import type { Env } from '../types';
 import { createTestEnv, seedUser } from './support/env';
 
@@ -18,7 +18,7 @@ async function addCipher(env: Env, userId: string, organizationId: string | null
 }
 
 async function attach(env: Env, cipherId: string, id: string = crypto.randomUUID()) {
-  await attachmentRepo.saveAttachment(env.DB, { id, cipherId, fileName: 'f', size: 1, sizeName: '1 Bytes', key: null });
+  await attachmentRepo(env.DB).saveAttachment({ id, cipherId, fileName: 'f', size: 1, sizeName: '1 Bytes', key: null });
   return id;
 }
 
@@ -31,7 +31,7 @@ test("attachment saves, moves and deletes stay within one user's personal cipher
   const foreign = await addCipher(env, other.id);
   const organization = await addCipher(env, owner.id, crypto.randomUUID());
   const cipherOf = async (...ids: string[]) =>
-    Promise.all(ids.map(async (id) => (await attachmentRepo.getAttachment(env.DB, id))?.cipherId ?? null));
+    Promise.all(ids.map(async (id) => (await attachmentRepo(env.DB).getAttachment(id))?.cipherId ?? null));
 
   // Re-saving an existing id moves it between the owner's ciphers, never onto another user's.
   const moved = await attach(env, first);
@@ -48,14 +48,14 @@ test("attachment saves, moves and deletes stay within one user's personal cipher
     [organizationAttachment, first],
     [foreignAttachment, first],
   ]) {
-    await attachmentRepo.addAttachmentToCipherForUser(env.DB, target, attachmentId, owner.id);
+    await attachmentRepo(env.DB).addAttachmentToCipherForUser(target, attachmentId, owner.id);
   }
   assert.deepEqual(await cipherOf(moved, organizationAttachment, foreignAttachment), [second, organization, foreign]);
-  await attachmentRepo.addAttachmentToCipherForUser(env.DB, first, moved, owner.id);
+  await attachmentRepo(env.DB).addAttachmentToCipherForUser(first, moved, owner.id);
   assert.deepEqual(await cipherOf(moved), [first]);
 
   for (const attachmentId of [organizationAttachment, foreignAttachment, moved]) {
-    await attachmentRepo.deleteAttachmentForUser(env.DB, attachmentId, owner.id);
+    await attachmentRepo(env.DB).deleteAttachmentForUser(attachmentId, owner.id);
   }
   assert.deepEqual(await cipherOf(organizationAttachment, foreignAttachment, moved), [organization, foreign, null]);
 });
@@ -65,11 +65,11 @@ test('bulk attachment reads and deletes take more ids than one D1 statement can 
   const cipherId = await addCipher(env, (await seedUser(env)).id);
   const attachmentId = await attach(env, cipherId);
   const unknownIds = Array.from({ length: D1_MAX_BOUND_PARAMETERS }, () => crypto.randomUUID());
-  const read = await attachmentRepo.getAttachmentsByCipherIds(env.DB, [...unknownIds, cipherId]);
+  const read = await attachmentRepo(env.DB).getAttachmentsByCipherIds([...unknownIds, cipherId]);
   assert.deepEqual(
     read.get(cipherId)?.map(({ id }) => id),
     [attachmentId],
   );
-  await attachmentRepo.bulkDeleteAttachmentsByIds(env.DB, [...unknownIds, attachmentId]);
-  assert.equal(await attachmentRepo.getAttachment(env.DB, attachmentId), null);
+  await attachmentRepo(env.DB).bulkDeleteAttachmentsByIds([...unknownIds, attachmentId]);
+  assert.equal(await attachmentRepo(env.DB).getAttachment(attachmentId), null);
 });

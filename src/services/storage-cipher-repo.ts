@@ -1,12 +1,12 @@
 import { and, asc, desc, eq, inArray, isNotNull, isNull, ne, or, type SQL } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/sqlite-core';
 
-import { getOrm, statementChunks } from '../db/client';
+import { Repository, repository, statementChunks } from '../db/client';
 import { ciphers, organizationMemberships } from '../db/schema';
 import { bound, jsonExtract, jsonRemove, scalar } from '../db/sql';
 import type { Cipher } from '../types';
 import { MembershipStatus, MembershipType } from './org-types';
-import { updateRevisionDate } from './storage-revision-repo';
+import { revisionRepo } from './storage-revision-repo';
 
 function normalizeOptionalId(value: unknown): string | null {
   if (value == null) return null;
@@ -83,289 +83,271 @@ function personalVault(userId: string) {
   return and(eq(ciphers.userId, userId), isNull(ciphers.organizationId));
 }
 
-export async function getCipher(db: D1Database, id: string): Promise<Cipher | null> {
-  const [row] = await getOrm(db).select().from(ciphers).where(eq(ciphers.id, id)).limit(1);
-  return parseCipherRow(row);
-}
+export class CipherRepository extends Repository {
+  async getCipher(id: string): Promise<Cipher | null> {
+    const [row] = await this.orm.select().from(ciphers).where(eq(ciphers.id, id)).limit(1);
+    return parseCipherRow(row);
+  }
 
-export async function getCipherForUser(db: D1Database, id: string, userId: string): Promise<Cipher | null> {
-  const [row] = await getOrm(db)
-    .select()
-    .from(ciphers)
-    .where(and(eq(ciphers.id, id), personalVault(userId)))
-    .limit(1);
-  return parseCipherRow(row);
-}
+  async getCipherForUser(id: string, userId: string): Promise<Cipher | null> {
+    const [row] = await this.orm
+      .select()
+      .from(ciphers)
+      .where(and(eq(ciphers.id, id), personalVault(userId)))
+      .limit(1);
+    return parseCipherRow(row);
+  }
 
-// The upsert as an unexecuted statement, so callers can batch it with related writes.
-export function cipherUpsert(db: D1Database, cipher: Cipher) {
-  const folderId = normalizeOptionalId(cipher.folderId);
-  const data = JSON.stringify(
-    Object.fromEntries(Object.entries(cipher).filter(([key]) => !CIPHER_SCALAR_DATA_KEYS.has(key))),
-  );
-  const organizationId = normalizeOptionalId(cipher.organizationId ?? null);
-  const values = {
-    id: cipher.id,
-    userId: cipher.userId,
-    organizationId,
-    type: Number(cipher.type) || 1,
-    folderId,
-    name: cipher.name,
-    notes: cipher.notes,
-    favorite: cipher.favorite ? 1 : 0,
-    data,
-    reprompt: cipher.reprompt ?? 0,
-    key: cipher.key,
-    createdAt: cipher.createdAt,
-    updatedAt: cipher.updatedAt,
-    archivedAt: cipher.archivedAt ?? null,
-    deletedAt: cipher.deletedAt,
-  };
-  return getOrm(db)
-    .insert(ciphers)
-    .values(values)
-    .onConflictDoUpdate({
-      target: ciphers.id,
-      set: {
-        organizationId: values.organizationId,
-        type: values.type,
-        folderId: values.folderId,
-        name: values.name,
-        notes: values.notes,
-        favorite: values.favorite,
-        data: values.data,
-        reprompt: values.reprompt,
-        key: values.key,
-        updatedAt: values.updatedAt,
-        archivedAt: values.archivedAt,
-        deletedAt: values.deletedAt,
-      },
-      // An org overwrite is only legitimate when the stored row already belongs
-      // to that same org; a NULL organization_id must never match an incoming org cipher.
-      // An incoming personal cipher binds NULL, which equals nothing either.
-      where: or(
-        eq(ciphers.userId, cipher.userId),
-        and(isNotNull(ciphers.organizationId), eq(ciphers.organizationId, bound(organizationId))),
-      ),
-    });
-}
+  // The upsert as an unexecuted statement, so callers can batch it with related writes.
+  cipherUpsert(cipher: Cipher) {
+    const folderId = normalizeOptionalId(cipher.folderId);
+    const data = JSON.stringify(
+      Object.fromEntries(Object.entries(cipher).filter(([key]) => !CIPHER_SCALAR_DATA_KEYS.has(key))),
+    );
+    const organizationId = normalizeOptionalId(cipher.organizationId ?? null);
+    const values = {
+      id: cipher.id,
+      userId: cipher.userId,
+      organizationId,
+      type: Number(cipher.type) || 1,
+      folderId,
+      name: cipher.name,
+      notes: cipher.notes,
+      favorite: cipher.favorite ? 1 : 0,
+      data,
+      reprompt: cipher.reprompt ?? 0,
+      key: cipher.key,
+      createdAt: cipher.createdAt,
+      updatedAt: cipher.updatedAt,
+      archivedAt: cipher.archivedAt ?? null,
+      deletedAt: cipher.deletedAt,
+    };
+    return this.orm
+      .insert(ciphers)
+      .values(values)
+      .onConflictDoUpdate({
+        target: ciphers.id,
+        set: {
+          organizationId: values.organizationId,
+          type: values.type,
+          folderId: values.folderId,
+          name: values.name,
+          notes: values.notes,
+          favorite: values.favorite,
+          data: values.data,
+          reprompt: values.reprompt,
+          key: values.key,
+          updatedAt: values.updatedAt,
+          archivedAt: values.archivedAt,
+          deletedAt: values.deletedAt,
+        },
+        // An org overwrite is only legitimate when the stored row already belongs
+        // to that same org; a NULL organization_id must never match an incoming org cipher.
+        // An incoming personal cipher binds NULL, which equals nothing either.
+        where: or(
+          eq(ciphers.userId, cipher.userId),
+          and(isNotNull(ciphers.organizationId), eq(ciphers.organizationId, bound(organizationId))),
+        ),
+      });
+  }
 
-export async function saveCipher(db: D1Database, cipher: Cipher): Promise<void> {
-  await cipherUpsert(db, cipher);
-}
+  async saveCipher(cipher: Cipher): Promise<void> {
+    await this.cipherUpsert(cipher);
+  }
 
-export async function deleteCipher(db: D1Database, id: string, userId: string): Promise<void> {
-  await getOrm(db)
-    .delete(ciphers)
-    .where(and(eq(ciphers.id, id), personalVault(userId)));
-}
+  async deleteCipher(id: string, userId: string): Promise<void> {
+    await this.orm.delete(ciphers).where(and(eq(ciphers.id, id), personalVault(userId)));
+  }
 
-export async function deleteCipherById(db: D1Database, id: string): Promise<void> {
-  await getOrm(db).delete(ciphers).where(eq(ciphers.id, id));
-}
+  async deleteCipherById(id: string): Promise<void> {
+    await this.orm.delete(ciphers).where(eq(ciphers.id, id));
+  }
 
-export function deleteCiphersByOrganization(db: D1Database, organizationId: string) {
-  return getOrm(db).delete(ciphers).where(eq(ciphers.organizationId, organizationId));
-}
+  deleteCiphersByOrganization(organizationId: string) {
+    return this.orm.delete(ciphers).where(eq(ciphers.organizationId, organizationId));
+  }
 
-// Each org item passes to the oldest other confirmed Owner of its org, else to its oldest other confirmed member.
-export function reassignOrganizationCiphers(db: D1Database, userId: string, guard: SQL) {
-  const orm = getOrm(db);
-  const successor = alias(organizationMemberships, 'successor');
-  return orm
-    .update(ciphers)
-    .set({
-      userId: scalar<string>(
-        orm
-          .select({ userId: successor.userId })
-          .from(successor)
-          .where(
-            and(
-              eq(successor.orgId, ciphers.organizationId),
-              ne(successor.userId, userId),
-              eq(successor.status, MembershipStatus.Confirmed),
-            ),
-          )
-          .orderBy(desc(eq(successor.type, MembershipType.Owner)), asc(successor.createdAt), asc(successor.id))
-          .limit(1),
-      ),
-    })
-    .where(and(eq(ciphers.userId, userId), isNotNull(ciphers.organizationId), guard));
-}
-
-async function chunkedUpdate(
-  db: D1Database,
-  ids: string[],
-  userId: string,
-  set: Record<string, unknown>,
-  extraWhere: ReturnType<typeof and> | undefined,
-): Promise<string | null> {
-  const uniqueIds = sanitizeIds(ids);
-  if (!uniqueIds.length) return null;
-  const orm = getOrm(db);
-  const update = (chunk: string[]) =>
-    orm
+  // Each org item passes to the oldest other confirmed Owner of its org, else to its oldest other confirmed member.
+  reassignOrganizationCiphers(userId: string, guard: SQL) {
+    const successor = alias(organizationMemberships, 'successor');
+    return this.orm
       .update(ciphers)
-      .set(set)
-      .where(and(personalVault(userId), inArray(ciphers.id, chunk), extraWhere));
-  for (const chunk of statementChunks(uniqueIds, update)) {
-    await update(chunk);
+      .set({
+        userId: scalar<string>(
+          this.orm
+            .select({ userId: successor.userId })
+            .from(successor)
+            .where(
+              and(
+                eq(successor.orgId, ciphers.organizationId),
+                ne(successor.userId, userId),
+                eq(successor.status, MembershipStatus.Confirmed),
+              ),
+            )
+            .orderBy(desc(eq(successor.type, MembershipType.Owner)), asc(successor.createdAt), asc(successor.id))
+            .limit(1),
+        ),
+      })
+      .where(and(eq(ciphers.userId, userId), isNotNull(ciphers.organizationId), guard));
   }
-  return updateRevisionDate(db, userId);
-}
 
-export async function bulkSoftDeleteCiphers(db: D1Database, ids: string[], userId: string): Promise<string | null> {
-  const now = new Date().toISOString();
-  return chunkedUpdate(
-    db,
-    ids,
-    userId,
-    {
-      deletedAt: now,
-      updatedAt: now,
-      data: jsonRemove(ciphers.data, '$.deletedAt', '$.deletedDate', '$.updatedAt', '$.revisionDate'),
-    },
-    undefined,
-  );
-}
-
-export async function bulkRestoreCiphers(db: D1Database, ids: string[], userId: string): Promise<string | null> {
-  const now = new Date().toISOString();
-  return chunkedUpdate(
-    db,
-    ids,
-    userId,
-    {
-      deletedAt: null,
-      updatedAt: now,
-      data: jsonRemove(ciphers.data, '$.deletedAt', '$.deletedDate', '$.updatedAt', '$.revisionDate'),
-    },
-    undefined,
-  );
-}
-
-export async function bulkDeleteCiphers(db: D1Database, ids: string[], userId: string): Promise<string | null> {
-  const uniqueIds = sanitizeIds(ids);
-  if (!uniqueIds.length) return null;
-  const orm = getOrm(db);
-  const remove = (chunk: string[]) => orm.delete(ciphers).where(and(personalVault(userId), inArray(ciphers.id, chunk)));
-  for (const chunk of statementChunks(uniqueIds, remove)) {
-    await remove(chunk);
+  private async chunkedUpdate(
+    ids: string[],
+    userId: string,
+    set: Record<string, unknown>,
+    extraWhere: ReturnType<typeof and> | undefined,
+  ): Promise<string | null> {
+    const uniqueIds = sanitizeIds(ids);
+    if (!uniqueIds.length) return null;
+    const update = (chunk: string[]) =>
+      this.orm
+        .update(ciphers)
+        .set(set)
+        .where(and(personalVault(userId), inArray(ciphers.id, chunk), extraWhere));
+    for (const chunk of statementChunks(uniqueIds, update)) {
+      await update(chunk);
+    }
+    return revisionRepo(this.db).updateRevisionDate(userId);
   }
-  return updateRevisionDate(db, userId);
-}
 
-export async function getAllCiphers(db: D1Database, userId: string): Promise<Cipher[]> {
-  const rows = await getOrm(db).select().from(ciphers).where(personalVault(userId)).orderBy(desc(ciphers.updatedAt));
-  return rows.flatMap((row) => {
-    const cipher = parseCipherRow(row);
-    return cipher ? [cipher] : [];
-  });
-}
+  async bulkSoftDeleteCiphers(ids: string[], userId: string): Promise<string | null> {
+    const now = new Date().toISOString();
+    return this.chunkedUpdate(
+      ids,
+      userId,
+      {
+        deletedAt: now,
+        updatedAt: now,
+        data: jsonRemove(ciphers.data, '$.deletedAt', '$.deletedDate', '$.updatedAt', '$.revisionDate'),
+      },
+      undefined,
+    );
+  }
 
-export async function getCiphersPage(
-  db: D1Database,
-  userId: string,
-  includeDeleted: boolean,
-  limit: number,
-  offset: number,
-): Promise<Cipher[]> {
-  const deletedFilter = includeDeleted
-    ? undefined
-    : and(
+  async bulkRestoreCiphers(ids: string[], userId: string): Promise<string | null> {
+    const now = new Date().toISOString();
+    return this.chunkedUpdate(
+      ids,
+      userId,
+      {
+        deletedAt: null,
+        updatedAt: now,
+        data: jsonRemove(ciphers.data, '$.deletedAt', '$.deletedDate', '$.updatedAt', '$.revisionDate'),
+      },
+      undefined,
+    );
+  }
+
+  async bulkDeleteCiphers(ids: string[], userId: string): Promise<string | null> {
+    const uniqueIds = sanitizeIds(ids);
+    if (!uniqueIds.length) return null;
+    const remove = (chunk: string[]) =>
+      this.orm.delete(ciphers).where(and(personalVault(userId), inArray(ciphers.id, chunk)));
+    for (const chunk of statementChunks(uniqueIds, remove)) {
+      await remove(chunk);
+    }
+    return revisionRepo(this.db).updateRevisionDate(userId);
+  }
+
+  async getAllCiphers(userId: string): Promise<Cipher[]> {
+    const rows = await this.orm.select().from(ciphers).where(personalVault(userId)).orderBy(desc(ciphers.updatedAt));
+    return rows.flatMap((row) => {
+      const cipher = parseCipherRow(row);
+      return cipher ? [cipher] : [];
+    });
+  }
+
+  async getCiphersPage(userId: string, includeDeleted: boolean, limit: number, offset: number): Promise<Cipher[]> {
+    const deletedFilter = includeDeleted
+      ? undefined
+      : and(
+          isNull(ciphers.deletedAt),
+          isNull(jsonExtract(ciphers.data, '$.deletedAt')),
+          isNull(jsonExtract(ciphers.data, '$.deletedDate')),
+        );
+    const rows = await this.orm
+      .select()
+      .from(ciphers)
+      .where(and(personalVault(userId), deletedFilter))
+      .orderBy(desc(ciphers.updatedAt))
+      .limit(limit)
+      .offset(offset);
+    return rows.flatMap((row) => {
+      const cipher = parseCipherRow(row);
+      return cipher ? [cipher] : [];
+    });
+  }
+
+  async getCiphersByIds(ids: string[], userId: string): Promise<Cipher[]> {
+    const uniqueIds = sanitizeIds(ids);
+    if (!uniqueIds.length) return [];
+    const out: Cipher[] = [];
+    const read = (chunk: string[]) =>
+      this.orm
+        .select()
+        .from(ciphers)
+        .where(and(personalVault(userId), inArray(ciphers.id, chunk)));
+    for (const chunk of statementChunks(uniqueIds, read)) {
+      const rows = await read(chunk);
+      out.push(
+        ...rows.flatMap((row) => {
+          const cipher = parseCipherRow(row);
+          return cipher ? [cipher] : [];
+        }),
+      );
+    }
+    return out;
+  }
+
+  async bulkMoveCiphers(ids: string[], folderId: string | null, userId: string): Promise<string | null> {
+    const now = new Date().toISOString();
+    return this.chunkedUpdate(
+      ids,
+      userId,
+      {
+        folderId: normalizeOptionalId(folderId),
+        updatedAt: now,
+        data: jsonRemove(ciphers.data, '$.folderId', '$.folder_id', '$.updatedAt', '$.revisionDate'),
+      },
+      undefined,
+    );
+  }
+
+  async bulkArchiveCiphers(ids: string[], userId: string): Promise<string | null> {
+    const now = new Date().toISOString();
+    return this.chunkedUpdate(
+      ids,
+      userId,
+      {
+        archivedAt: now,
+        updatedAt: now,
+        data: jsonRemove(ciphers.data, '$.archivedAt', '$.archivedDate', '$.updatedAt', '$.revisionDate'),
+      },
+      and(
         isNull(ciphers.deletedAt),
         isNull(jsonExtract(ciphers.data, '$.deletedAt')),
         isNull(jsonExtract(ciphers.data, '$.deletedDate')),
-      );
-  const rows = await getOrm(db)
-    .select()
-    .from(ciphers)
-    .where(and(personalVault(userId), deletedFilter))
-    .orderBy(desc(ciphers.updatedAt))
-    .limit(limit)
-    .offset(offset);
-  return rows.flatMap((row) => {
-    const cipher = parseCipherRow(row);
-    return cipher ? [cipher] : [];
-  });
-}
-
-export async function getCiphersByIds(db: D1Database, ids: string[], userId: string): Promise<Cipher[]> {
-  const uniqueIds = sanitizeIds(ids);
-  if (!uniqueIds.length) return [];
-  const orm = getOrm(db);
-  const out: Cipher[] = [];
-  const read = (chunk: string[]) =>
-    orm
-      .select()
-      .from(ciphers)
-      .where(and(personalVault(userId), inArray(ciphers.id, chunk)));
-  for (const chunk of statementChunks(uniqueIds, read)) {
-    const rows = await read(chunk);
-    out.push(
-      ...rows.flatMap((row) => {
-        const cipher = parseCipherRow(row);
-        return cipher ? [cipher] : [];
-      }),
+      ),
     );
   }
-  return out;
+
+  async bulkUnarchiveCiphers(ids: string[], userId: string): Promise<string | null> {
+    const now = new Date().toISOString();
+    return this.chunkedUpdate(
+      ids,
+      userId,
+      {
+        archivedAt: null,
+        updatedAt: now,
+        data: jsonRemove(ciphers.data, '$.archivedAt', '$.archivedDate', '$.updatedAt', '$.revisionDate'),
+      },
+      undefined,
+    );
+  }
+
+  async countPersonalCiphers(userId: string): Promise<number> {
+    return this.orm.$count(ciphers, and(eq(ciphers.userId, userId), isNull(ciphers.organizationId)));
+  }
 }
 
-export async function bulkMoveCiphers(
-  db: D1Database,
-  ids: string[],
-  folderId: string | null,
-  userId: string,
-): Promise<string | null> {
-  const now = new Date().toISOString();
-  return chunkedUpdate(
-    db,
-    ids,
-    userId,
-    {
-      folderId: normalizeOptionalId(folderId),
-      updatedAt: now,
-      data: jsonRemove(ciphers.data, '$.folderId', '$.folder_id', '$.updatedAt', '$.revisionDate'),
-    },
-    undefined,
-  );
-}
-
-export async function bulkArchiveCiphers(db: D1Database, ids: string[], userId: string): Promise<string | null> {
-  const now = new Date().toISOString();
-  return chunkedUpdate(
-    db,
-    ids,
-    userId,
-    {
-      archivedAt: now,
-      updatedAt: now,
-      data: jsonRemove(ciphers.data, '$.archivedAt', '$.archivedDate', '$.updatedAt', '$.revisionDate'),
-    },
-    and(
-      isNull(ciphers.deletedAt),
-      isNull(jsonExtract(ciphers.data, '$.deletedAt')),
-      isNull(jsonExtract(ciphers.data, '$.deletedDate')),
-    ),
-  );
-}
-
-export async function bulkUnarchiveCiphers(db: D1Database, ids: string[], userId: string): Promise<string | null> {
-  const now = new Date().toISOString();
-  return chunkedUpdate(
-    db,
-    ids,
-    userId,
-    {
-      archivedAt: null,
-      updatedAt: now,
-      data: jsonRemove(ciphers.data, '$.archivedAt', '$.archivedDate', '$.updatedAt', '$.revisionDate'),
-    },
-    undefined,
-  );
-}
-
-export async function countPersonalCiphers(db: D1Database, userId: string): Promise<number> {
-  return getOrm(db).$count(ciphers, and(eq(ciphers.userId, userId), isNull(ciphers.organizationId)));
-}
+export const cipherRepo = repository(CipherRepository);

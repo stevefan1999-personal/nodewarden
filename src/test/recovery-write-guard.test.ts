@@ -16,10 +16,10 @@ import {
   signInToAdminPortal,
 } from './support/env';
 import type { Env, User } from '../types';
-import * as passkeyRepo from '../services/storage-account-passkey-repo';
-import * as deviceRepo from '../services/storage-device-repo';
-import * as sessionRepo from '../services/storage-session-repo';
-import * as userRepo from '../services/storage-user-repo';
+import { passkeyRepo } from '../services/storage-account-passkey-repo';
+import { deviceRepo } from '../services/storage-device-repo';
+import { sessionRepo } from '../services/storage-session-repo';
+import { userRepo } from '../services/storage-user-repo';
 
 const PASSWORD = 'recovery-client-password';
 const RECOVERY = 'ABCD EFGH IJKL MNOP QRST UVWX YZ23 4567';
@@ -65,10 +65,10 @@ for (const login of [false, true]) {
             form: { csrf: portal.csrf, confirmation: user.email },
           });
           assert.equal(reset.status, 303);
-          current = (await userRepo.getUserById(env.DB, user.id))!;
+          current = (await userRepo(env.DB).getUserById(user.id))!;
           current.totpRecoveryCode = await ensureTwoFactorRecoveryCode(env.DB, user.id, current.securityStamp);
           current.totpSecret = TOTP;
-          await userRepo.saveUser(env.DB, current, ['totpSecret']);
+          await userRepo(env.DB).saveUser(current, ['totpSecret']);
           await getOrm(env.DB).insert(webauthnCredentials).values({
             id: 'current-key',
             userId: user.id,
@@ -79,14 +79,13 @@ for (const login of [false, true]) {
             createdAt: current.createdAt,
             updatedAt: current.updatedAt,
           });
-          await deviceRepo.saveTrustedTwoFactorDeviceToken(
-            env.DB,
+          await deviceRepo(env.DB).saveTrustedTwoFactorDeviceToken(
             'current-remember',
             user.id,
             'current-device',
             Date.now() + 60000,
           );
-          await sessionRepo.saveRefreshToken(env.DB, 'current-session', user.id);
+          await sessionRepo(env.DB).saveRefreshToken('current-session', user.id);
         }
         return valid;
       },
@@ -94,15 +93,15 @@ for (const login of [false, true]) {
     const response = await recoveryRequest(env, user, login);
     assert.equal(response.status, 400);
     assert.equal(interrupted, true);
-    const after = (await userRepo.getUserById(env.DB, user.id))!;
+    const after = (await userRepo(env.DB).getUserById(user.id))!;
     for (const field of ['securityStamp', 'totpSecret', 'totpRecoveryCode'] as const)
       assert.equal(after[field], current![field], field);
-    assert.equal(await passkeyRepo.countAccountPasskeyCredentialsByUserId(env.DB, user.id, 'twoFactor'), 1);
+    assert.equal(await passkeyRepo(env.DB).countAccountPasskeyCredentialsByUserId(user.id, 'twoFactor'), 1);
     assert.equal(
-      await deviceRepo.getTrustedTwoFactorDeviceTokenUserId(env.DB, 'current-remember', 'current-device'),
+      await deviceRepo(env.DB).getTrustedTwoFactorDeviceTokenUserId('current-remember', 'current-device'),
       user.id,
     );
-    assert.equal(await sessionRepo.getRefreshTokenUserId(env.DB, 'current-session'), user.id);
+    assert.equal(await sessionRepo(env.DB).getRefreshTokenUserId('current-session'), user.id);
     await drainWaitUntil();
   });
 }

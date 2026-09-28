@@ -175,8 +175,8 @@ test('both recovery paths send a security notice and delivery failure never roll
 import { cose, isoCBOR } from '@simplewebauthn/server/helpers';
 import { createPrivateKey, sign, subtle } from 'node:crypto';
 import { TEST_ORIGIN } from './support/env';
-import * as passkeyRepo from '../services/storage-account-passkey-repo';
-import * as deviceRepo from '../services/storage-device-repo';
+import { passkeyRepo } from '../services/storage-account-passkey-repo';
+import { deviceRepo } from '../services/storage-device-repo';
 
 test('a verified passkey grant notifies its new device', async () => {
   const capture = captureEmail();
@@ -186,7 +186,7 @@ test('a verified passkey grant notifies its new device', async () => {
     verifyDevices: true,
     createdAt: new Date(Date.now() - 2 * 86400_000).toISOString(),
   });
-  await deviceRepo.upsertDevice(env.DB, user.id, 'known-device', 'Known', 9);
+  await deviceRepo(env.DB).upsertDevice(user.id, 'known-device', 'Known', 9);
   const keys = await subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
   const jwk = await subtle.exportKey('jwk', keys.privateKey);
   type CborValue = Parameters<typeof isoCBOR.encode>[0];
@@ -200,7 +200,7 @@ test('a verified passkey grant notifies its new device', async () => {
     ]),
   );
   const credentialId = Buffer.from(crypto.getRandomValues(new Uint8Array(16))).toString('base64url');
-  await passkeyRepo.saveAccountPasskeyCredential(env.DB, {
+  await passkeyRepo(env.DB).saveAccountPasskeyCredential({
     id: crypto.randomUUID(),
     userId: user.id,
     purpose: 'login',

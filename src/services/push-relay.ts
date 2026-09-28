@@ -1,7 +1,7 @@
 import type { Env } from '../types';
 import { withoutQueryParams } from '../db/client';
-import { getConfigValue as getStoredConfigValue, setConfigValue as saveConfigValue } from './storage-config-repo';
-import { getDevicePushUuid, userHasPushDevice } from './storage-device-repo';
+import { configRepo } from './storage-config-repo';
+import { deviceRepo } from './storage-device-repo';
 
 const PUSH_RELAY_URI = 'https://push.bitwarden.com';
 const PUSH_IDENTITY_URI = 'https://identity.bitwarden.com';
@@ -33,8 +33,8 @@ async function fetchPushEndpoint(url: string, init: RequestInit, errorMessage: s
 export async function ensurePushInstallationCredentials(db: D1Database): Promise<{ id: string; key: string } | null> {
   const [storedId, storedKey] = (
     await Promise.all([
-      getStoredConfigValue(db, PUSH_INSTALLATION_ID_KEY),
-      getStoredConfigValue(db, PUSH_INSTALLATION_KEY_KEY),
+      configRepo(db).getConfigValue(PUSH_INSTALLATION_ID_KEY),
+      configRepo(db).getConfigValue(PUSH_INSTALLATION_KEY_KEY),
     ])
   ).map((value) => String(value || '').trim());
   if (storedId && storedKey) return { id: storedId, key: storedKey };
@@ -77,8 +77,8 @@ export async function ensurePushInstallationCredentials(db: D1Database): Promise
   }
 
   await Promise.all([
-    saveConfigValue(db, PUSH_INSTALLATION_ID_KEY, id),
-    saveConfigValue(db, PUSH_INSTALLATION_KEY_KEY, key),
+    configRepo(db).setConfigValue(PUSH_INSTALLATION_ID_KEY, id),
+    configRepo(db).setConfigValue(PUSH_INSTALLATION_KEY_KEY, key),
   ]);
   return { id, key };
 }
@@ -198,9 +198,11 @@ export async function notifyMobilePush(
     payload: Record<string, unknown> | null | undefined;
   },
 ): Promise<void> {
-  if (!(await userHasPushDevice(env.DB, input.userId))) return;
+  if (!(await deviceRepo(env.DB).userHasPushDevice(input.userId))) return;
 
-  const actingPushUuid = input.contextId ? await getDevicePushUuid(env.DB, input.userId, input.contextId) : null;
+  const actingPushUuid = input.contextId
+    ? await deviceRepo(env.DB).getDevicePushUuid(input.userId, input.contextId)
+    : null;
 
   // Reshape the SignalR payload (PascalCase or camelCase keys) for mobile push: an item change
   // carries its id and scope, anything else only the user and date.

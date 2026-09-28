@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { Env, User, Invite } from '../types';
 import { AuthService } from '../services/auth';
 import { twoFactorProviders } from '../services/two-factor-providers';
-import { getAllUsersWithTwoFactor } from '../services/storage-user-repo';
+import { userRepo } from '../services/storage-user-repo';
 import { errorResponse, jsonResponse, parseBody } from '../utils/response';
 import { deleteUserAccount, setUserStatus } from '../services/account-deletion';
 import {
@@ -12,8 +12,7 @@ import {
   saveAuditLogSettings,
   writeAuditEvent,
 } from '../services/audit-events';
-import * as adminRepo from '../services/storage-admin-repo';
-import * as userRepo from '../services/storage-user-repo';
+import { adminRepo } from '../services/storage-admin-repo';
 
 function isAdmin(user: User): boolean {
   return user.role === 'admin' && user.status === 'active';
@@ -97,7 +96,7 @@ export async function handleAdminListUsers(request: Request, env: Env, actorUser
     return errorResponse('Forbidden', 403);
   }
 
-  const users = await getAllUsersWithTwoFactor(env.DB);
+  const users = await userRepo(env.DB).getAllUsersWithTwoFactor();
   const data = users.map((user) => {
     return {
       id: user.id,
@@ -136,7 +135,7 @@ export async function handleAdminListAuditLogs(request: Request, env: Env, actor
   const from = String(url.searchParams.get('from') || '').trim() || null;
   const to = String(url.searchParams.get('to') || '').trim() || null;
 
-  const result = await adminRepo.listAuditLogs(env.DB, { limit, offset, category, level, q, from, to });
+  const result = await adminRepo(env.DB).listAuditLogs({ limit, offset, category, level, q, from, to });
   return jsonResponse({
     data: result.logs.map((log) => ({
       id: log.id,
@@ -197,7 +196,7 @@ export async function handleAdminClearAuditLogs(request: Request, env: Env, acto
   if (!isAdmin(actorUser)) {
     return errorResponse('Forbidden', 403);
   }
-  const deleted = await adminRepo.clearAuditLogs(env.DB);
+  const deleted = await adminRepo(env.DB).clearAuditLogs();
   await writeAuditLog(
     env.DB,
     actorUser.id,
@@ -233,7 +232,7 @@ export async function handleAdminCreateInvite(request: Request, env: Env, actorU
     updatedAt: now.toISOString(),
   };
 
-  await adminRepo.createInvite(env.DB, invite);
+  await adminRepo(env.DB).createInvite(invite);
   await writeAuditLog(
     env.DB,
     actorUser.id,
@@ -257,7 +256,7 @@ export async function handleAdminListInvites(request: Request, env: Env, actorUs
 
   const url = new URL(request.url);
   const includeInactive = url.searchParams.get('includeInactive') === 'true';
-  const invites = await adminRepo.listInvites(env.DB, includeInactive);
+  const invites = await adminRepo(env.DB).listInvites(includeInactive);
   return jsonResponse({
     data: invites.map((invite) => toInviteResponse(request, invite)),
     object: 'list',
@@ -279,7 +278,7 @@ export async function handleAdminDeleteInvite(
   const confirmed = await readConfirmedBody(request, env, actorUser, PasswordBody);
   if (confirmed instanceof Response) return confirmed;
 
-  const deleted = await adminRepo.deleteInvite(env.DB, code);
+  const deleted = await adminRepo(env.DB).deleteInvite(code);
   if (!deleted) {
     return errorResponse('Invite not found', 404);
   }
@@ -309,7 +308,7 @@ export async function handleAdminDeleteAllInvites(request: Request, env: Env, ac
 
   const url = new URL(request.url);
   if (url.searchParams.get('scope') === 'invalid') {
-    const deleted = await adminRepo.deleteInvalidInvites(env.DB);
+    const deleted = await adminRepo(env.DB).deleteInvalidInvites();
     await writeAuditLog(
       env.DB,
       actorUser.id,
@@ -325,7 +324,7 @@ export async function handleAdminDeleteAllInvites(request: Request, env: Env, ac
     return jsonResponse({ deleted }, 200);
   }
 
-  const deleted = await adminRepo.deleteAllInvites(env.DB);
+  const deleted = await adminRepo(env.DB).deleteAllInvites();
   await writeAuditLog(
     env.DB,
     actorUser.id,
@@ -359,7 +358,7 @@ export async function handleAdminSetUserStatus(
     return errorResponse('You cannot ban yourself', 400);
   }
 
-  const target = await userRepo.getUserById(env.DB, targetUserId);
+  const target = await userRepo(env.DB).getUserById(targetUserId);
   if (!target) {
     return errorResponse('User not found', 404);
   }
@@ -403,7 +402,7 @@ export async function handleAdminDeleteUser(
   const confirmed = await readConfirmedBody(request, env, actorUser, PasswordBody);
   if (confirmed instanceof Response) return confirmed;
 
-  const target = await userRepo.getUserById(env.DB, targetUserId);
+  const target = await userRepo(env.DB).getUserById(targetUserId);
   if (!target) {
     return errorResponse('User not found', 404);
   }

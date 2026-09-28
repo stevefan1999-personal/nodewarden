@@ -5,7 +5,7 @@ import { getOrm } from '../db/client';
 import { events } from '../db/schema';
 import { EventType } from '../services/events';
 import { MembershipStatus } from '../services/org-types';
-import * as orgRepo from '../services/storage-org-repo';
+import { orgRepo } from '../services/storage-org-repo';
 import type { Env } from '../types';
 import { authedFetch, captureEmail, createTestEnv, MAILABLE_DOMAIN, seedUser } from './support/env';
 import { seedMember } from './support/sm';
@@ -20,7 +20,7 @@ async function setup() {
   const env = await createTestEnv(mail.overrides);
   const owner = await seedUser(env);
   const org = await createOwnedOrganization(env.DB, owner, { name: 'Private organization', key: ORG_KEY });
-  const [collection] = await orgRepo.listCollectionsByOrg(env.DB, org.id);
+  const [collection] = await orgRepo(env.DB).listCollectionsByOrg(org.id);
   const call = (method: string, path: string, body?: unknown, actor = owner) =>
     authedFetch(env, {
       method,
@@ -186,7 +186,7 @@ test('membership events cover actual transitions and preserve the affected accou
   const inviteEmail = `invite-${crypto.randomUUID()}@${MAILABLE_DOMAIN}`;
   assert.equal((await call('POST', `${base}/users/invite`, { emails: [inviteEmail], type: 2 })).status, 200);
   assert.equal((await call('POST', `${base}/users/invite`, { emails: [inviteEmail], type: 2 })).status, 200);
-  const invite = (await orgRepo.listMembershipsByOrg(env.DB, org.id)).find((member) => member.email === inviteEmail)!;
+  const invite = (await orgRepo(env.DB).listMembershipsByOrg(org.id)).find((member) => member.email === inviteEmail)!;
   const confirm = {
     keys: [
       { id: target.memberId, key: ORG_KEY },

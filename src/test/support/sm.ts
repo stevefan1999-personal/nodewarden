@@ -9,7 +9,7 @@ import {
   type OrgPermissions,
 } from '../../services/org-types';
 import { AuthService, type Principal } from '../../services/auth';
-import * as orgRepo from '../../services/storage-org-repo';
+import { orgRepo } from '../../services/storage-org-repo';
 import type { Env, User } from '../../types';
 import { authedFetch, seedUser } from './env';
 
@@ -96,7 +96,7 @@ export async function seedMembership(
     updatedAt: now,
     ...fields,
   };
-  await orgRepo.saveMembershipWithAccess(env.DB, member, { collections });
+  await orgRepo(env.DB).saveMembershipWithAccess(member, { collections });
   return member.id;
 }
 

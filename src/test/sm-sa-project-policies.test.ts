@@ -5,8 +5,8 @@ import { and, eq } from 'drizzle-orm';
 
 import { getOrm } from '../db/client';
 import { smProjectMembers, smServiceAccountProjects, smServiceAccounts } from '../db/schema';
-import * as orgRepo from '../services/storage-org-repo';
-import * as smRepo from '../services/storage-secret-repo';
+import { orgRepo } from '../services/storage-org-repo';
+import { smRepo } from '../services/storage-secret-repo';
 import { authedFetch, createTestEnv } from './support/env';
 import { ENCRYPTED_FIELD, postJson, seedMember, seedSmOrg } from './support/sm';
 
@@ -32,7 +32,7 @@ test('project policies require machine write only for creates, preserve exact sh
   const otherProject = await project(owner);
   const ownAccount = await account();
   const otherAccount = await account(owner);
-  const member = (await orgRepo.getMembershipByUserAndOrg(env.DB, a.id, orgId))!;
+  const member = (await orgRepo(env.DB).getMembershipByUserAndOrg(a.id, orgId))!;
   const orm = getOrm(env.DB);
   await orm.insert(smProjectMembers).values({ projectId: otherProject.id, membershipId: member.id, writeAccess: 0 });
   for (const [kind, expected] of [
@@ -79,7 +79,7 @@ test('project policies require machine write only for creates, preserve exact sh
   });
   assert.equal(updated.status, 200);
   assert.equal(((await updated.json()) as any).serviceAccountAccessPolicies[0].write, true);
-  assert.ok((await smRepo.getServiceAccount(env.DB, otherAccount.id))!.updatedAt > before);
+  assert.ok((await smRepo(env.DB).getServiceAccount(otherAccount.id))!.updatedAt > before);
   assert.equal((await request(a.id, path, 'PUT', { serviceAccountAccessPolicyRequests: [] })).status, 200);
   assert.deepEqual(((await (await request(a.id, path)).json()) as any).serviceAccountAccessPolicies, []);
   const foreign = await seedSmOrg(env);
@@ -100,7 +100,7 @@ test('granted-project diffs authorize every touched project but accept unchanged
   const writable = await project();
   const inaccessible = await project(owner);
   const sa = await account();
-  await smRepo.replaceServiceAccountProjects(env.DB, sa.id, [inaccessible.id]);
+  await smRepo(env.DB).replaceServiceAccountProjects(sa.id, [inaccessible.id]);
   const path = `/api/service-accounts/${sa.id}/granted-policies`;
   const existing = await request(a.id, path);
   assert.equal(existing.status, 200);
@@ -138,12 +138,12 @@ test('granted-project diffs authorize every touched project but accept unchanged
     assert.equal((await request(a.id, path, 'PUT', { projectGrantedPolicyRequests: policies })).status, 404);
   }
   assert.deepEqual(
-    new Set(await smRepo.listReadableServiceAccountProjectIds(env.DB, sa.id)),
+    new Set(await smRepo(env.DB).listReadableServiceAccountProjectIds(sa.id)),
     new Set([inaccessible.id, writable.id]),
   );
   const removeWritable = await request(a.id, path, 'PUT', { projectGrantedPolicyRequests: [granted(inaccessible.id)] });
   assert.equal(removeWritable.status, 200);
-  assert.deepEqual(await smRepo.listReadableServiceAccountProjectIds(env.DB, sa.id), [inaccessible.id]);
+  assert.deepEqual(await smRepo(env.DB).listReadableServiceAccountProjectIds(sa.id), [inaccessible.id]);
 });
 
 test('a concurrent new machine grant causes 409 and rolls back deletions in the same policy batch', async () => {
@@ -151,7 +151,7 @@ test('a concurrent new machine grant causes 409 and rolls back deletions in the 
   const p = await project();
   const old = await account();
   const added = await account();
-  await smRepo.replaceServiceAccountProjects(env.DB, old.id, [p.id]);
+  await smRepo(env.DB).replaceServiceAccountProjects(old.id, [p.id]);
   const before = '2020-01-01T00:00:00.000Z';
   const orm = getOrm(env.DB);
   await orm.update(smServiceAccounts).set({ updatedAt: before }).where(eq(smServiceAccounts.orgId, orgId));
@@ -177,7 +177,7 @@ test('a concurrent new machine grant causes 409 and rolls back deletions in the 
   env.DB.batch = batch;
   assert.equal(raced, true);
   assert.equal(response.status, 409);
-  assert.deepEqual(await smRepo.listReadableServiceAccountProjectIds(env.DB, old.id), [p.id]);
+  assert.deepEqual(await smRepo(env.DB).listReadableServiceAccountProjectIds(old.id), [p.id]);
   assert.equal(
     (await orm
       .select({ writeAccess: smServiceAccountProjects.writeAccess })
@@ -186,5 +186,5 @@ test('a concurrent new machine grant causes 409 and rolls back deletions in the 
       .get())!.writeAccess,
     0,
   );
-  assert.equal((await smRepo.getServiceAccount(env.DB, old.id))!.updatedAt, before);
+  assert.equal((await smRepo(env.DB).getServiceAccount(old.id))!.updatedAt, before);
 });

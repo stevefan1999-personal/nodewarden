@@ -6,7 +6,7 @@ import { getColumns } from 'drizzle-orm';
 import { D1_MAX_BOUND_PARAMETERS } from '../db/client';
 import { collectionGroups } from '../db/schema';
 import { MembershipType } from '../services/org-types';
-import * as orgRepo from '../services/storage-org-repo';
+import { orgRepo } from '../services/storage-org-repo';
 import type { Env, User } from '../types';
 import { authedFetch, createTestEnv, seedUser } from './support/env';
 import {
@@ -136,7 +136,7 @@ test('the collection dialog opens with every grant and saving it back keeps them
     userId: owner.id,
   });
   assert.equal(invited.status, 200);
-  const invitedId = (await orgRepo.listMembershipsByOrg(env.DB, orgId)).find((row) => row.email === INVITED_EMAIL)!.id;
+  const invitedId = (await orgRepo(env.DB).listMembershipsByOrg(orgId)).find((row) => row.email === INVITED_EMAIL)!.id;
 
   const opened = (await listDetails(env, owner, orgId)).find((collection) => collection.id === collectionId)!;
   assert.deepEqual(sorted(opened.users), sorted([editAccess(alice.memberId), viewAccess(invitedId)]));
@@ -156,7 +156,7 @@ test('the collection dialog opens with every grant and saving it back keeps them
     sorted([editAccess(alice.memberId), viewAccess(invitedId), editAccess(bob.memberId)]),
   );
   assert.deepEqual(reopened.groups, [manageAccess(groupId)]);
-  assert.deepEqual(await orgRepo.listUserCollectionAccess(env.DB, alice.user.id, orgId), [
+  assert.deepEqual(await orgRepo(env.DB).listUserCollectionAccess(alice.user.id, orgId), [
     { collectionId, readOnly: false, hidePasswords: false, manage: false },
   ]);
 });
@@ -204,7 +204,7 @@ test('saving the dialog with an empty list removes those grants and an omitted l
   const details = await singleDetails(env, owner, orgId, collectionId);
   assert.deepEqual(details.users, []);
   assert.deepEqual(details.groups, [manageAccess(groupId)]);
-  assert.deepEqual(await orgRepo.listUserCollectionAccess(env.DB, alice.user.id, orgId), []);
+  assert.deepEqual(await orgRepo(env.DB).listUserCollectionAccess(alice.user.id, orgId), []);
 });
 
 test('single collection details is one object in the shape `bw get org-collection` reads', async () => {
@@ -247,7 +247,7 @@ test('create and update answer with the saved collection access details', async 
   const env = await createTestEnv();
   const owner = await seedUser(env);
   const orgId = await createOrg(env, owner);
-  const ownerId = (await orgRepo.getMembershipByUserAndOrg(env.DB, owner.id, orgId))!.id;
+  const ownerId = (await orgRepo(env.DB).getMembershipByUserAndOrg(owner.id, orgId))!.id;
 
   const created = await postCollection(env, owner, orgId, { users: [manageAccess(ownerId)], groups: [] });
   assert.equal(created.status, 200);
@@ -320,7 +320,7 @@ test('access details are served only to members who may read that access', async
   const listedIds = async (actor: User) => (await listDetails(env, actor, orgId)).map(({ id }) => id).sort();
 
   // createOwnedOrganization also makes a default collection, which nobody manages.
-  const everyCollection = (await orgRepo.listCollectionsByOrg(env.DB, orgId)).map(({ id }) => id).sort();
+  const everyCollection = (await orgRepo(env.DB).listCollectionsByOrg(orgId)).map(({ id }) => id).sort();
   assert.deepEqual(await listedIds(owner), everyCollection);
   assert.deepEqual(await listedIds(manager.user), [managed]);
   assert.deepEqual(await listedIds(editor.user), []);
@@ -390,7 +390,7 @@ test('a collection save with a malformed access list is rejected before anything
   const env = await createTestEnv();
   const owner = await seedUser(env);
   const orgId = await createOrg(env, owner);
-  const before = await orgRepo.listCollectionsByOrg(env.DB, orgId);
+  const before = await orgRepo(env.DB).listCollectionsByOrg(orgId);
 
   const rejected = await postCollection(env, owner, orgId, { users: [{ readOnly: true }] });
   assert.equal(rejected.status, 400);
@@ -398,5 +398,5 @@ test('a collection save with a malformed access list is rejected before anything
     Object.keys(((await rejected.json()) as { validationErrors: Record<string, string[]> }).validationErrors),
     ['users.0.id'],
   );
-  assert.deepEqual(await orgRepo.listCollectionsByOrg(env.DB, orgId), before);
+  assert.deepEqual(await orgRepo(env.DB).listCollectionsByOrg(orgId), before);
 });

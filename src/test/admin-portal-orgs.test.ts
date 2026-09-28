@@ -4,7 +4,7 @@ import { createTestEnv, portalFetch, seedUser, signInToAdminPortal } from './sup
 import { seedMember, seedMembership } from './support/sm';
 import { MembershipStatus } from '../services/org-types';
 const { createOwnedOrganization } = await import('../handlers/organizations');
-import * as orgRepo from '../services/storage-org-repo';
+import { orgRepo } from '../services/storage-org-repo';
 import { getOrm } from '../db/client';
 import { auditLogs, organizations, smSecrets, smProjects } from '../db/schema';
 import { eq } from 'drizzle-orm';
@@ -27,14 +27,14 @@ test('portal organization searches use literal names and either member email; de
   // A membership row without an email of its own is found through its account.
   const { user: accountOnly } = await seedMember(env, org.id, { email: null });
   for (const memberEmail of ['invitee@x.io', owner.email.toUpperCase(), accountOnly.email.toUpperCase()]) {
-    const rows = await orgRepo.searchOrganizations(env.DB, { memberEmail, nameContains: '', offset: 0, limit: 25 });
+    const rows = await orgRepo(env.DB).searchOrganizations({ memberEmail, nameContains: '', offset: 0, limit: 25 });
     assert.deepEqual(
       rows.map((row) => row.id),
       [org.id],
     );
   }
   assert.deepEqual(
-    (await orgRepo.searchOrganizations(env.DB, { memberEmail: '', nameContains: '%', offset: 0, limit: 25 })).map(
+    (await orgRepo(env.DB).searchOrganizations({ memberEmail: '', nameContains: '%', offset: 0, limit: 25 })).map(
       (row) => row.id,
     ),
     [org.id],
@@ -117,7 +117,7 @@ test('portal organization deletion validates confirmation and audits the atomic 
     ).status,
     303,
   );
-  assert.equal(await orgRepo.getOrganization(env.DB, org.id), null);
+  assert.equal(await orgRepo(env.DB).getOrganization(org.id), null);
   assert.ok(await getOrm(env.DB).$count(auditLogs, eq(auditLogs.action, 'admin.portal.org.delete')));
   assert.equal(
     (await portalFetch(env, { path: `/admin/organizations/view/${org.id}`, cookie: auth.cookie })).status,

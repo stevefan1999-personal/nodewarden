@@ -4,7 +4,7 @@ import { errorResponse, jsonResponse, parseBody } from '../utils/response';
 import { organizationResponse } from '../utils/org-response';
 import { buildNodeWardenEnterpriseLicense, parseOrganizationLicense } from '../services/enterprise-license';
 import { createOwnedOrganization } from './organizations';
-import * as orgRepo from '../services/storage-org-repo';
+import { orgRepo } from '../services/storage-org-repo';
 import { canDeleteOrganization, isActiveMember } from '../services/org-authz';
 import { jsonText } from '../services/org-types';
 
@@ -71,21 +71,21 @@ export async function handleUpdateSelfHostedOrganizationLicense(
   user: User,
   orgId: string,
 ): Promise<Response> {
-  const member = await orgRepo.getMembershipByUserAndOrg(env.DB, user.id, orgId);
+  const member = await orgRepo(env.DB).getMembershipByUserAndOrg(user.id, orgId);
   if (!isActiveMember(member) || !canDeleteOrganization(member)) {
     return errorResponse('Organization not found', 404);
   }
-  const org = await orgRepo.getOrganization(env.DB, orgId);
+  const org = await orgRepo(env.DB).getOrganization(orgId);
   if (!org) return errorResponse('Organization not found', 404);
   return jsonResponse(organizationResponse(org));
 }
 
 export async function handleSyncSelfHostedOrganizationLicense(env: Env, user: User, orgId: string): Promise<Response> {
-  const member = await orgRepo.getMembershipByUserAndOrg(env.DB, user.id, orgId);
+  const member = await orgRepo(env.DB).getMembershipByUserAndOrg(user.id, orgId);
   if (!isActiveMember(member) || !canDeleteOrganization(member)) {
     return errorResponse('Organization not found', 404);
   }
-  const org = await orgRepo.getOrganization(env.DB, orgId);
+  const org = await orgRepo(env.DB).getOrganization(orgId);
   if (!org) return errorResponse('Organization not found', 404);
   return jsonResponse(organizationResponse(org));
 }

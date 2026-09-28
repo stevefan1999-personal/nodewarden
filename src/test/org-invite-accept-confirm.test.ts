@@ -6,7 +6,7 @@ import { LIMITS } from '../config/limits';
 import { getOrm } from '../db/client';
 import { users } from '../db/schema';
 import { MembershipStatus } from '../services/org-types';
-import * as orgRepo from '../services/storage-org-repo';
+import { orgRepo } from '../services/storage-org-repo';
 import type { Env, User } from '../types';
 import { ORG_INVITE_TTL_DAYS, verifyHs256Jwt } from '../utils/jwt';
 import { sanitizeForEmail } from '../services/mail';
@@ -710,7 +710,7 @@ test('bulk confirm confirms each Accepted member of the org with an RSA-wrapped 
   );
   const statuses = await memberStatuses(env, owner, orgId);
   assert.equal(statuses[accepted], MembershipStatus.Confirmed);
-  assert.equal((await orgRepo.getMembership(env.DB, accepted))?.key, MEMBER_KEY);
+  assert.equal((await orgRepo(env.DB).getMembership(accepted))?.key, MEMBER_KEY);
   assert.equal(statuses[symmetricKeyed], MembershipStatus.Accepted);
   assert.equal(statuses[invited], MembershipStatus.Invited);
   assert.equal((await memberStatuses(env, owner, otherOrgId))[foreign], MembershipStatus.Accepted);

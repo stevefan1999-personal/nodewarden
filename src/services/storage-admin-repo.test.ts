@@ -5,7 +5,7 @@ import { desc } from 'drizzle-orm';
 import { getOrm } from '../db/client';
 import { auditLogs } from '../db/schema';
 import { createTestEnv } from '../test/support/env';
-import { pruneAuditLogsToMax } from './storage-admin-repo';
+import { adminRepo } from './storage-admin-repo';
 
 test('pruneAuditLogsToMax keeps the newest entries, reports how many it removed and always keeps one', async () => {
   const env = await createTestEnv();
@@ -20,9 +20,9 @@ test('pruneAuditLogsToMax keeps the newest entries, reports how many it removed 
       createdAt: new Date(Date.UTC(2026, 0, 1, 0, minute)).toISOString(),
     })),
   );
-  assert.equal(await pruneAuditLogsToMax(env.DB, 10), 0);
-  assert.equal(await pruneAuditLogsToMax(env.DB, 2.9), 3);
+  assert.equal(await adminRepo(env.DB).pruneAuditLogsToMax(10), 0);
+  assert.equal(await adminRepo(env.DB).pruneAuditLogsToMax(2.9), 3);
   assert.deepEqual(await remaining(), ['log-4', 'log-3']);
-  assert.equal(await pruneAuditLogsToMax(env.DB, 0), 1);
+  assert.equal(await adminRepo(env.DB).pruneAuditLogsToMax(0), 1);
   assert.deepEqual(await remaining(), ['log-4']);
 });

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import type { Cipher } from '../types';
-import * as cipherRepo from '../services/storage-cipher-repo';
+import { cipherRepo } from '../services/storage-cipher-repo';
 import { authedFetch, createTestEnv, seedUser } from './support/env';
 
 const ENC = '2.dGVzdA==|dGVzdA==|dGVzdA==';
@@ -76,7 +76,7 @@ test('cipher responses drop malformed stored entries and default the rest', asyn
       { password: 5 },
     ],
   };
-  await cipherRepo.saveCipher(env.DB, stored as unknown as Cipher);
+  await cipherRepo(env.DB).saveCipher(stored as unknown as Cipher);
 
   const response = await authedFetch(env, { path: `/api/ciphers/${stored.id}`, userId: user.id });
   assert.equal(response.status, 200);

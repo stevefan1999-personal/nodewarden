@@ -30,9 +30,9 @@ import {
   verifySendPassword,
   verifySendPasswordHashB64,
 } from './sends-shared';
-import * as attachmentTokenRepo from '../services/storage-attachment-token-repo';
-import * as revisionRepo from '../services/storage-revision-repo';
-import * as sendRepo from '../services/storage-send-repo';
+import { attachmentTokenRepo } from '../services/storage-attachment-token-repo';
+import { revisionRepo } from '../services/storage-revision-repo';
+import { sendRepo } from '../services/storage-send-repo';
 
 // Reads the optional JSON body and checks the Send password inside the per-client attempt limit,
 // so a guessed password costs the guesser lockouts rather than the owner's Send. Resolves to the
@@ -66,16 +66,16 @@ async function authorizeSendByToken(request: Request, env: Env): Promise<{ secre
   const token = extractBearerToken(request);
   const claims = token ? await verifySendAccessToken(token, env.JWT_SECRET) : null;
   if (!claims) return errorResponse('Unauthorized', 401);
-  const send = await sendRepo.getSend(env.DB, claims.sub);
+  const send = await sendRepo(env.DB).getSend(claims.sub);
   if (!send || !isSendAvailable(send)) return errorResponse(SEND_INACCESSIBLE_MSG, 404);
   return { secret: env.JWT_SECRET, send };
 }
 
 // Counts one access against the Send's limit, then tells the owner's devices and the event log.
 async function touchSendAccess(request: Request, env: Env, send: Send): Promise<Response | null> {
-  if (!(await sendRepo.incrementSendAccessCount(env.DB, send.id))) return errorResponse(SEND_INACCESSIBLE_MSG, 404);
+  if (!(await sendRepo(env.DB).incrementSendAccessCount(send.id))) return errorResponse(SEND_INACCESSIBLE_MSG, 404);
   send.accessCount += 1;
-  const revisionDate = await revisionRepo.updateRevisionDate(env.DB, send.userId);
+  const revisionDate = await revisionRepo(env.DB).updateRevisionDate(send.userId);
   notifyUserVaultSync(env, send.userId, revisionDate, readActingDeviceIdentifier(request));
   notifyUserSendUpdate(env, {
     userId: send.userId,
@@ -104,7 +104,7 @@ async function sendFileDownloadResponse(
 
 export async function handleAccessSend(request: Request, env: Env, accessId: string): Promise<Response> {
   const sendId = fromAccessId(accessId);
-  const send = sendId ? await sendRepo.getSend(env.DB, sendId) : null;
+  const send = sendId ? await sendRepo(env.DB).getSend(sendId) : null;
   if (!send || !isSendAvailable(send)) return errorResponse(SEND_INACCESSIBLE_MSG, 404);
 
   const rejected = await authorizeSendByPassword(request, env, send);
@@ -185,7 +185,7 @@ export async function handleDownloadSendFile(
     return errorResponse('Token mismatch', 401);
   }
 
-  const send = await sendRepo.getSend(env.DB, sendId);
+  const send = await sendRepo(env.DB).getSend(sendId);
   if (!send || !isSendAvailable(send) || send.type !== SendType.File) {
     return errorResponse(SEND_INACCESSIBLE_MSG, 404);
   }
@@ -194,7 +194,7 @@ export async function handleDownloadSendFile(
     return errorResponse(SEND_INACCESSIBLE_MSG, 404);
   }
 
-  const firstUse = await attachmentTokenRepo.consumeAttachmentDownloadToken(env.DB, `send:${claims.jti}`, claims.exp);
+  const firstUse = await attachmentTokenRepo(env.DB).consumeAttachmentDownloadToken(`send:${claims.jti}`, claims.exp);
   if (!firstUse) {
     return errorResponse('Invalid or expired token', 401);
   }

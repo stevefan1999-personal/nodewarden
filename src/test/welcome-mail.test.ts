@@ -15,8 +15,8 @@ import {
   MAILABLE_DOMAIN,
   seedUser,
 } from './support/env';
-import * as adminRepo from '../services/storage-admin-repo';
-import * as userRepo from '../services/storage-user-repo';
+import { adminRepo } from '../services/storage-admin-repo';
+import { userRepo } from '../services/storage-user-repo';
 
 const ENCRYPTED = '2.YQ==|Yg==|Yw==';
 
@@ -50,9 +50,9 @@ test('first administrator, invite-code signup and open signup each receive one w
   const first = await register(env, firstEmail);
   assert.equal(first.status, 200);
   assert.equal(((await first.json()) as { role: string }).role, 'admin');
-  const admin = await userRepo.getUser(env.DB, firstEmail);
+  const admin = await userRepo(env.DB).getUser(firstEmail);
   assert.ok(admin);
-  await adminRepo.createInvite(env.DB, {
+  await adminRepo(env.DB).createInvite({
     code: 'welcome-invite',
     createdBy: admin.id,
     usedBy: null,
@@ -99,7 +99,7 @@ test('welcome mail delivery failure or missing vault origin leaves account creat
   });
   const email = `failure@${MAILABLE_DOMAIN}`;
   assert.equal((await register(env, email)).status, 200);
-  assert.ok(await userRepo.getUser(env.DB, email));
+  assert.ok(await userRepo(env.DB).getUser(email));
   env.EMAIL = capture.overrides.EMAIL;
   env.WEB_VAULT_ORIGINS = undefined;
   assert.equal((await register(env, `no-origin@${MAILABLE_DOMAIN}`)).status, 200);
@@ -114,7 +114,7 @@ test('a failed credential mirror during signup logs the failure without its boun
   const errors = t.mock.method(console, 'error', () => {});
   const email = `mirror@${MAILABLE_DOMAIN}`;
   assert.equal((await register(env, email)).status, 500);
-  const { masterPasswordHash } = (await userRepo.getUser(env.DB, email))!;
+  const { masterPasswordHash } = (await userRepo(env.DB).getUser(email))!;
   const logged = errors.mock.calls
     .flatMap((call) => call.arguments.map((argument) => inspect(argument, { depth: 5 })))
     .join('\n');
@@ -128,7 +128,7 @@ test('an invite signup whose invite assignment is lost warns without logging the
   const admin = await seedUser(env, { role: 'admin' });
   const code = 'secret-invite-code';
   const now = new Date().toISOString();
-  await adminRepo.createInvite(env.DB, {
+  await adminRepo(env.DB).createInvite({
     code,
     createdBy: admin.id,
     usedBy: null,
@@ -139,7 +139,7 @@ test('an invite signup whose invite assignment is lost warns without logging the
   });
   // Another writer records the invite's user first, so the assignment after registration matches nothing.
   interceptStatement(env, /^update "invites" set "used_by" = \?, "updated_at"/, async () => {
-    await adminRepo.assignInviteUsedBy(env.DB, code, admin.id);
+    await adminRepo(env.DB).assignInviteUsedBy(code, admin.id);
   });
   assert.equal(
     (await register(env, `invited@${MAILABLE_DOMAIN}`, { inviteCode: code }, '/api/accounts/register')).status,

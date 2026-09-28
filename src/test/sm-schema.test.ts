@@ -21,7 +21,7 @@ import {
   smServiceAccountProjects,
   smServiceAccounts,
 } from '../db/schema';
-import * as orgRepo from '../services/storage-org-repo';
+import { orgRepo } from '../services/storage-org-repo';
 import { createTestEnv, seedUser } from './support/env';
 
 const { createOwnedOrganization } = await import('../handlers/organizations');
@@ -93,7 +93,7 @@ for (const { parent, id, cascaded } of CASCADES) {
     const env = await createTestEnv();
     const owner = await seedUser(env);
     const { id: orgId } = await createOwnedOrganization(env.DB, owner, { name: 'Acme', key: TEST_ORG_KEY });
-    const membership = await orgRepo.getMembershipByUserAndOrg(env.DB, owner.id, orgId);
+    const membership = await orgRepo(env.DB).getMembershipByUserAndOrg(owner.id, orgId);
     assert.ok(membership);
     const [groupId, projectId, secretId, serviceAccountId] = Array.from({ length: 4 }, () => crypto.randomUUID());
     const ids: SeededIds = { membershipId: membership.id, groupId, projectId, secretId, serviceAccountId };

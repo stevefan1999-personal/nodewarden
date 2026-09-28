@@ -3,8 +3,8 @@ import { z } from 'zod';
 import { Send, SendAuthType, SendResponse, SendType } from '../types';
 import { errorResponse, jsonResponse } from '../utils/response';
 import { bytesToBase64Url } from '../utils/passkey';
-import * as sendRepo from '../services/storage-send-repo';
-import * as userRepo from '../services/storage-user-repo';
+import { sendRepo } from '../services/storage-send-repo';
+import { userRepo } from '../services/storage-user-repo';
 
 export const SEND_INACCESSIBLE_MSG = 'Send does not exist or is no longer available';
 const SEND_PASSWORD_ITERATIONS = 100_000;
@@ -27,13 +27,13 @@ export function fromAccessId(accessId: string): string | null {
 
 export async function resolveSendFromIdOrAccessId(db: D1Database, idOrAccessId: string): Promise<Send | null> {
   if (z.guid().safeParse(idOrAccessId).success) {
-    const send = await sendRepo.getSend(db, idOrAccessId);
+    const send = await sendRepo(db).getSend(idOrAccessId);
     if (send) return send;
   }
 
   const sendId = fromAccessId(idOrAccessId);
   if (!sendId) return null;
-  return sendRepo.getSend(db, sendId);
+  return sendRepo(db).getSend(sendId);
 }
 
 export function formatSize(bytes: number): string {
@@ -238,7 +238,7 @@ export function sendToAccessResponse(send: Send, creatorIdentifier: string | nul
 
 export async function getCreatorIdentifier(db: D1Database, send: Send): Promise<string | null> {
   if (send.hideEmail) return null;
-  const owner = await userRepo.getUserById(db, send.userId);
+  const owner = await userRepo(db).getUserById(send.userId);
   return owner?.email ?? null;
 }
 

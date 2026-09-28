@@ -1,10 +1,10 @@
 import { z } from 'zod';
 import type { Env } from '../types';
-import * as orgRepo from '../services/storage-org-repo';
+import { orgRepo } from '../services/storage-org-repo';
 import { MembershipStatus, MembershipType } from '../services/org-types';
 import { generateUUID } from '../utils/uuid';
 import { mailOrganizationInvites, verifyScimBearer } from './organizations';
-import * as userRepo from '../services/storage-user-repo';
+import { userRepo } from '../services/storage-user-repo';
 
 function scimJson(data: unknown, status = 200, headers: Record<string, string> = {}): Response {
   return new Response(JSON.stringify(data), {
@@ -59,20 +59,20 @@ export async function handleScimRoute(request: Request, env: Env, path: string):
   const orgId = match[1];
   const resource = match[2].toLowerCase();
   const id = match[3] || null;
-  const org = await orgRepo.getOrganization(env.DB, orgId);
+  const org = await orgRepo(env.DB).getOrganization(orgId);
   if (!org) return scimError(404, 'Organization not found');
   const authorized = await verifyScimBearer(env.DB, orgId, request.headers.get('Authorization'));
   if (!authorized) return scimError(401, 'Invalid SCIM token');
 
   if (resource === 'users') {
     if (request.method === 'GET' && !id) {
-      const members = await orgRepo.listMembershipsByOrg(env.DB, orgId);
+      const members = await orgRepo(env.DB).listMembershipsByOrg(orgId);
       const startIndex = Number(new URL(request.url).searchParams.get('startIndex') || 1);
       const count = Number(new URL(request.url).searchParams.get('count') || 100);
       const slice = members.slice(startIndex - 1, startIndex - 1 + count);
       const resources = [];
       for (const member of slice) {
-        const user = member.userId ? await userRepo.getUserById(env.DB, member.userId) : null;
+        const user = member.userId ? await userRepo(env.DB).getUserById(member.userId) : null;
         resources.push(
           scimUser(
             member.id,
@@ -93,9 +93,9 @@ export async function handleScimRoute(request: Request, env: Env, path: string):
     }
 
     if (request.method === 'GET' && id) {
-      const member = await orgRepo.getMembership(env.DB, id);
+      const member = await orgRepo(env.DB).getMembership(id);
       if (!member || member.orgId !== orgId) return scimError(404, 'User not found');
-      const user = member.userId ? await userRepo.getUserById(env.DB, member.userId) : null;
+      const user = member.userId ? await userRepo(env.DB).getUserById(member.userId) : null;
       return scimJson(
         scimUser(
           member.id,
@@ -114,14 +114,14 @@ export async function handleScimRoute(request: Request, env: Env, path: string):
       if (!email) return scimError(400, 'userName is required');
       // Upstream PostUserCommand: a known member or externalId is a conflict, so an IdP replay after a
       // lost 201 neither mails a second invite nor adds a duplicate row. Bound rows carry the account email.
-      const members = await orgRepo.listMembershipsWithAccountsByOrg(env.DB, orgId);
+      const members = await orgRepo(env.DB).listMembershipsWithAccountsByOrg(orgId);
       const conflict = members.some(
         ({ item, account }) =>
           (account?.email ?? item.email)?.toLowerCase() === email ||
           (externalId !== null && item.externalId === externalId),
       );
       if (conflict) return scimError(409, 'User already exists.');
-      const existingUser = await userRepo.getUser(env.DB, email);
+      const existingUser = await userRepo(env.DB).getUser(email);
       const now = new Date().toISOString();
       // Upstream PostUserCommand never binds the account: only the invitee's own accept may do that,
       // otherwise any org owner could mint a SCIM token and force an existing user into the org.
@@ -148,13 +148,13 @@ export async function handleScimRoute(request: Request, env: Env, path: string):
         const mailed = await mailOrganizationInvites(request, env, orgId, `scim:${orgId}`, [member]);
         if (!mailed.ok) return scimError(mailed.status, mailed.message, mailed.headers);
       }
-      await orgRepo.saveMembership(env.DB, member);
-      await orgRepo.bumpOrgMemberRevisions(env.DB, orgId);
+      await orgRepo(env.DB).saveMembership(member);
+      await orgRepo(env.DB).bumpOrgMemberRevisions(orgId);
       return scimJson(scimUser(member.id, email, body.displayName, true, member.externalId), 201);
     }
 
     if ((request.method === 'PUT' || request.method === 'PATCH') && id) {
-      const member = await orgRepo.getMembership(env.DB, id);
+      const member = await orgRepo(env.DB).getMembership(id);
       if (!member || member.orgId !== orgId) return scimError(404, 'User not found');
       const body = await readScimBody(request, ScimUserRequest);
       if (body instanceof Response) return body;
@@ -163,9 +163,9 @@ export async function handleScimRoute(request: Request, env: Env, path: string):
       if (active && member.status <= MembershipStatus.Revoked) member.status = member.status + 128;
       if (body.externalId) member.externalId = body.externalId;
       member.updatedAt = new Date().toISOString();
-      await orgRepo.saveMembership(env.DB, member);
-      await orgRepo.bumpOrgMemberRevisions(env.DB, orgId);
-      const user = member.userId ? await userRepo.getUserById(env.DB, member.userId) : null;
+      await orgRepo(env.DB).saveMembership(member);
+      await orgRepo(env.DB).bumpOrgMemberRevisions(orgId);
+      const user = member.userId ? await userRepo(env.DB).getUserById(member.userId) : null;
       return scimJson(
         scimUser(
           member.id,
@@ -178,9 +178,9 @@ export async function handleScimRoute(request: Request, env: Env, path: string):
     }
 
     if (request.method === 'DELETE' && id) {
-      const member = await orgRepo.getMembership(env.DB, id);
+      const member = await orgRepo(env.DB).getMembership(id);
       if (!member || member.orgId !== orgId) return scimError(404, 'User not found');
-      await orgRepo.applyMembershipAction(env.DB, orgId, [id], 'remove');
+      await orgRepo(env.DB).applyMembershipAction(orgId, [id], 'remove');
       return new Response(null, { status: 204 });
     }
 
@@ -189,7 +189,7 @@ export async function handleScimRoute(request: Request, env: Env, path: string):
 
   // The route pattern only admits Users and Groups, so anything else is Groups.
   if (request.method === 'GET' && !id) {
-    const groups = await orgRepo.listGroupsByOrg(env.DB, orgId);
+    const groups = await orgRepo(env.DB).listGroupsByOrg(orgId);
     return scimJson({
       schemas: ['urn:ietf:params:scim:api:messages:2.0:ListResponse'],
       totalResults: groups.length,
@@ -199,7 +199,7 @@ export async function handleScimRoute(request: Request, env: Env, path: string):
     });
   }
   if (request.method === 'GET' && id) {
-    const group = await orgRepo.getGroup(env.DB, id);
+    const group = await orgRepo(env.DB).getGroup(id);
     if (!group || group.orgId !== orgId) return scimError(404, 'Group not found');
     return scimJson(scimGroup(group.id, group.name, group.externalId));
   }
@@ -216,24 +216,24 @@ export async function handleScimRoute(request: Request, env: Env, path: string):
       createdAt: now,
       updatedAt: now,
     };
-    await orgRepo.saveGroup(env.DB, group);
+    await orgRepo(env.DB).saveGroup(group);
     return scimJson(scimGroup(group.id, group.name, group.externalId), 201);
   }
   if ((request.method === 'PUT' || request.method === 'PATCH') && id) {
-    const group = await orgRepo.getGroup(env.DB, id);
+    const group = await orgRepo(env.DB).getGroup(id);
     if (!group || group.orgId !== orgId) return scimError(404, 'Group not found');
     const body = await readScimBody(request, ScimGroupRequest);
     if (body instanceof Response) return body;
     if (body.displayName) group.name = body.displayName;
     if (body.externalId) group.externalId = body.externalId;
     group.updatedAt = new Date().toISOString();
-    await orgRepo.saveGroup(env.DB, group);
+    await orgRepo(env.DB).saveGroup(group);
     return scimJson(scimGroup(group.id, group.name, group.externalId));
   }
   if (request.method === 'DELETE' && id) {
-    const group = await orgRepo.getGroup(env.DB, id);
+    const group = await orgRepo(env.DB).getGroup(id);
     if (!group || group.orgId !== orgId) return scimError(404, 'Group not found');
-    await orgRepo.deleteGroup(env.DB, id);
+    await orgRepo(env.DB).deleteGroup(id);
     return new Response(null, { status: 204 });
   }
   return scimError(405, 'Method not allowed');

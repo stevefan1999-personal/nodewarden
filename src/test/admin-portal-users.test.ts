@@ -5,7 +5,7 @@ import { getOrm } from '../db/client';
 import { auditLogs, users, verification } from '../db/schema';
 import { jsonSet } from '../db/sql';
 import { createTestEnv, portalFetch, seedUser, signInToAdminPortal } from './support/env';
-import { searchUsersByEmailPrefix } from '../services/storage-user-repo';
+import { userRepo } from '../services/storage-user-repo';
 
 const adminEmail = 'portal@x.io';
 
@@ -20,8 +20,8 @@ test('portal user search escapes LIKE wildcards, bounds paging and safely render
     });
   await seedUser(env, { email: 'a_b@x.io' });
   await seedUser(env, { email: 'axb@x.io' });
-  assert.equal((await searchUsersByEmailPrefix(env.DB, 'A_B@', 0, 10)).length, 1);
-  assert.equal((await searchUsersByEmailPrefix(env.DB, '%', 0, 10)).length, 0);
+  assert.equal((await userRepo(env.DB).searchUsersByEmailPrefix('A_B@', 0, 10)).length, 1);
+  assert.equal((await userRepo(env.DB).searchUsersByEmailPrefix('%', 0, 10)).length, 0);
   for (const page of ['0', '-1', 'abc', 'Infinity']) {
     const response = await portalFetch(env, {
       path: `/admin/users?email=u&count=1000&page=${page}`,

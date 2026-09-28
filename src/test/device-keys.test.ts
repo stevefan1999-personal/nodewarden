@@ -4,7 +4,7 @@ import { eq } from 'drizzle-orm';
 
 import { D1_MAX_BOUND_PARAMETERS, getOrm } from '../db/client';
 import { devices } from '../db/schema';
-import * as deviceRepo from '../services/storage-device-repo';
+import { deviceRepo } from '../services/storage-device-repo';
 import { authedFetch, createTestEnv, seedUser } from './support/env';
 
 test('device registration validates its fields and a key update keeps the keys it leaves out', async () => {
@@ -54,20 +54,20 @@ test('re-registering a device keeps its session stamp and the keys it leaves out
   const env = await createTestEnv();
   const user = await seedUser(env);
   const stored = async () => {
-    const device = await deviceRepo.getDevice(env.DB, user.id, 'device-1');
+    const device = await deviceRepo(env.DB).getDevice(user.id, 'device-1');
     return {
       sessionStamp: device?.sessionStamp,
       keys: [device?.encryptedUserKey, device?.encryptedPublicKey, device?.encryptedPrivateKey],
     };
   };
-  await deviceRepo.upsertDevice(env.DB, user.id, 'device-1', 'Phone', 0, 'stamp-1', {
+  await deviceRepo(env.DB).upsertDevice(user.id, 'device-1', 'Phone', 0, 'stamp-1', {
     encryptedUserKey: '4.user',
     encryptedPublicKey: '2.public',
     encryptedPrivateKey: '2.private',
   });
-  await deviceRepo.upsertDevice(env.DB, user.id, 'device-1', 'Phone', 0, 'stamp-2');
+  await deviceRepo(env.DB).upsertDevice(user.id, 'device-1', 'Phone', 0, 'stamp-2');
   assert.deepEqual(await stored(), { sessionStamp: 'stamp-1', keys: ['4.user', '2.public', '2.private'] });
-  await deviceRepo.upsertDevice(env.DB, user.id, 'device-1', 'Phone', 0, undefined, { encryptedUserKey: '4.rotated' });
+  await deviceRepo(env.DB).upsertDevice(user.id, 'device-1', 'Phone', 0, undefined, { encryptedUserKey: '4.rotated' });
   assert.deepEqual(await stored(), { sessionStamp: 'stamp-1', keys: ['4.rotated', '2.public', '2.private'] });
 
   for (const [emptied, next] of [
@@ -75,7 +75,7 @@ test('re-registering a device keeps its session stamp and the keys it leaves out
     ['', 'stamp-4'],
   ] as const) {
     await getOrm(env.DB).update(devices).set({ sessionStamp: emptied }).where(eq(devices.deviceIdentifier, 'device-1'));
-    await deviceRepo.upsertDevice(env.DB, user.id, 'device-1', 'Phone', 0, next);
+    await deviceRepo(env.DB).upsertDevice(user.id, 'device-1', 'Phone', 0, next);
     assert.equal((await stored()).sessionStamp, next);
   }
 });
@@ -83,7 +83,7 @@ test('re-registering a device keeps its session stamp and the keys it leaves out
 test('untrusting more devices than one D1 statement can bind clears the keys of every listed device', async () => {
   const env = await createTestEnv();
   const user = await seedUser(env);
-  await deviceRepo.upsertDevice(env.DB, user.id, 'device-1', 'Phone', 0, 'stamp-1', {
+  await deviceRepo(env.DB).upsertDevice(user.id, 'device-1', 'Phone', 0, 'stamp-1', {
     encryptedUserKey: '4.user',
     encryptedPublicKey: '2.public',
     encryptedPrivateKey: '2.private',
@@ -99,7 +99,7 @@ test('untrusting more devices than one D1 statement can bind clears the keys of 
     body: { devices: identifiers },
   });
   assert.deepEqual(await response.json(), { success: true, removed: 1 });
-  const device = await deviceRepo.getDevice(env.DB, user.id, 'device-1');
+  const device = await deviceRepo(env.DB).getDevice(user.id, 'device-1');
   assert.deepEqual(
     [device?.encryptedUserKey, device?.encryptedPublicKey, device?.encryptedPrivateKey],
     [null, null, null],

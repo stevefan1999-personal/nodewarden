@@ -38,19 +38,18 @@ import {
   buildAccountPasskeyTokenUserDecryptionOption,
   buildTwoFactorPasskeyAssertionOptions,
 } from './account-passkeys';
-import { isAuthRequestLoginApproved } from '../services/storage-auth-request-repo';
+import { isAuthRequestLoginApproved, authRequestRepo } from '../services/storage-auth-request-repo';
 import { verifyApiKey } from '../utils/api-key';
 import { userYubiKeyPublicIds, verifyYubicoOtp, yubiKeyPublicIdFromOtp } from '../utils/yubico-otp';
 import { getYubicoCredentials, initializeYubicoCredentialsOnce } from '../services/yubico-config';
 import { exchangeOidcCode, isSsoEnabled, userRequiresSso } from './sso';
-import { getAccessTokenWithAccount } from '../services/storage-secret-repo';
-import * as orgRepo from '../services/storage-org-repo';
-import * as passkeyRepo from '../services/storage-account-passkey-repo';
-import * as authRequestRepo from '../services/storage-auth-request-repo';
-import * as deviceRepo from '../services/storage-device-repo';
-import * as sessionRepo from '../services/storage-session-repo';
-import * as totpReplayRepo from '../services/storage-totp-replay-repo';
-import * as userRepo from '../services/storage-user-repo';
+import { smRepo } from '../services/storage-secret-repo';
+import { orgRepo } from '../services/storage-org-repo';
+import { passkeyRepo } from '../services/storage-account-passkey-repo';
+import { deviceRepo } from '../services/storage-device-repo';
+import { sessionRepo } from '../services/storage-session-repo';
+import { totpReplayRepo } from '../services/storage-totp-replay-repo';
+import { userRepo } from '../services/storage-user-repo';
 
 const TWO_FACTOR_REMEMBER_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const TWO_FACTOR_PROVIDER_AUTHENTICATOR = 0;
@@ -153,16 +152,15 @@ async function persistLoginDevice(
 ): Promise<DeviceSession | null> {
   const deviceIdentifier = deviceInfo.deviceIdentifier;
   if (!deviceIdentifier) return null;
-  const existingDevice = await deviceRepo.getDevice(env.DB, user.id, deviceIdentifier);
-  await deviceRepo.upsertDevice(
-    env.DB,
+  const existingDevice = await deviceRepo(env.DB).getDevice(user.id, deviceIdentifier);
+  await deviceRepo(env.DB).upsertDevice(
     user.id,
     deviceIdentifier,
     deviceInfo.deviceName,
     deviceInfo.deviceType,
     String(existingDevice?.sessionStamp || '').trim() || generateUUID(),
   );
-  const persisted = await deviceRepo.getDevice(env.DB, user.id, deviceIdentifier);
+  const persisted = await deviceRepo(env.DB).getDevice(user.id, deviceIdentifier);
   if (!persisted?.sessionStamp) throw new Error('Failed to persist device session');
   const deviceSession = {
     identifier: persisted.deviceIdentifier,
@@ -185,10 +183,10 @@ async function persistLoginDevice(
   }
 
   const pushToken = body.devicePushToken || body.device_push_token;
-  const device = pushToken ? await deviceRepo.getDevice(env.DB, user.id, deviceSession.identifier) : null;
+  const device = pushToken ? await deviceRepo(env.DB).getDevice(user.id, deviceSession.identifier) : null;
   if (pushToken && device) {
     const pushUuid = device.pushUuid || generateUUID();
-    await deviceRepo.updateDevicePushToken(env.DB, user.id, deviceSession.identifier, pushUuid, pushToken);
+    await deviceRepo(env.DB).updateDevicePushToken(user.id, deviceSession.identifier, pushUuid, pushToken);
     const registered = await registerMobilePushDevice(env, {
       userId: user.id,
       deviceIdentifier: deviceSession.identifier,
@@ -261,7 +259,7 @@ async function twoFactorRequiredResponse(
   // Clients expose recovery-code entry points themselves; Android 2026.4 fails to
   // parse the challenge if an unknown recovery provider key such as "8" is included.
   const hasTwoFactorPasskey = user
-    ? (await passkeyRepo.countAccountPasskeyCredentialsByUserId(db, user.id, 'twoFactor')) > 0
+    ? (await passkeyRepo(db).countAccountPasskeyCredentialsByUserId(user.id, 'twoFactor')) > 0
     : false;
   const providers = user
     ? twoFactorProviders(user, hasTwoFactorPasskey).map(String)
@@ -497,7 +495,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
       return identityErrorResponse('SSO sign-in expired or was already completed', 'invalid_grant', 400);
     let user: User | null;
     if (continuation) {
-      user = await userRepo.getUserById(env.DB, continuation.userId);
+      user = await userRepo(env.DB).getUserById(continuation.userId);
       if (
         !user ||
         user.status !== 'active' ||
@@ -509,8 +507,8 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
     } else {
       const claims = await exchangeOidcCode(env, code, new URL(request.url).origin, body.code_verifier);
       if (!claims) return identityErrorResponse('SSO exchange failed', 'invalid_grant', 400);
-      const linked = await orgRepo.getSsoUserByIdentifier(env.DB, claims.identifier);
-      user = linked ? await userRepo.getUserById(env.DB, linked.userId) : null;
+      const linked = await orgRepo(env.DB).getSsoUserByIdentifier(claims.identifier);
+      user = linked ? await userRepo(env.DB).getUserById(linked.userId) : null;
       // Adopting an existing local account by email address is only safe when the
       // provider vouches for the address; otherwise anyone who can claim that email
       // at the IdP inherits the local vault.
@@ -521,14 +519,14 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
           400,
         );
       }
-      if (!user) user = await userRepo.getUser(env.DB, claims.email);
+      if (!user) user = await userRepo(env.DB).getUser(claims.email);
       if (!user) {
         if (!readEnvConfig(env).SSO_SIGNUPS) {
           return identityErrorResponse('SSO sign-up is disabled', 'invalid_grant', 400);
         }
         return identityErrorResponse('Create a local account first, then link SSO', 'invalid_grant', 400);
       }
-      await orgRepo.saveSsoUser(env.DB, user.id, claims.identifier, new Date().toISOString());
+      await orgRepo(env.DB).saveSsoUser(user.id, claims.identifier, new Date().toISOString());
       if (user.status !== 'active') return identityErrorResponse('Account is disabled', 'invalid_grant', 400);
       ssoContinuation = await saveSsoContinuation(env.DB, context, user);
       if (!ssoContinuation) return identityErrorResponse('SSO sign-in is already in progress', 'invalid_grant', 400);
@@ -556,7 +554,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
     const locked = await loginLockoutResponse(rateLimit, loginIdentifier);
     if (locked) return locked;
 
-    const user = await userRepo.getUser(env.DB, email);
+    const user = await userRepo(env.DB).getUser(email);
     if (!user) {
       await rateLimit.recordFailedLogin(loginIdentifier);
       return identityErrorResponse('Username or password is incorrect. Try again', 'invalid_grant', 400);
@@ -591,7 +589,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
     let valid = false;
     const normalizedAuthRequestId = body.authRequest ?? '';
     if (normalizedAuthRequestId) {
-      const authRequest = await authRequestRepo.getAuthRequestByIdForUser(env.DB, normalizedAuthRequestId, user.id);
+      const authRequest = await authRequestRepo(env.DB).getAuthRequestByIdForUser(normalizedAuthRequestId, user.id);
       valid = isAuthRequestLoginApproved(authRequest, user.id, passwordHash);
       if (valid) {
         validatedAuthRequestId = authRequest!.id;
@@ -622,7 +620,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
     const effectiveTotpSecret = user.totpSecret && isTotpEnabled(user.totpSecret) ? user.totpSecret : null;
     const effectiveYubiKeyPublicIds = userYubiKeyPublicIds(user);
     const hasTwoFactorPasskey =
-      (await passkeyRepo.countAccountPasskeyCredentialsByUserId(env.DB, user.id, 'twoFactor')) > 0;
+      (await passkeyRepo(env.DB).countAccountPasskeyCredentialsByUserId(user.id, 'twoFactor')) > 0;
     const enabledProviders = twoFactorProviders(user, hasTwoFactorPasskey);
     if (enabledProviders.length > 0) {
       const normalizedTwoFactorProvider = body.twoFactorProvider ?? '';
@@ -642,8 +640,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
       let passedByRememberToken = false;
       if (normalizedTwoFactorProvider === String(TWO_FACTOR_PROVIDER_REMEMBER)) {
         if (deviceInfo.deviceIdentifier) {
-          const trustedUserId = await deviceRepo.getTrustedTwoFactorDeviceTokenUserId(
-            env.DB,
+          const trustedUserId = await deviceRepo(env.DB).getTrustedTwoFactorDeviceTokenUserId(
             normalizedTwoFactorToken,
             deviceInfo.deviceIdentifier,
           );
@@ -672,7 +669,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
             Number(normalizedTwoFactorProvider),
           );
         }
-        const consumed = await totpReplayRepo.consumeTotpLoginCounter(env.DB, user.id, matchedCounter);
+        const consumed = await totpReplayRepo(env.DB).consumeTotpLoginCounter(user.id, matchedCounter);
         if (!consumed) {
           return recordFailedTwoFactorAndBuildResponse(
             rateLimit,
@@ -810,7 +807,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
             .limit(1)
         ).length &&
         (!deviceInfo.deviceIdentifier ||
-          !(await deviceRepo.isKnownDevice(env.DB, user.id, deviceInfo.deviceIdentifier)))
+          !(await deviceRepo(env.DB).isKnownDevice(user.id, deviceInfo.deviceIdentifier)))
       ) {
         notifyNewDeviceVerification(env, request, user, deviceInfo.deviceType);
         return deviceErrorResponse('required');
@@ -844,8 +841,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
       });
     }
     if (trustedTwoFactorTokenToReturn && deviceInfo.deviceIdentifier) {
-      await deviceRepo.saveTrustedTwoFactorDeviceToken(
-        env.DB,
+      await deviceRepo(env.DB).saveTrustedTwoFactorDeviceToken(
         trustedTwoFactorTokenToReturn,
         user.id,
         deviceInfo.deviceIdentifier,
@@ -859,7 +855,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
     // Successful login - clear failed attempts
     await rateLimit.clearLoginAttempts(loginIdentifier);
     if (validatedAuthRequestId) {
-      await authRequestRepo.markAuthRequestAuthenticated(env.DB, validatedAuthRequestId);
+      await authRequestRepo(env.DB).markAuthRequestAuthenticated(validatedAuthRequestId);
     }
 
     return completeLogin(
@@ -936,7 +932,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
       const loginIdentifier = await loginRateLimitKey(clientIdentifier!, grantType, clientId.toLowerCase());
       const loginCheck = await rateLimit.checkLoginAttempt(loginIdentifier);
       if (!loginCheck.allowed) return identityErrorResponse('Too many failed login attempts.', 'TooManyRequests', 429);
-      const token = await getAccessTokenWithAccount(env.DB, clientId.toLowerCase());
+      const token = await smRepo(env.DB).getAccessTokenWithAccount(clientId.toLowerCase());
       if (
         !token ||
         !token.key ||
@@ -982,7 +978,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
     const locked = await loginLockoutResponse(rateLimit, loginIdentifier);
     if (locked) return locked;
 
-    const user = await userRepo.getUserById(env.DB, uid);
+    const user = await userRepo(env.DB).getUserById(uid);
     if (!user) {
       await rateLimit.recordFailedLogin(loginIdentifier);
       return identityErrorResponse('ClientId or clientSecret is incorrect. Try again', 'invalid_grant', 400);
@@ -1179,7 +1175,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
 
     const { accessToken, user, device } = result;
     if (device?.identifier) {
-      await deviceRepo.touchDeviceLastSeen(env.DB, user.id, device.identifier);
+      await deviceRepo(env.DB).touchDeviceLastSeen(user.id, device.identifier);
     }
     return tokenResponse(request, user, accessToken, refreshToken);
   }
@@ -1193,7 +1189,7 @@ export async function handlePrelogin(request: Request, env: Env): Promise<Respon
   if (body instanceof Response) return body;
   const { email } = body;
 
-  const user = await userRepo.getUser(env.DB, email);
+  const user = await userRepo(env.DB).getUser(email);
 
   // Return default KDF settings even if user doesn't exist (to prevent user enumeration)
   const kdfType = user?.kdfType ?? 0;
@@ -1245,7 +1241,7 @@ export async function handleRevocation(request: Request, env: Env): Promise<Resp
       ? parse(request.headers.get('Cookie') ?? '', WEB_REFRESH_COOKIE)[WEB_REFRESH_COOKIE] || ''
       : '');
   if (token) {
-    await sessionRepo.deleteRefreshToken(env.DB, token);
+    await sessionRepo(env.DB).deleteRefreshToken(token);
   }
 
   const baseResponse = new Response(null, {

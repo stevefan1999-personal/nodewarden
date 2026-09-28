@@ -6,7 +6,7 @@ import { getOrm } from '../db/client';
 import { auditLogs, verification } from '../db/schema';
 import { jsonSet } from '../db/sql';
 import { createTestEnv, portalFetch, seedUser, signInToAdminPortal } from './support/env';
-import * as userRepo from '../services/storage-user-repo';
+import { userRepo } from '../services/storage-user-repo';
 
 const ADMIN = 'portal@x.io';
 
@@ -31,7 +31,7 @@ test('portal verifies listed/unlisted accounts and names the vault-admin promoti
     });
     assert.equal(response.status, 303);
     assert.match(response.headers.get('Location')!, /m=verified/);
-    const verified = (await userRepo.getUserById(env.DB, user.id))!;
+    const verified = (await userRepo(env.DB).getUserById(user.id))!;
     assert.equal(verified.emailVerified, true);
     assert.equal(verified.role, role);
     const after = await portalFetch(env, { path: `/admin/users/view/${user.id}`, cookie: auth.cookie });
@@ -61,7 +61,7 @@ test('portal email verification enforces CSRF, typed email, recent sign-in and t
   const stale = await post({ csrf: auth.csrf, confirmation: user.email });
   assert.equal(stale.status, 303);
   assert.match(stale.headers.get('Location')!, /m=reauth/);
-  assert.equal((await userRepo.getUserById(env.DB, user.id))?.emailVerified, false);
+  assert.equal((await userRepo(env.DB).getUserById(user.id))?.emailVerified, false);
   auth = await signInToAdminPortal(env, ADMIN);
   for (let index = 0; index < 20; index++) {
     const target = await seedUser(env, { emailVerified: false });
@@ -81,5 +81,5 @@ test('portal email verification enforces CSRF, typed email, recent sign-in and t
     form: { csrf: auth.csrf, confirmation: user.email },
   });
   assert.equal(deletion.status, 429);
-  assert.equal((await userRepo.getUserById(env.DB, user.id))?.emailVerified, false);
+  assert.equal((await userRepo(env.DB).getUserById(user.id))?.emailVerified, false);
 });

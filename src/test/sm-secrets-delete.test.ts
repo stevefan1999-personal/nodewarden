@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import * as smRepo from '../services/storage-secret-repo';
+import { smRepo } from '../services/storage-secret-repo';
 import type { Env, User } from '../types';
 import { authedFetch, createTestEnv } from './support/env';
 import { ENCRYPTED_FIELD, seedSmOrg } from './support/sm';
@@ -36,7 +36,7 @@ test('an owner deleting [id] soft-deletes the secret and gets a BulkDeleteRespon
     object: 'list',
     continuationToken: null,
   });
-  assert.notEqual((await smRepo.getSecret(env.DB, secretId))?.deletedAt ?? null, null);
+  assert.notEqual((await smRepo(env.DB).getSecret(secretId))?.deletedAt ?? null, null);
 });
 
 const INVALID_BODIES = [
@@ -60,6 +60,6 @@ for (const [shape, body] of INVALID_BODIES) {
       userId: owner.id,
     });
     assert.equal(deleted.status, 400);
-    assert.equal((await smRepo.getSecret(env.DB, secretId))?.deletedAt, null);
+    assert.equal((await smRepo(env.DB).getSecret(secretId))?.deletedAt, null);
   });
 }

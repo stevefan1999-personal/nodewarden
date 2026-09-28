@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { createTestEnv } from '../test/support/env';
-import { getConfigValue, setConfigValue } from './storage-config-repo';
+import { configRepo } from './storage-config-repo';
 import { YUBICO_BOOTSTRAP_CLAIM_CONFIG_KEY, initializeYubicoCredentialsOnce } from './yubico-config';
 
 const NOW = 1_800_000_000_000;
@@ -16,8 +16,8 @@ test('a Yubico bootstrap claim holds through its expiry instant and is cleared o
     [NOW - 1, true],
   ] as const) {
     const claim = `${expiresAt}:other-request`;
-    await setConfigValue(env.DB, YUBICO_BOOTSTRAP_CLAIM_CONFIG_KEY, claim);
+    await configRepo(env.DB).setConfigValue(YUBICO_BOOTSTRAP_CLAIM_CONFIG_KEY, claim);
     assert.equal(await initializeYubicoCredentialsOnce(env.DB, 'owner@example.test', 'not-a-yubikey-otp'), null);
-    assert.equal(await getConfigValue(env.DB, YUBICO_BOOTSTRAP_CLAIM_CONFIG_KEY), cleared ? null : claim);
+    assert.equal(await configRepo(env.DB).getConfigValue(YUBICO_BOOTSTRAP_CLAIM_CONFIG_KEY), cleared ? null : claim);
   }
 });

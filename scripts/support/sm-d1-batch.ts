@@ -6,7 +6,7 @@ import { Miniflare } from 'miniflare';
 
 const repo = process.env.SM_E2E_REPO_ROOT || resolve(import.meta.dirname, '../..');
 const load = (path: string) => import(pathToFileURL(resolve(repo, path)).href);
-const { updateSecret } = await load('src/services/storage-secret-repo.ts');
+const { smRepo } = await load('src/services/storage-secret-repo.ts');
 const { abortUnlessChanged, getOrm } = await load('src/db/client.ts');
 const { MIGRATIONS } = await load('src/test/support/d1-sqlite.ts');
 const { organizations, smProjects, smSecretProjects, smSecretServiceAccounts, smSecrets, smServiceAccounts } =
@@ -68,18 +68,18 @@ try {
     machines: await orm.select({ updatedAt: smServiceAccounts.updatedAt }).from(smServiceAccounts),
   });
   assert.equal(
-    await updateSecret(db, next, ['p'], 'r2', [policy()]),
+    await smRepo(db).updateSecret(next, ['p'], 'r2', [policy()]),
     false,
     'moved project rejected despite same revision',
   );
-  assert.equal(await updateSecret(db, next, ['q'], 'r1', [policy()]), false, 'stale revision rejected');
+  assert.equal(await smRepo(db).updateSecret(next, ['q'], 'r1', [policy()]), false, 'stale revision rejected');
   assert.deepEqual(await snapshot(), {
     secret: [{ value: 'current-value', updatedAt: 'r2' }],
     links: [{ projectId: 'q' }],
     policies: [],
     machines: [{ updatedAt: 'old-machine-revision' }],
   });
-  assert.equal(await updateSecret(db, next, ['q'], 'r2', [policy()]), true, 'current snapshot commits');
+  assert.equal(await smRepo(db).updateSecret(next, ['q'], 'r2', [policy()]), true, 'current snapshot commits');
   const committed = {
     secret: [{ value: 'stale-value', updatedAt: 'r3' }],
     links: [{ projectId: 'p' }],

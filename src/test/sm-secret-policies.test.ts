@@ -13,8 +13,8 @@ import {
   smServiceAccounts,
 } from '../db/schema';
 import { handleUpdateSecret } from '../handlers/secrets-manager';
-import * as orgRepo from '../services/storage-org-repo';
-import * as smRepo from '../services/storage-secret-repo';
+import { orgRepo } from '../services/storage-org-repo';
+import { smRepo } from '../services/storage-secret-repo';
 import { authedFetch, createTestEnv } from './support/env';
 import { ENCRYPTED_FIELD, postJson, seedMember, seedSmOrg, smUser } from './support/sm';
 
@@ -36,8 +36,8 @@ async function setup() {
   const { orgId, owner } = await seedSmOrg(env);
   const { user: a } = await seedMember(env, orgId);
   const { user: b } = await seedMember(env, orgId);
-  const aMember = (await orgRepo.getMembershipByUserAndOrg(env.DB, a.id, orgId))!;
-  const bMember = (await orgRepo.getMembershipByUserAndOrg(env.DB, b.id, orgId))!;
+  const aMember = (await orgRepo(env.DB).getMembershipByUserAndOrg(a.id, orgId))!;
+  const bMember = (await orgRepo(env.DB).getMembershipByUserAndOrg(b.id, orgId))!;
   const project = (user = owner) =>
     postJson<{ id: string }>(env, user, `/api/organizations/${orgId}/projects`, { name: ENCRYPTED_FIELD });
   const account = (user = owner) =>
@@ -115,7 +115,7 @@ test('secret policy omission preserves grants, all three present lists are requi
     (await request(a.id, path, 'POST', { ...FIELDS, projectIds: [p.id], accessPoliciesRequests })).status,
     404,
   );
-  assert.equal((await smRepo.listSecrets(env.DB, orgId)).length, 0);
+  assert.equal((await smRepo(env.DB).listSecrets(orgId)).length, 0);
   const secret = await postJson<{ id: string }>(env, owner, path, {
     ...FIELDS,
     projectIds: [p.id],
@@ -174,7 +174,7 @@ test('secret-policy conflicts roll back the secret edit, project move, people ch
     projectIds: [p.id],
     accessPoliciesRequests: policies([policy(bMember.id)]),
   });
-  const original = await smRepo.getSecret(env.DB, secret.id);
+  const original = await smRepo(env.DB).getSecret(secret.id);
   const before = '2020-01-01T00:00:00.000Z';
   const orm = getOrm(env.DB);
   await orm.update(smServiceAccounts).set({ updatedAt: before }).where(eq(smServiceAccounts.id, machine.id));
@@ -203,7 +203,7 @@ test('secret-policy conflicts roll back the secret edit, project move, people ch
   env.DB.batch = batch;
   assert.equal(raced, true);
   assert.equal(response.status, 409);
-  assert.deepEqual(await smRepo.getSecret(env.DB, secret.id), original);
+  assert.deepEqual(await smRepo(env.DB).getSecret(secret.id), original);
   const users = await orm
     .select({ membershipId: smSecretMembers.membershipId })
     .from(smSecretMembers)
@@ -222,7 +222,7 @@ test('secret-policy conflicts roll back the secret edit, project move, people ch
       .get())!.writeAccess,
     0,
   );
-  assert.equal((await smRepo.getServiceAccount(env.DB, machine.id))!.updatedAt, before);
+  assert.equal((await smRepo(env.DB).getServiceAccount(machine.id))!.updatedAt, before);
 });
 
 test('a stale secret snapshot aborts new and removed policies together with its encrypted field changes', async () => {
@@ -246,7 +246,7 @@ test('a stale secret snapshot aborts new and removed policies together with its 
     } as T;
   };
   assert.equal((await handleUpdateSecret(put, env, await smUser(env, owner), secret.id)).status, 404);
-  const persisted = (await smRepo.getSecret(env.DB, secret.id))!;
+  const persisted = (await smRepo(env.DB).getSecret(secret.id))!;
   assert.equal(persisted.deletedAt, before);
   assert.equal(persisted.value, ENCRYPTED_FIELD);
   const users = await orm
@@ -261,6 +261,6 @@ test('a stale secret snapshot aborts new and removed policies together with its 
     await orm.select().from(smSecretServiceAccounts).where(eq(smSecretServiceAccounts.secretId, secret.id)).get(),
     undefined,
   );
-  assert.equal((await smRepo.getServiceAccount(env.DB, machine.id))!.updatedAt, before);
+  assert.equal((await smRepo(env.DB).getServiceAccount(machine.id))!.updatedAt, before);
   assert.equal((await request(owner.id, `/api/secrets/${secret.id}/access-policies`)).status, 404);
 });

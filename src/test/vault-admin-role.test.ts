@@ -9,7 +9,7 @@ import { markEmailVerified, syncVaultAdminRoles } from '../services/vault-admin-
 import { createRegisterVerifyToken } from '../utils/jwt';
 import { archiveDb, archiveOf, restoreArchive, withArchiveDb } from './support/backup';
 import { authedFetch, createTestEnv, portalFetch, seedUser, signInToAdminPortal } from './support/env';
-import * as userRepo from '../services/storage-user-repo';
+import { userRepo } from '../services/storage-user-repo';
 
 const ENCRYPTED = '2.dGVzdA==|dGVzdA==|dGVzdA==';
 const roleSyncAudits = (db: D1Database) => getOrm(db).$count(auditLogs, eq(auditLogs.action, 'admin.vault_role.sync'));
@@ -31,8 +31,8 @@ test('enabling the first verified listed account synchronizes roles and revokes 
     form: { csrf: portal.csrf },
   });
   assert.equal(enabled.status, 303);
-  assert.equal((await userRepo.getUserById(env.DB, listed.id))?.role, 'admin');
-  assert.equal((await userRepo.getUserById(env.DB, legacy.id))?.role, 'user');
+  assert.equal((await userRepo(env.DB).getUserById(listed.id))?.role, 'admin');
+  assert.equal((await userRepo(env.DB).getUserById(legacy.id))?.role, 'user');
   assert.equal((await authedFetch(env, { path: '/api/admin/users', headers })).status, 403);
 });
 
@@ -53,11 +53,11 @@ for (const config of ['disabled', 'invalid', 'absent', 'unverified', 'banned', '
             ? 'missing@x.io'
             : listed.email;
     await syncVaultAdminRoles(env);
-    assert.equal((await userRepo.getUserById(env.DB, legacy.id))?.role, config === 'enabled' ? 'user' : 'admin');
-    assert.equal((await userRepo.getUserById(env.DB, listed.id))?.role, config === 'enabled' ? 'admin' : 'user');
+    assert.equal((await userRepo(env.DB).getUserById(legacy.id))?.role, config === 'enabled' ? 'user' : 'admin');
+    assert.equal((await userRepo(env.DB).getUserById(listed.id))?.role, config === 'enabled' ? 'admin' : 'user');
     if (config === 'enabled') {
-      await userRepo.saveUser(env.DB, { ...legacy, name: 'Stale role' });
-      assert.equal((await userRepo.getUserById(env.DB, legacy.id))?.role, 'user');
+      await userRepo(env.DB).saveUser({ ...legacy, name: 'Stale role' });
+      assert.equal((await userRepo(env.DB).getUserById(legacy.id))?.role, 'user');
       const auditCount = await roleSyncAudits(env.DB);
       await syncVaultAdminRoles(env);
       assert.equal(await roleSyncAudits(env.DB), auditCount);
@@ -83,27 +83,27 @@ test('only validated registration tokens verify an email; listing a claimed addr
     });
   env.ADMIN_EMAILS = firstEmail;
   assert.equal((await register(firstEmail)).status, 200);
-  const first = (await userRepo.getUser(env.DB, firstEmail))!;
+  const first = (await userRepo(env.DB).getUser(firstEmail))!;
   assert.equal(first.emailVerified, false);
   assert.equal(first.role, 'admin'); // First-account bootstrap remains the no-lockout fallback.
   const claimedEmail = 'claimed@x.io';
   assert.equal((await register(claimedEmail)).status, 200);
-  const claimed = (await userRepo.getUser(env.DB, claimedEmail))!;
+  const claimed = (await userRepo(env.DB).getUser(claimedEmail))!;
   assert.equal(claimed.emailVerified, false);
   env.ADMIN_EMAILS = claimedEmail;
   await syncVaultAdminRoles(env);
-  assert.equal((await userRepo.getUserById(env.DB, claimed.id))?.role, 'user');
+  assert.equal((await userRepo(env.DB).getUserById(claimed.id))?.role, 'user');
   const verifiedEmail = 'verified@x.io';
   env.ADMIN_EMAILS = `${claimedEmail},${verifiedEmail}`;
   const token = await createRegisterVerifyToken(env.JWT_SECRET, verifiedEmail, null);
   assert.equal((await register(verifiedEmail, token)).status, 200);
-  assert.equal((await userRepo.getUser(env.DB, verifiedEmail))?.emailVerified, true);
-  assert.equal((await userRepo.getUser(env.DB, verifiedEmail))?.role, 'admin');
-  assert.equal((await userRepo.getUserById(env.DB, first.id))?.role, 'user');
-  assert.equal((await userRepo.getUserById(env.DB, claimed.id))?.role, 'user');
+  assert.equal((await userRepo(env.DB).getUser(verifiedEmail))?.emailVerified, true);
+  assert.equal((await userRepo(env.DB).getUser(verifiedEmail))?.role, 'admin');
+  assert.equal((await userRepo(env.DB).getUserById(first.id))?.role, 'user');
+  assert.equal((await userRepo(env.DB).getUserById(claimed.id))?.role, 'user');
   const invalid = await register('wrong@x.io', token);
   assert.equal(invalid.status, 400);
-  assert.equal(await userRepo.getUser(env.DB, 'wrong@x.io'), null);
+  assert.equal(await userRepo(env.DB).getUser('wrong@x.io'), null);
   const profile = await authedFetch(env, { path: '/api/accounts/profile', userId: claimed.id });
   assert.equal(((await profile.json()) as { emailVerified: boolean }).emailVerified, true);
 });
@@ -113,11 +113,11 @@ test('markEmailVerified grants a listed account once and stale saves cannot clea
   const user = await seedUser(env, { emailVerified: false });
   env.ADMIN_EMAILS = user.email;
   await markEmailVerified(env, user.id);
-  assert.equal((await userRepo.getUserById(env.DB, user.id))?.emailVerified, true);
-  assert.equal((await userRepo.getUserById(env.DB, user.id))?.role, 'admin');
-  await userRepo.saveUser(env.DB, user);
-  assert.equal((await userRepo.getUserById(env.DB, user.id))?.emailVerified, true);
-  assert.equal((await userRepo.getUserById(env.DB, user.id))?.role, 'admin');
+  assert.equal((await userRepo(env.DB).getUserById(user.id))?.emailVerified, true);
+  assert.equal((await userRepo(env.DB).getUserById(user.id))?.role, 'admin');
+  await userRepo(env.DB).saveUser(user);
+  assert.equal((await userRepo(env.DB).getUserById(user.id))?.emailVerified, true);
+  assert.equal((await userRepo(env.DB).getUserById(user.id))?.role, 'admin');
   await markEmailVerified(env, user.id);
   assert.equal(await roleSyncAudits(env.DB), 1);
 });
@@ -133,8 +133,8 @@ test('backup restore preserves verified state, defaults legacy rows and corrects
   delete db.users.find((row) => row.id === listed.id)!.email_verified;
   const env = await createTestEnv({ ADMIN_EMAILS: listed.email });
   await restoreArchive(env, withArchiveDb(bytes, db), legacy.id);
-  assert.equal((await userRepo.getUserById(env.DB, listed.id))?.role, 'admin');
-  assert.equal((await userRepo.getUserById(env.DB, listed.id))?.emailVerified, true);
-  assert.equal((await userRepo.getUserById(env.DB, legacy.id))?.role, 'user');
-  assert.equal((await userRepo.getUserById(env.DB, unverified.id))?.emailVerified, false);
+  assert.equal((await userRepo(env.DB).getUserById(listed.id))?.role, 'admin');
+  assert.equal((await userRepo(env.DB).getUserById(listed.id))?.emailVerified, true);
+  assert.equal((await userRepo(env.DB).getUserById(legacy.id))?.role, 'user');
+  assert.equal((await userRepo(env.DB).getUserById(unverified.id))?.emailVerified, false);
 });

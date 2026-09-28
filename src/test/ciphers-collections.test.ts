@@ -4,7 +4,7 @@ import test from 'node:test';
 import { D1_MAX_BOUND_PARAMETERS, getOrm } from '../db/client';
 import { ciphers } from '../db/schema';
 import { MembershipType, type CollectionAccess } from '../services/org-types';
-import * as orgRepo from '../services/storage-org-repo';
+import { orgRepo } from '../services/storage-org-repo';
 import type { Env, User } from '../types';
 import { authedFetch, createTestEnv, seedUser } from './support/env';
 import { createCollection, errorMessage, seedMember } from './support/sm';
@@ -94,7 +94,7 @@ function putCollections(
 }
 
 async function storedCollectionIds(env: Env, cipherId: string): Promise<string[]> {
-  return (await orgRepo.listCipherCollectionIds(env.DB, cipherId)).sort();
+  return (await orgRepo(env.DB).listCipherCollectionIds(cipherId)).sort();
 }
 
 async function syncedCollectionIds(env: Env, user: User, cipherId: string): Promise<string[] | undefined> {
@@ -167,11 +167,11 @@ test('collections_v2 honours write access granted through a group and keeps read
   const { env, owner, orgId, collectionA, collectionB, collectionC } = await setup();
   // A is read-only to the member; B and C are writable only through its group.
   const { user: member } = await seedMember(env, orgId, { collections: [access(collectionA, { readOnly: true })] });
-  const membership = await orgRepo.getMembershipByUserAndOrg(env.DB, member.id, orgId);
+  const membership = await orgRepo(env.DB).getMembershipByUserAndOrg(member.id, orgId);
   assert.ok(membership);
   const now = new Date().toISOString();
   const groupId = crypto.randomUUID();
-  await orgRepo.saveGroup(env.DB, {
+  await orgRepo(env.DB).saveGroup({
     id: groupId,
     orgId,
     name: 'Editors',
@@ -180,10 +180,10 @@ test('collections_v2 honours write access granted through a group and keeps read
     createdAt: now,
     updatedAt: now,
   });
-  await orgRepo.replaceGroupMembers(env.DB, groupId, [membership.id]);
+  await orgRepo(env.DB).replaceGroupMembers(groupId, [membership.id]);
   await Promise.all(
     [collectionB, collectionC].map((collectionId) =>
-      orgRepo.replaceCollectionAccess(env.DB, collectionId, {
+      orgRepo(env.DB).replaceCollectionAccess(collectionId, {
         groups: [{ groupId, readOnly: false, hidePasswords: false, manage: false }],
       }),
     ),
@@ -322,7 +322,7 @@ test('collection changes stay within the D1 bound-parameter limit however many c
   // One delete of this many ids plus the cipher id would bind one parameter too many.
   const manyCollectionIds = Array.from({ length: D1_MAX_BOUND_PARAMETERS }, () => crypto.randomUUID());
   for (const id of manyCollectionIds) {
-    await orgRepo.saveCollection(env.DB, {
+    await orgRepo(env.DB).saveCollection({
       id,
       orgId,
       name: ORG_ENCRYPTED,
@@ -351,7 +351,7 @@ test('sync lists org items for a member assigned more collections than one D1 st
   // Binding one parameter per assigned collection, plus the org id, would exceed the cap.
   const manyCollectionIds = Array.from({ length: D1_MAX_BOUND_PARAMETERS }, () => crypto.randomUUID());
   for (const id of manyCollectionIds) {
-    await orgRepo.saveCollection(env.DB, {
+    await orgRepo(env.DB).saveCollection({
       id,
       orgId,
       name: ORG_ENCRYPTED,

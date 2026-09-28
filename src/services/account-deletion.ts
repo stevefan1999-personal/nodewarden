@@ -18,10 +18,10 @@ import { AuthService } from './auth';
 import { syncVaultAdminRoles } from './vault-admin-role';
 import { auditEventStatement, writeAuditEvent, type AuditEventInput } from './audit-events';
 import { deleteBlobObjects, getAttachmentObjectKey, getSendFileObjectKey } from './blob-store';
-import { deleteCiphersByOrganization, reassignOrganizationCiphers } from './storage-cipher-repo';
+import { cipherRepo } from './storage-cipher-repo';
 import { MembershipStatus, MembershipType } from './org-types';
-import { bumpOrgMemberRevisions, deleteOrganization } from './storage-org-repo';
-import * as userRepo from './storage-user-repo';
+import { orgRepo } from './storage-org-repo';
+import { userRepo } from './storage-user-repo';
 
 export type DeleteUserAccountResult =
   | { kind: 'deleted' }
@@ -129,7 +129,7 @@ export async function setUserStatus(
     changed = updated.length > 0;
     if (changed) await writeAuditEvent(env.DB, audit);
   }
-  const user = await userRepo.getUserById(env.DB, userId);
+  const user = await userRepo(env.DB).getUserById(userId);
   if (!user) return { kind: 'not-found' };
   if (!changed) return { kind: user.status === next ? 'unchanged' : 'last-vault-admin' };
   AuthService.invalidateUserCache(userId);
@@ -184,7 +184,7 @@ export async function deleteUserAccount(
       .select({ id: sends.id, data: sends.data })
       .from(sends)
       .where(and(eq(sends.userId, userId), eq(sends.type, 1), guard)),
-    reassignOrganizationCiphers(env.DB, userId, guard),
+    cipherRepo(env.DB).reassignOrganizationCiphers(userId, guard),
     orm.delete(emergencyAccess).where(and(eq(emergencyAccess.granteeId, userId), guard)),
     orm.delete(session).where(and(eq(session.userId, userId), guard)),
     auditEventStatement(env.DB, audit, guard),
@@ -218,14 +218,14 @@ export async function deleteOrganizationAccount(env: Env, orgId: string, audit: 
       .from(attachments)
       .innerJoin(ciphers, eq(attachments.cipherId, ciphers.id))
       .where(eq(ciphers.organizationId, orgId)),
-    bumpOrgMemberRevisions(env.DB, orgId),
-    deleteCiphersByOrganization(env.DB, orgId),
+    orgRepo(env.DB).bumpOrgMemberRevisions(orgId),
+    cipherRepo(env.DB).deleteCiphersByOrganization(orgId),
     auditEventStatement(
       env.DB,
       audit,
       exists(orm.select({ id: organizations.id }).from(organizations).where(eq(organizations.id, orgId))),
     ),
-    deleteOrganization(env.DB, orgId),
+    orgRepo(env.DB).deleteOrganization(orgId),
   ]);
   await deleteBlobObjects(
     env,

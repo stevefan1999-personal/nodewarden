@@ -19,9 +19,9 @@ import {
   seedUser,
   signInToAdminPortal,
 } from './support/env';
-import * as sessionRepo from '../services/storage-session-repo';
-import * as deviceRepo from '../services/storage-device-repo';
-import * as userRepo from '../services/storage-user-repo';
+import { sessionRepo } from '../services/storage-session-repo';
+import { deviceRepo } from '../services/storage-device-repo';
+import { userRepo } from '../services/storage-user-repo';
 
 const ADMIN = 'portal@x.io';
 const PASSWORD = 'test-client-hash';
@@ -31,8 +31,8 @@ test('portal disable/enable rotates the stamp, invalidates existing tokens, and 
   const env = await createTestEnv({ ADMIN_EMAILS: ADMIN });
   const auth = await signInToAdminPortal(env, ADMIN);
   const user = await seedUser(env, { masterPasswordHash: await hashPassword(PASSWORD) });
-  await sessionRepo.saveRefreshToken(env.DB, 'old-session', user.id);
-  await deviceRepo.upsertDevice(env.DB, user.id, 'device', 'Existing device', 2);
+  await sessionRepo(env.DB).saveRefreshToken('old-session', user.id);
+  await deviceRepo(env.DB).upsertDevice(user.id, 'device', 'Existing device', 2);
   const token = await new AuthService(env).generateAccessToken(user);
   const path = `/admin/users/${user.id}/disable`;
   const view = await portalFetch(env, { path: `/admin/users/view/${user.id}`, cookie: auth.cookie });
@@ -58,10 +58,10 @@ test('portal disable/enable rotates the stamp, invalidates existing tokens, and 
   const disabled = await portalFetch(env, { path, method: 'POST', cookie: auth.cookie, form: { csrf: auth.csrf } });
   assert.equal(disabled.status, 303);
   assert.match(disabled.headers.get('Location')!, /m=disabled/);
-  const updated = (await userRepo.getUserById(env.DB, user.id))!;
+  const updated = (await userRepo(env.DB).getUserById(user.id))!;
   assert.equal(updated.status, 'banned');
   assert.notEqual(updated.securityStamp, user.securityStamp);
-  assert.ok(await deviceRepo.getDevice(env.DB, user.id, 'device'));
+  assert.ok(await deviceRepo(env.DB).getDevice(user.id, 'device'));
   const login = await authedFetch(env, {
     method: 'POST',
     path: '/identity/connect/token',
@@ -99,7 +99,7 @@ test('portal disable/enable rotates the stamp, invalidates existing tokens, and 
     form: { csrf: auth.csrf },
   });
   assert.equal(enabled.status, 303);
-  assert.equal((await userRepo.getUserById(env.DB, user.id))?.securityStamp, updated.securityStamp);
+  assert.equal((await userRepo(env.DB).getUserById(user.id))?.securityStamp, updated.securityStamp);
   assert.equal(
     (await authedFetch(env, { path: '/api/accounts/profile', headers: { Authorization: `Bearer ${token}` } })).status,
     401,
@@ -139,8 +139,8 @@ test('both admin surfaces refuse the last active vault administrator; stale user
   const user = await seedUser(env);
   const oldToken = await new AuthService(env).generateAccessToken(user);
   assert.deepEqual(await setUserStatus(env, user.id, 'banned', audit), { kind: 'updated' });
-  await userRepo.saveUser(env.DB, { ...user, name: 'Stale update' });
-  const saved = (await userRepo.getUserById(env.DB, user.id))!;
+  await userRepo(env.DB).saveUser({ ...user, name: 'Stale update' });
+  const saved = (await userRepo(env.DB).getUserById(user.id))!;
   assert.equal(saved.status, 'banned');
   assert.notEqual(saved.securityStamp, user.securityStamp);
   assert.deepEqual(await setUserStatus(env, user.id, 'active', audit), { kind: 'updated' });

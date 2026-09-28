@@ -6,7 +6,7 @@ import { eq } from 'drizzle-orm';
 import { getOrm } from '../db/client';
 import { smServiceAccounts } from '../db/schema';
 import { MembershipStatus, MembershipType } from '../services/org-types';
-import * as orgRepo from '../services/storage-org-repo';
+import { orgRepo } from '../services/storage-org-repo';
 import { authedFetch, createTestEnv } from './support/env';
 import { ENCRYPTED_FIELD, postJson, seedMember, seedSmOrg, smLogin, TOKEN_FIELDS } from './support/sm';
 
@@ -72,8 +72,8 @@ test('enable SM is an authorized no-op, standalone metadata is on, and machine l
   const { orgId, owner, admin } = await seedSmOrg(env);
   const { user: a } = await seedMember(env, orgId);
   const { user: invited } = await seedMember(env, orgId, { status: MembershipStatus.Invited });
-  const before = await orgRepo.getMembershipByUserAndOrg(env.DB, invited.id, orgId);
-  const member = (await orgRepo.getMembershipByUserAndOrg(env.DB, a.id, orgId))!;
+  const before = await orgRepo(env.DB).getMembershipByUserAndOrg(invited.id, orgId);
+  const member = (await orgRepo(env.DB).getMembershipByUserAndOrg(a.id, orgId))!;
   const path = `/api/organizations/${orgId}/users/enable-secrets-manager`;
   for (const actor of [owner, admin]) {
     const response = await authedFetch(env, {
@@ -86,8 +86,8 @@ test('enable SM is an authorized no-op, standalone metadata is on, and machine l
     assert.equal(await response.text(), '');
   }
   assert.equal((await authedFetch(env, { userId: a.id, path, method: 'PUT', body: { ids: [member.id] } })).status, 403);
-  assert.deepEqual(await orgRepo.getMembershipByUserAndOrg(env.DB, invited.id, orgId), before);
-  assert.deepEqual(await orgRepo.getMembershipByUserAndOrg(env.DB, a.id, orgId), member);
+  assert.deepEqual(await orgRepo(env.DB).getMembershipByUserAndOrg(invited.id, orgId), before);
+  assert.deepEqual(await orgRepo(env.DB).getMembershipByUserAndOrg(a.id, orgId), member);
   const metadata = await authedFetch(env, {
     userId: owner.id,
     path: `/api/organizations/${orgId}/billing/vnext/self-host/metadata`,

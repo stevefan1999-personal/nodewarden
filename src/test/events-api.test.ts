@@ -8,10 +8,10 @@ import { seedMember } from './support/sm';
 import { EventType, recordEvents, pruneEvents } from '../services/events';
 import { saveAuditLogSettings } from '../services/audit-events';
 import { MembershipType } from '../services/org-types';
-import * as orgRepo from '../services/storage-org-repo';
+import { orgRepo } from '../services/storage-org-repo';
 import type { Env, User } from '../types';
 import { LIMITS } from '../config/limits';
-import * as cipherRepo from '../services/storage-cipher-repo';
+import { cipherRepo } from '../services/storage-cipher-repo';
 const { createOwnedOrganization } = await import('../handlers/organizations');
 const ENC = '2.dGVzdA==|dGVzdA==|dGVzdA==';
 
@@ -24,7 +24,7 @@ async function setup() {
 }
 async function cipher(env: Env, owner: User, orgId: string | null) {
   const id = crypto.randomUUID();
-  await cipherRepo.saveCipher(env.DB, {
+  await cipherRepo(env.DB).saveCipher({
     id,
     userId: owner.id,
     organizationId: orgId,
@@ -214,7 +214,7 @@ test('event scope is immutable across moves/deletion; membership filters use the
   ).json()) as EventPage;
   assert.equal(history.data.find((event) => event.type === 1100)?.actingUserId, actor.id);
   assert.equal(history.data.find((event) => event.type === 1100)?.cipherId, id);
-  await orgRepo.deleteOrganization(env.DB, org.id);
+  await orgRepo(env.DB).deleteOrganization(org.id);
   assert.equal(await count(env), 0, 'organization deletion removes its event scope');
 });
 
@@ -294,7 +294,7 @@ test('collector records authorized client actions, derives actor/scope and hides
 test('collector accepts PascalCase uploads and records organization client events only for members', async () => {
   const { env, owner, org } = await setup();
   const id = await cipher(env, owner, org.id);
-  const ownerMembership = (await orgRepo.getMembershipByUserAndOrg(env.DB, owner.id, org.id))!;
+  const ownerMembership = (await orgRepo(env.DB).getMembershipByUserAndOrg(owner.id, org.id))!;
   const outsider = await seedUser(env);
   await getOrm(env.DB).delete(events);
   const date = new Date().toISOString();
@@ -472,7 +472,7 @@ test('committed server changes survive event-store failure, while client uploads
   assert.equal(password.status, 200);
   const deleted = await authedFetch(env, { method: 'DELETE', path: `/api/ciphers/${id}`, userId: owner.id });
   assert.equal(deleted.status, 200);
-  assert.ok((await cipherRepo.getCipher(env.DB, id))?.deletedAt);
+  assert.ok((await cipherRepo(env.DB).getCipher(id))?.deletedAt);
   const collected = await authedFetch(env, {
     method: 'POST',
     path: '/events/collect',

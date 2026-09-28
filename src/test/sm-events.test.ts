@@ -6,7 +6,7 @@ import { events as eventLog, orgGroups, smSecrets, smServiceAccountMembers, smSe
 import { abortWrites, authedFetch, createTestEnv, wrapStatements } from './support/env';
 import { ENCRYPTED_FIELD, postJson, seedMember, seedSmOrg, smLogin, TOKEN_FIELDS } from './support/sm';
 import { MembershipType } from '../services/org-types';
-import * as orgRepo from '../services/storage-org-repo';
+import { orgRepo } from '../services/storage-org-repo';
 
 const FIELDS = { key: ENCRYPTED_FIELD, value: ENCRYPTED_FIELD, note: ENCRYPTED_FIELD };
 const CHANGED = '2.Y2hhbmdlZA==|Y2hhbmdlZA==|Y2hhbmdlZA==';
@@ -59,8 +59,8 @@ test('SM event routes enforce audit permission, secret read access, tenant scope
   for (const path of [projectPath, secretPath, accountPath])
     assert.equal((await request(path, 'GET', undefined, user.id)).status, 404);
   assert.equal((await request(alternate, 'GET', undefined, user.id)).status, 404);
-  const ownerMember = (await orgRepo.getMembershipByUserAndOrg(env.DB, owner.id, orgId))!;
-  const userMember = (await orgRepo.getMembershipByUserAndOrg(env.DB, user.id, orgId))!;
+  const ownerMember = (await orgRepo(env.DB).getMembershipByUserAndOrg(owner.id, orgId))!;
+  const userMember = (await orgRepo(env.DB).getMembershipByUserAndOrg(user.id, orgId))!;
   assert.equal(
     (
       await request(`/api/service-accounts/${account.id}/access-policies/people`, 'PUT', {
@@ -71,7 +71,7 @@ test('SM event routes enforce audit permission, secret read access, tenant scope
   );
   assert.ok((await events(alternate, user.id)).some((e) => e.type === 2304));
   assert.equal((await request(accountPath, 'GET', undefined, user.id)).status, 404);
-  await orgRepo.saveMembership(env.DB, {
+  await orgRepo(env.DB).saveMembership({
     ...userMember,
     type: MembershipType.Custom,
     permissions: { accessEventLogs: true } as any,
@@ -191,8 +191,8 @@ test('SM records completed lifecycle actions and partial bulk successes without 
 
 test('machine people policies record only added and removed users/groups', async () => {
   const { env, orgId, owner, user, account, request, events, count } = await setup();
-  const ownerMember = (await orgRepo.getMembershipByUserAndOrg(env.DB, owner.id, orgId))!;
-  const userMember = (await orgRepo.getMembershipByUserAndOrg(env.DB, user.id, orgId))!;
+  const ownerMember = (await orgRepo(env.DB).getMembershipByUserAndOrg(owner.id, orgId))!;
+  const userMember = (await orgRepo(env.DB).getMembershipByUserAndOrg(user.id, orgId))!;
   const group = crypto.randomUUID();
   const now = new Date().toISOString();
   await getOrm(env.DB).insert(orgGroups).values({ id: group, orgId, name: 'Team', createdAt: now, updatedAt: now });

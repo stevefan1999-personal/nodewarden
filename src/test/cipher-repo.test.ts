@@ -3,8 +3,8 @@ import test from 'node:test';
 
 import { D1_MAX_BOUND_PARAMETERS, getOrm, userRowMatches } from '../db/client';
 import { MembershipStatus, MembershipType } from '../services/org-types';
-import * as cipherRepo from '../services/storage-cipher-repo';
-import * as orgRepo from '../services/storage-org-repo';
+import { cipherRepo } from '../services/storage-cipher-repo';
+import { orgRepo } from '../services/storage-org-repo';
 import type { Cipher, Env } from '../types';
 import { createTestEnv, seedUser } from './support/env';
 import { seedMember, seedMembership } from './support/sm';
@@ -41,7 +41,7 @@ function cipher(id: string, userId: string, organizationId: string | null, name:
 
 async function insertOrganization(env: Env): Promise<string> {
   const id = crypto.randomUUID();
-  await orgRepo.insertOrganization(env.DB, {
+  await orgRepo(env.DB).insertOrganization({
     id,
     name: 'Org',
     billingEmail: 'billing@example.test',
@@ -61,10 +61,10 @@ test("a colliding cipher upsert overwrites only its own user's row or a row alre
   const intruder = await seedUser(env);
   const personalId = crypto.randomUUID();
   const orgItemId = crypto.randomUUID();
-  await cipherRepo.saveCipher(env.DB, cipher(personalId, owner.id, null, 'personal'));
-  await cipherRepo.saveCipher(env.DB, cipher(orgItemId, owner.id, 'org-a', 'org item'));
+  await cipherRepo(env.DB).saveCipher(cipher(personalId, owner.id, null, 'personal'));
+  await cipherRepo(env.DB).saveCipher(cipher(orgItemId, owner.id, 'org-a', 'org item'));
   const stored = async (id: string) => {
-    const row = await cipherRepo.getCipher(env.DB, id);
+    const row = await cipherRepo(env.DB).getCipher(id);
     return [row?.userId, row?.organizationId, row?.name];
   };
 
@@ -75,13 +75,13 @@ test("a colliding cipher upsert overwrites only its own user's row or a row alre
     [orgItemId, null],
   ] as const;
   for (const [index, [id, organizationId]] of refused.entries()) {
-    await cipherRepo.saveCipher(env.DB, cipher(id, intruder.id, organizationId, `overwrite ${index}`));
+    await cipherRepo(env.DB).saveCipher(cipher(id, intruder.id, organizationId, `overwrite ${index}`));
   }
   assert.deepEqual(await stored(personalId), [owner.id, null, 'personal']);
   assert.deepEqual(await stored(orgItemId), [owner.id, 'org-a', 'org item']);
 
-  await cipherRepo.saveCipher(env.DB, cipher(orgItemId, intruder.id, 'org-a', 'org edit'));
-  await cipherRepo.saveCipher(env.DB, cipher(personalId, owner.id, null, 'own edit'));
+  await cipherRepo(env.DB).saveCipher(cipher(orgItemId, intruder.id, 'org-a', 'org edit'));
+  await cipherRepo(env.DB).saveCipher(cipher(personalId, owner.id, null, 'own edit'));
   assert.deepEqual(await stored(orgItemId), [owner.id, 'org-a', 'org edit']);
   assert.deepEqual(await stored(personalId), [owner.id, null, 'own edit']);
 });
@@ -120,13 +120,13 @@ test('org items pass to the oldest other confirmed Owner of their own org, else 
     othersItem: [tiedOwner, ownersOrg],
   } as const;
   for (const [id, [userId, organizationId]] of Object.entries(items)) {
-    await cipherRepo.saveCipher(env.DB, cipher(id, userId, organizationId, id));
+    await cipherRepo(env.DB).saveCipher(cipher(id, userId, organizationId, id));
   }
 
-  await cipherRepo.reassignOrganizationCiphers(env.DB, departing.id, userRowMatches(getOrm(env.DB), departing.id));
+  await cipherRepo(env.DB).reassignOrganizationCiphers(departing.id, userRowMatches(getOrm(env.DB), departing.id));
 
   const owners = await Promise.all(
-    Object.keys(items).map(async (id) => (await cipherRepo.getCipher(env.DB, id))?.userId),
+    Object.keys(items).map(async (id) => (await cipherRepo(env.DB).getCipher(id))?.userId),
   );
   assert.deepEqual(owners, [ownerHeir, memberHeir, departing.id, tiedOwner]);
 });
@@ -135,23 +135,23 @@ test('bulk cipher writers chunk more ids than one statement can bind', async () 
   const env = await createTestEnv();
   const user = await seedUser(env);
   const ids = Array.from({ length: MANY_CIPHER_COUNT }, () => crypto.randomUUID());
-  for (const id of ids) await cipherRepo.saveCipher(env.DB, cipher(id, user.id, null, 'item'));
+  for (const id of ids) await cipherRepo(env.DB).saveCipher(cipher(id, user.id, null, 'item'));
   const states = async () =>
-    (await cipherRepo.getCiphersByIds(env.DB, ids, user.id)).map(({ deletedAt, archivedAt, folderId }) => [
+    (await cipherRepo(env.DB).getCiphersByIds(ids, user.id)).map(({ deletedAt, archivedAt, folderId }) => [
       Boolean(deletedAt),
       Boolean(archivedAt),
       folderId,
     ]);
   const everyCipher = (state: unknown[]) => ids.map(() => state);
 
-  await cipherRepo.bulkSoftDeleteCiphers(env.DB, ids, user.id);
+  await cipherRepo(env.DB).bulkSoftDeleteCiphers(ids, user.id);
   assert.deepEqual(await states(), everyCipher([true, false, null]));
-  await cipherRepo.bulkRestoreCiphers(env.DB, ids, user.id);
+  await cipherRepo(env.DB).bulkRestoreCiphers(ids, user.id);
   assert.deepEqual(await states(), everyCipher([false, false, null]));
-  await cipherRepo.bulkArchiveCiphers(env.DB, ids, user.id);
+  await cipherRepo(env.DB).bulkArchiveCiphers(ids, user.id);
   assert.deepEqual(await states(), everyCipher([false, true, null]));
-  await cipherRepo.bulkUnarchiveCiphers(env.DB, ids, user.id);
+  await cipherRepo(env.DB).bulkUnarchiveCiphers(ids, user.id);
   assert.deepEqual(await states(), everyCipher([false, false, null]));
-  await cipherRepo.bulkMoveCiphers(env.DB, ids, 'folder', user.id);
+  await cipherRepo(env.DB).bulkMoveCiphers(ids, 'folder', user.id);
   assert.deepEqual(await states(), everyCipher([false, false, 'folder']));
 });

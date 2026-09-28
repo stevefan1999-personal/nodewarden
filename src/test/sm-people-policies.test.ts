@@ -4,7 +4,7 @@ import test from 'node:test';
 import { getOrm } from '../db/client';
 import { orgGroupMembers, orgGroups } from '../db/schema';
 import { MembershipStatus } from '../services/org-types';
-import * as orgRepo from '../services/storage-org-repo';
+import { orgRepo } from '../services/storage-org-repo';
 import { authedFetch, createTestEnv } from './support/env';
 import { ENCRYPTED_FIELD, postJson, seedMember, seedSmOrg } from './support/sm';
 
@@ -14,8 +14,8 @@ async function setup() {
   const env = await createTestEnv();
   const { orgId, owner } = await seedSmOrg(env);
   const { user: a } = await seedMember(env, orgId);
-  const ownerMember = (await orgRepo.getMembershipByUserAndOrg(env.DB, owner.id, orgId))!;
-  const aMember = (await orgRepo.getMembershipByUserAndOrg(env.DB, a.id, orgId))!;
+  const ownerMember = (await orgRepo(env.DB).getMembershipByUserAndOrg(owner.id, orgId))!;
+  const aMember = (await orgRepo(env.DB).getMembershipByUserAndOrg(a.id, orgId))!;
   const project = await postJson<{ id: string }>(env, owner, `/api/organizations/${orgId}/projects`, {
     name: ENCRYPTED_FIELD,
   });
@@ -112,7 +112,7 @@ test('people policies reject duplicates, invalid permissions, and foreign member
     assert.equal(((await result.json()) as any).message, message);
   }
   const foreign = await seedSmOrg(env);
-  const foreignMember = (await orgRepo.getMembershipByUserAndOrg(env.DB, foreign.owner.id, foreign.orgId))!;
+  const foreignMember = (await orgRepo(env.DB).getMembershipByUserAndOrg(foreign.owner.id, foreign.orgId))!;
   const foreignGroup = crypto.randomUUID();
   const now = new Date().toISOString();
   await getOrm(env.DB)
@@ -133,8 +133,8 @@ test('machine-account people policies are RW and potential grantees list only co
   const { env, orgId, owner, a, ownerMember, aMember, account, project, groupId, request } = await setup();
   const { user: invited } = await seedMember(env, orgId, { status: MembershipStatus.Invited });
   const { user: accepted } = await seedMember(env, orgId, { status: MembershipStatus.Accepted });
-  const invitedMember = (await orgRepo.getMembershipByUserAndOrg(env.DB, invited.id, orgId))!;
-  const acceptedMember = (await orgRepo.getMembershipByUserAndOrg(env.DB, accepted.id, orgId))!;
+  const invitedMember = (await orgRepo(env.DB).getMembershipByUserAndOrg(invited.id, orgId))!;
+  const acceptedMember = (await orgRepo(env.DB).getMembershipByUserAndOrg(accepted.id, orgId))!;
   const grantees = await request(owner.id, `/api/organizations/${orgId}/access-policies/people/potential-grantees`);
   assert.equal(grantees.status, 200);
   const list = (await grantees.json()) as any;

@@ -3,7 +3,7 @@ import test from 'node:test';
 
 import { getOrm } from '../db/client';
 import { smSecretProjects } from '../db/schema';
-import * as smRepo from '../services/storage-secret-repo';
+import { smRepo } from '../services/storage-secret-repo';
 import type { Env, User } from '../types';
 import { D1_MAX_BOUND_PARAMETERS } from './support/d1-sqlite';
 import { authedFetch, createTestEnv } from './support/env';
@@ -117,7 +117,7 @@ test("projectsInOrg keeps only the org's projects from a cap-length id list", as
   const { env, yOrgId, yProjectId, xProjectId } = await seedCrossOrg();
   const ids = [yProjectId, xProjectId];
   const missingIds = Array.from({ length: D1_MAX_BOUND_PARAMETERS - ids.length }, () => crypto.randomUUID());
-  assert.deepEqual(await smRepo.projectsInOrg(env.DB, yOrgId, [...ids, ...missingIds]), new Set([yProjectId]));
+  assert.deepEqual(await smRepo(env.DB).projectsInOrg(yOrgId, [...ids, ...missingIds]), new Set([yProjectId]));
 });
 
 // Earlier builds stored any posted project id, so a link can already point across organizations.
@@ -148,7 +148,7 @@ test(`an owner lists ${LARGE_ORG_SECRET_COUNT} secrets without exceeding D1 para
   const now = new Date().toISOString();
   await Promise.all(
     Array.from({ length: LARGE_ORG_SECRET_COUNT }, () =>
-      smRepo.saveSecret(env.DB, {
+      smRepo(env.DB).saveSecret({
         id: crypto.randomUUID(),
         orgId,
         ...SECRET_FIELDS,

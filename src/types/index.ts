@@ -29,8 +29,6 @@ export interface Env {
   ENABLE_NEW_DEVICE_VERIFICATION?: string;
   EMAIL_FROM?: string;
   EMAIL_FROM_NAME?: string;
-  EVENTS_QUEUE?: Queue;
-  SECRET_CHANGES_QUEUE?: Queue;
   JWT_SECRET: string;
   WEBAUTHN_ALLOWED_ORIGINS?: string;
   SSO_ENABLED?: string;

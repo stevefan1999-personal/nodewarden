@@ -6,8 +6,6 @@ import { syncVaultAdminRoles } from './services/vault-admin-role';
 import { Env } from './types';
 import { NotificationsHub } from './durable/notifications-hub';
 import { BackupTransferRunner } from './durable/backup-transfer-runner';
-import type { PlatformEvent } from './services/queue-publisher';
-import * as orgRepo from './services/storage-org-repo';
 import { app } from './router';
 import { applyCors, applySecurityHeaders, jsonResponse } from './utils/response';
 import { runScheduledBackupIfDue } from './handlers/backup';
@@ -126,22 +124,6 @@ export default {
       return outcome.status === 'rejected';
     });
     if (failed.length) throw new Error(`Scheduled jobs failed: ${failed.join(', ')}`);
-  },
-
-  async queue(batch: MessageBatch<PlatformEvent>, env: Env): Promise<void> {
-    await ensureDatabaseInitialized(env);
-    for (const message of batch.messages) {
-      try {
-        const event = message.body;
-        if (event.type === 'org.revision') {
-          await orgRepo.bumpOrgMemberRevisions(env.DB, event.orgId);
-        }
-        message.ack();
-      } catch (error) {
-        console.error('Queue event failed:', withoutQueryParams(error));
-        message.retry({ delaySeconds: 30 });
-      }
-    }
   },
 };
 

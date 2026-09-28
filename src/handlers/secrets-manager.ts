@@ -17,7 +17,6 @@ import * as smRepo from '../services/storage-secret-repo';
 import { errorResponse, jsonResponse, parseBody } from '../utils/response';
 import { generateUUID } from '../utils/uuid';
 import { hashApiKey, randomStringAlphanum } from '../utils/api-key';
-import { publishSecretChanged } from '../services/queue-publisher';
 import { EventType, listEventsResponse, recordEvents } from '../services/events';
 import { canAccessEventLogs, isActiveMember } from '../services/org-authz';
 import { MembershipType } from '../services/org-types';
@@ -180,7 +179,6 @@ export async function handleCreateSecret(
   await recordEvents(env, request, eventActor(principal), [
     { organizationId: orgId, type: EventType.SecretCreated, resourceType: 'secret', resourceId: secret.id },
   ]);
-  await publishSecretChanged(env, orgId, secret.id);
   return jsonResponse(secretResponse(secret, await projectNames(env, orgId)));
 }
 
@@ -237,7 +235,6 @@ export async function handleUpdateSecret(
   await recordEvents(env, request, eventActor(principal), [
     { organizationId: secret.orgId, type: EventType.SecretEdited, resourceType: 'secret', resourceId: secret.id },
   ]);
-  await publishSecretChanged(env, secret.orgId, secret.id);
   return jsonResponse(secretResponse(secret, await projectNames(env, secret.orgId)));
 }
 
@@ -269,7 +266,6 @@ export async function handleDeleteSecrets(request: Request, env: Env, principal:
       resourceId,
     })),
   );
-  await Promise.all(allowed.map((id) => publishSecretChanged(env, orgId, id)));
   return jsonResponse(listResponse(data));
 }
 
@@ -746,6 +742,5 @@ export async function handleSecretsTrash(
       resourceId,
     })),
   );
-  await Promise.all(ids.map((id) => publishSecretChanged(env, orgId, id)));
   return new Response(null, { status: 200 });
 }

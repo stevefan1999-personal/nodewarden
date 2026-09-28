@@ -4,7 +4,6 @@ import * as orgRepo from '../services/storage-org-repo';
 import { MembershipStatus, MembershipType } from '../services/org-types';
 import { generateUUID } from '../utils/uuid';
 import { mailOrganizationInvites, verifyScimBearer } from './organizations';
-import { publishPlatformEvent } from '../services/queue-publisher';
 import * as userRepo from '../services/storage-user-repo';
 
 function scimJson(data: unknown, status = 200, headers: Record<string, string> = {}): Response {
@@ -151,7 +150,6 @@ export async function handleScimRoute(request: Request, env: Env, path: string):
       }
       await orgRepo.saveMembership(env.DB, member);
       await orgRepo.bumpOrgMemberRevisions(env.DB, orgId);
-      await publishPlatformEvent(env, { type: 'directory.applied', orgId, resource: 'user', resourceId: member.id });
       return scimJson(scimUser(member.id, email, body.displayName, true, member.externalId), 201);
     }
 
@@ -219,7 +217,6 @@ export async function handleScimRoute(request: Request, env: Env, path: string):
       updatedAt: now,
     };
     await orgRepo.saveGroup(env.DB, group);
-    await publishPlatformEvent(env, { type: 'directory.applied', orgId, resource: 'group', resourceId: group.id });
     return scimJson(scimGroup(group.id, group.name, group.externalId), 201);
   }
   if ((request.method === 'PUT' || request.method === 'PATCH') && id) {

@@ -42,7 +42,6 @@ import { errorResponse, jsonResponse, parseBody } from '../utils/response';
 import { generateUUID, isUUID } from '../utils/uuid';
 import { organizationResponse, policyResponse } from '../utils/org-response';
 import { enterprisePlansResponse } from '../services/enterprise-license';
-import { publishPlatformEvent } from '../services/queue-publisher';
 import { RateLimitService } from '../services/ratelimit';
 import { hashApiKey, verifyApiKey } from '../utils/api-key';
 import { createOrgInviteToken, verifyOrgInviteToken, ORG_INVITE_TTL_DAYS } from '../utils/jwt';
@@ -156,7 +155,6 @@ export async function createOwnedOrganization(
     updatedAt: now,
   });
   await orgRepo.bumpOrgMemberRevisions(env.DB, orgId);
-  await publishPlatformEvent(env, { type: 'org.revision', orgId, actorUserId: user.id });
   return org;
 }
 

@@ -6,7 +6,9 @@ import {
   MAX_BACKUP_ARCHIVE_BYTES,
   buildBackupArchive,
   inspectBackupArchiveFileNameChecksum,
-  isSafeBackupAttachmentBlobName,
+  archivedFiles,
+  externalFiles,
+  isSafeBackupBlobName,
   parseBackupArchive,
   verifyBackupArchiveFileNameChecksum,
 } from '../services/backup-archive';
@@ -246,15 +248,21 @@ export async function executeConfiguredBackup(
           throw error;
         }
       }
-      const pendingAttachments = (archive.manifest.attachmentBlobs || []).filter(
-        (attachment) => remoteAttachmentIndex.get(attachment.blobName) !== attachment.sizeBytes,
-      );
+      // Send files sync into the same attachments/ directory, under sends/<send>/<file>.
+      const pendingAttachments = [
+        ...(archive.manifest.attachmentBlobs || []),
+        ...(archive.manifest.sendFileBlobs || []),
+      ].filter((attachment) => remoteAttachmentIndex.get(attachment.blobName) !== attachment.sizeBytes);
       // A WebDAV batch spends two subrequests per attachment after creating the remote path's
       // collections, all inside the Worker's external subrequest limit; S3 creates no collections.
       let attachmentSyncBatchSize: number = REMOTE_ATTACHMENT_SYNC_MAX_S3_BATCH_SIZE;
       if (destination.type !== 's3') {
         const remotePath = String((destination.destination as WebDavBackupDestination).remotePath || '');
-        const fixedWebDavDirectoryCalls = remotePath.replace(/\\/g, '/').split('/').filter(Boolean).length + 1; // remotePath plus the shared "attachments" dir.
+        // remotePath, the shared "attachments" dir, and "attachments/sends" when Send files are due.
+        const fixedWebDavDirectoryCalls =
+          remotePath.replace(/\\/g, '/').split('/').filter(Boolean).length +
+          1 +
+          Number(pendingAttachments.some(({ blobName }) => blobName.startsWith('sends/')));
         const available =
           REMOTE_ATTACHMENT_SYNC_EXTERNAL_SUBREQUEST_LIMIT -
           REMOTE_ATTACHMENT_SYNC_SUBREQUEST_RESERVE -
@@ -477,18 +485,12 @@ export async function importAndAuditRemoteBackupFile(
   await touchLease();
   // Blob names the archive references without carrying them inline, fetched from the destination in batches.
   const parsed = parseBackupArchive(remoteFile.bytes, { allowExternalAttachmentBlobs: true });
-  const refs = new Map(
-    parsed.payload.manifest.attachmentBlobs.map((item) => [`${item.cipherId}/${item.attachmentId}`, item.blobName]),
-  );
+  const external = externalFiles(parsed.payload.manifest);
   const externalAttachmentBlobNames = Array.from(
     new Set(
-      parsed.payload.db.attachments.flatMap((row) => {
-        const cipherId = String(row.cipher_id || '').trim();
-        const attachmentId = String(row.id || '').trim();
-        const blobName = refs.get(`${cipherId}/${attachmentId}`) ?? '';
-        return parsed.files[`attachments/${cipherId}/${attachmentId}.bin`] || !isSafeBackupAttachmentBlobName(blobName)
-          ? []
-          : [blobName];
+      archivedFiles(parsed.payload.db).flatMap(({ key }) => {
+        const ref = external.get(key);
+        return !ref || parsed.files[`attachments/${key}.bin`] ? [] : [ref.blobName];
       }),
     ),
   );
@@ -1029,7 +1031,7 @@ export async function handleDownloadAdminBackupAttachment(
       return errorResponse('Backup attachment blob is required', 400);
     }
     // Only <cipher>/<attachment> names with safe segments reach blob storage.
-    if (!isSafeBackupAttachmentBlobName(blobName)) {
+    if (!isSafeBackupBlobName(blobName)) {
       return errorResponse('Backup attachment blob is invalid', 400);
     }
     const object = await getBlobObject(env, blobName);

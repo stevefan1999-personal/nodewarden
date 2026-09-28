@@ -6,23 +6,18 @@ import { chunkRows, columnCount, getOrm } from '../db/client';
 import { sqliteMaster } from '../db/migrate';
 import { attachments, ciphers, folders, organizations, sends } from '../db/schema';
 import type { Env, User } from '../types';
-import {
-  KV_MAX_OBJECT_BYTES,
-  deleteBlobObject,
-  getAttachmentObjectKey,
-  getBlobStorageKind,
-  putBlobObject,
-} from './blob-store';
+import { KV_MAX_OBJECT_BYTES, deleteBlobObject, getBlobStorageKind, putBlobObject } from './blob-store';
 import { BACKUP_SETTINGS_CONFIG_KEY, normalizeImportedBackupSettingsValue } from './backup-config';
 import { YUBICO_BOOTSTRAP_CLAIM_CONFIG_KEY } from './yubico-config';
 import {
   BACKUP_TABLE_NAMES,
   BACKUP_TABLES,
+  archivedFiles,
   backupColumns,
-  type BackupManifestAttachmentBlob,
+  externalFiles,
+  type ArchivedFile,
   type BackupPayload,
   type BackupTableName,
-  isSafeBackupAttachmentBlobName,
   parseBackupArchive,
   validateBackupPayloadContents,
 } from './backup-archive';
@@ -63,17 +58,18 @@ export interface BackupImportResultBody {
     ciphers: number;
     attachments: number;
     attachmentFiles: number;
+    sends: number;
+    sendFiles: number;
   };
   skipped: {
     reason: string | null;
     attachments: number;
-    items: Array<{
-      kind: 'attachment';
-      path: string;
-      sizeBytes: number;
-    }>;
+    sendFiles: number;
+    items: SkippedFile[];
   };
 }
+
+type SkippedFile = { kind: 'attachment' | 'send'; path: string; sizeBytes: number };
 
 export interface BackupImportExecutionResult {
   result: BackupImportResultBody;
@@ -106,45 +102,23 @@ async function validateShadowTableCounts(
   );
 }
 
+// Every blob the instance's attachments and file Sends own.
 async function collectCurrentBlobKeys(db: D1Database): Promise<Set<string>> {
-  const keys = new Set<string>();
-  const attachmentRows = await getOrm(db)
-    .select({ id: attachments.id, cipherId: attachments.cipherId })
-    .from(attachments)
-    .innerJoin(ciphers, eq(ciphers.id, attachments.cipherId));
-  for (const row of attachmentRows) {
-    const cipherId = String(row.cipherId || '').trim();
-    const attachmentId = String(row.id || '').trim();
-    if (!cipherId || !attachmentId) continue;
-    keys.add(getAttachmentObjectKey(cipherId, attachmentId));
-  }
-  return keys;
+  const orm = getOrm(db);
+  const [attachmentRows, sendRows] = await Promise.all([
+    orm
+      .select({ id: attachments.id, cipher_id: attachments.cipherId, size: attachments.size })
+      .from(attachments)
+      .innerJoin(ciphers, eq(ciphers.id, attachments.cipherId)),
+    orm.select({ id: sends.id, type: sends.type, data: sends.data }).from(sends),
+  ]);
+  return new Set(archivedFiles({ attachments: attachmentRows, sends: sendRows }).map(({ key }) => key));
 }
 
 const KV_BLOB_SKIP_REASON = 'Cloudflare KV object size limit (25 MB)';
 const BLOB_STORAGE_UNAVAILABLE_SKIP_REASON = 'Attachment storage is not configured';
-const ATTACHMENT_RESTORE_FAILED_REASON = 'Some attachments could not be restored and were skipped';
-
-interface BackupImportSkipSummary {
-  reason: string | null;
-  attachments: number;
-  items: Array<{
-    kind: 'attachment';
-    path: string;
-    sizeBytes: number;
-  }>;
-}
-
-interface PreparedBackupImportPayload {
-  payload: BackupPayload;
-  skipped: BackupImportSkipSummary;
-}
-
-interface AttachmentRestoreResult {
-  imported: number;
-  restoredAttachments: SqlRow[];
-  skipped: BackupImportSkipSummary;
-}
+const REMOTE_FILES_UNAVAILABLE_REASON = 'Some remote attachments were unavailable and were skipped';
+const FILE_RESTORE_FAILED_REASON = 'Some attachments could not be restored and were skipped';
 
 interface RemoteAttachmentSource {
   loadAttachment(blobName: string): Promise<Uint8Array | null>;
@@ -164,12 +138,6 @@ export interface BackupRestoreProgressEvent {
 
 export type BackupRestoreProgressReporter = (event: BackupRestoreProgressEvent) => Promise<void> | void;
 
-function attachmentRowKey(row: SqlRow): string {
-  const attachmentId = String(row.id || '').trim();
-  const cipherId = String(row.cipher_id || '').trim();
-  return `${cipherId}/${attachmentId}`;
-}
-
 function upsertConfigRow(rows: SqlRow[], key: string, value: string): SqlRow[] {
   let replaced = false;
   const nextRows = rows.map((row) => {
@@ -183,16 +151,6 @@ function upsertConfigRow(rows: SqlRow[], key: string, value: string): SqlRow[] {
   return nextRows;
 }
 
-function buildAttachmentBlobLookup(manifest: BackupPayload['manifest']): Map<string, BackupManifestAttachmentBlob> {
-  return new Map(
-    manifest.attachmentBlobs
-      .filter(
-        ({ cipherId, attachmentId, blobName }) => cipherId && attachmentId && isSafeBackupAttachmentBlobName(blobName),
-      )
-      .map((item) => [`${item.cipherId}/${item.attachmentId}`, item]),
-  );
-}
-
 export async function importBackupArchiveBytes(
   archiveBytes: Uint8Array,
   env: Env,
@@ -202,144 +160,51 @@ export async function importBackupArchiveBytes(
   progress?: BackupRestoreProgressReporter,
   fileName: string = 'nodewarden_backup.zip',
 ): Promise<BackupImportExecutionResult> {
-  // A remote archive keeps attachment blobs at the destination instead of inline .bin entries, so its
-  // rows are trimmed to what the source can supply before validation; a local archive validates as-is.
+  // A local archive carries every file inline and validates as-is. A remote one keeps its files at the
+  // destination, so its file-owning rows are fitted to what that source supplies before validation.
   const restoreSource = source ? 'remote' : 'local';
   const parsed = parseBackupArchive(archiveBytes, { allowExternalAttachmentBlobs: !!source });
-  let prepared: PreparedBackupImportPayload;
-  if (source) {
-    const manifestLookup = buildAttachmentBlobLookup(parsed.payload.manifest);
-    const storageKind = getBlobStorageKind(env);
-    const nextAttachments: SqlRow[] = [];
-    const skippedItems: BackupImportSkipSummary['items'] = [];
-
-    for (const row of parsed.payload.db.attachments) {
-      const cipherId = String(row.cipher_id || '').trim();
-      const attachmentId = String(row.id || '').trim();
-      const lookupKey = `${cipherId}/${attachmentId}`;
-      const ref = manifestLookup.get(lookupKey);
-      const sizeBytes = ref?.sizeBytes || Number(row.size || 0) || 0;
-      const path = ref ? `attachments/${ref.blobName}` : `attachments/${lookupKey}`;
-      const inlinePath = `attachments/${cipherId}/${attachmentId}.bin`;
-
-      if (parsed.files[inlinePath]) {
-        nextAttachments.push(row);
-        continue;
-      }
-      if (!ref) {
-        skippedItems.push({ kind: 'attachment', path, sizeBytes });
-        continue;
-      }
-      if (storageKind === 'kv' && sizeBytes > KV_MAX_OBJECT_BYTES) {
-        skippedItems.push({ kind: 'attachment', path, sizeBytes });
-        continue;
-      }
-      if (storageKind === null) {
-        skippedItems.push({ kind: 'attachment', path, sizeBytes });
-        continue;
-      }
-      nextAttachments.push(row);
-    }
-
-    prepared = {
-      payload: {
-        ...parsed.payload,
-        db: {
-          ...parsed.payload.db,
-          attachments: nextAttachments,
-        },
-      },
-      skipped: {
-        reason: skippedItems.length ? 'Some remote attachments were unavailable and were skipped' : null,
-        attachments: skippedItems.length,
-        items: skippedItems,
-      },
+  if (!source) validateBackupPayloadContents(parsed.payload, parsed.files);
+  const external = source
+    ? externalFiles(parsed.payload.manifest)
+    : new Map<string, { blobName: string; sizeBytes: number }>();
+  const storageKind = getBlobStorageKind(env);
+  const describe = (file: ArchivedFile) => {
+    const inline = parsed.files[`attachments/${file.key}.bin`];
+    const ref = external.get(file.key);
+    const item: SkippedFile = {
+      kind: file.table === 'sends' ? 'send' : 'attachment',
+      path: ref ? `attachments/${ref.blobName}` : `attachments/${file.key}.bin`,
+      sizeBytes: inline?.byteLength ?? ref?.sizeBytes ?? file.sizeBytes,
     };
-    validateBackupPayloadContents(prepared.payload, parsed.files, { allowExternalAttachmentBlobs: true });
-  } else {
-    validateBackupPayloadContents(parsed.payload, parsed.files);
-    // Fit the attachments to this instance's blob storage: R2 takes every blob, KV only blobs within
-    // its object size limit, and without storage every attachment row is skipped.
-    const storageKind = getBlobStorageKind(env);
-    if (storageKind === 'r2') {
-      prepared = {
-        payload: parsed.payload,
-        skipped: {
-          reason: null,
-          attachments: 0,
-          items: [],
-        },
-      };
-    } else if (storageKind === null) {
-      const skippedItems = parsed.payload.db.attachments.map((row) => {
-        const cipherId = String(row.cipher_id || '').trim();
-        const attachmentId = String(row.id || '').trim();
-        return {
-          kind: 'attachment' as const,
-          path: `attachments/${cipherId}/${attachmentId}.bin`,
-          sizeBytes: Number(row.size || 0) || 0,
-        };
-      });
-
-      prepared = {
-        payload: {
-          ...parsed.payload,
-          db: {
-            ...parsed.payload.db,
-            attachments: [],
-          },
-        },
-        skipped: {
-          reason: skippedItems.length ? BLOB_STORAGE_UNAVAILABLE_SKIP_REASON : null,
-          attachments: skippedItems.length,
-          items: skippedItems,
-        },
-      };
-    } else {
-      const oversizedAttachmentPaths = new Set<string>();
-      const skippedItems: BackupImportSkipSummary['items'] = [];
-
-      for (const entry of Object.keys(parsed.files)) {
-        if (!entry.endsWith('.bin')) continue;
-        const sizeBytes = parsed.files[entry].byteLength;
-        if (sizeBytes <= KV_MAX_OBJECT_BYTES) continue;
-        if (entry.startsWith('attachments/')) {
-          oversizedAttachmentPaths.add(entry);
-          skippedItems.push({ kind: 'attachment', path: entry, sizeBytes });
-        }
-      }
-
-      const nextAttachments = parsed.payload.db.attachments.filter((row) => {
-        const cipherId = String(row.cipher_id || '').trim();
-        const attachmentId = String(row.id || '').trim();
-        if (!cipherId || !attachmentId) return false;
-        return !oversizedAttachmentPaths.has(`attachments/${cipherId}/${attachmentId}.bin`);
-      });
-
-      const nextPayload: BackupPayload = {
-        ...parsed.payload,
-        db: {
-          ...parsed.payload.db,
-          attachments: nextAttachments,
-        },
-      };
-
-      const needsKvBlobStorage = nextAttachments.length > 0;
-
-      if (needsKvBlobStorage && !env.ATTACHMENTS_KV) {
-        throw new Error('Backup restore requires ATTACHMENTS_KV when using KV blob storage');
-      }
-
-      prepared = {
-        payload: nextPayload,
-        skipped: {
-          reason: skippedItems.length ? KV_BLOB_SKIP_REASON : null,
-          attachments: skippedItems.length,
-          items: skippedItems,
-        },
-      };
-    }
-  }
+    return { inline, ref, item };
+  };
+  // Fit the files to this instance's blob storage: R2 takes every file, KV only files within its object
+  // size limit, and without storage no file-owning row restores. A row whose file does not fit is left out.
+  const unfit = archivedFiles(parsed.payload.db).filter((file) => {
+    const { inline, ref, item } = describe(file);
+    return !(inline || ref) || !storageKind || (storageKind === 'kv' && item.sizeBytes > KV_MAX_OBJECT_BYTES);
+  });
+  const unfitRows = new Set(unfit.map(({ row }) => row));
+  const prepared = {
+    payload: {
+      ...parsed.payload,
+      db: {
+        ...parsed.payload.db,
+        attachments: parsed.payload.db.attachments.filter((row) => !unfitRows.has(row)),
+        sends: parsed.payload.db.sends.filter((row) => !unfitRows.has(row)),
+      },
+    },
+    skipped: unfit.map((file) => describe(file).item),
+    reason: !unfit.length
+      ? null
+      : source
+        ? REMOTE_FILES_UNAVAILABLE_REASON
+        : storageKind
+          ? KV_BLOB_SKIP_REASON
+          : BLOB_STORAGE_UNAVAILABLE_SKIP_REASON,
+  };
+  if (source) validateBackupPayloadContents(prepared.payload, parsed.files, { allowExternalAttachmentBlobs: true });
   const report = (
     step: string,
     stage: string,
@@ -485,106 +350,46 @@ export async function importBackupArchiveBytes(
     await validateShadowTableCounts(env.DB, stagedCounts);
 
     await report('restore_files', 'files');
-    // Store each attachment blob; a row whose blob is missing or cannot be stored is skipped.
-    const restoredAttachments: SqlRow[] = [];
-    const restoreSkippedItems: BackupImportSkipSummary['items'] = [];
-    if (source) {
-      const manifestLookup = buildAttachmentBlobLookup(prepared.payload.manifest);
-      for (const row of prepared.payload.db.attachments) {
-        const cipherId = String(row.cipher_id || '').trim();
-        const attachmentId = String(row.id || '').trim();
-        const inlinePath = `attachments/${cipherId}/${attachmentId}.bin`;
-        const ref = manifestLookup.get(`${cipherId}/${attachmentId}`);
-        if (!ref && !parsed.files[inlinePath]) {
-          restoreSkippedItems.push({
-            kind: 'attachment',
-            path: `attachments/${cipherId}/${attachmentId}`,
-            sizeBytes: Number(row.size || 0) || 0,
-          });
-          continue;
-        }
-        const bytes = parsed.files[inlinePath] || (ref ? await source.loadAttachment(ref.blobName) : null);
-        if (!bytes) {
-          restoreSkippedItems.push({
-            kind: 'attachment',
-            path: ref ? `attachments/${ref.blobName}` : inlinePath,
-            sizeBytes: ref?.sizeBytes || Number(row.size || 0) || 0,
-          });
-          continue;
-        }
-        try {
-          await putBlobObject(env, getAttachmentObjectKey(cipherId, attachmentId), bytes, {
-            size: bytes.byteLength,
-            contentType: 'application/octet-stream',
-          });
-          restoredAttachments.push(row);
-        } catch {
-          restoreSkippedItems.push({
-            kind: 'attachment',
-            path: ref ? `attachments/${ref.blobName}` : inlinePath,
-            sizeBytes: bytes.byteLength,
-          });
-        }
-      }
-    } else {
-      for (const row of db.attachments) {
-        const cipherId = String(row.cipher_id || '').trim();
-        const attachmentId = String(row.id || '').trim();
-        if (!cipherId || !attachmentId) continue;
-        const key = `attachments/${cipherId}/${attachmentId}.bin`;
-        const bytes = parsed.files[key];
-        if (!bytes) {
-          restoreSkippedItems.push({
-            kind: 'attachment',
-            path: key,
-            sizeBytes: Number(row.size || 0) || 0,
-          });
-          continue;
-        }
-        try {
-          await putBlobObject(env, getAttachmentObjectKey(cipherId, attachmentId), bytes, {
-            size: bytes.byteLength,
-            contentType: 'application/octet-stream',
-          });
-          restoredAttachments.push(row);
-        } catch {
-          restoreSkippedItems.push({
-            kind: 'attachment',
-            path: key,
-            sizeBytes: bytes.byteLength,
-          });
-        }
+    // Store each file under its blob key. A row whose file is missing or cannot be stored leaves its shadow
+    // table and is reported as skipped; a failed drop is left to the count validation below.
+    const files = archivedFiles(db);
+    const failedRows = new Set<SqlRow>();
+    for (const file of files) {
+      const { inline, ref } = describe(file);
+      try {
+        const bytes = inline ?? (ref && source ? await source.loadAttachment(ref.blobName) : null);
+        if (!bytes) throw new Error('Backup file is unavailable');
+        await putBlobObject(env, file.key, bytes, { size: bytes.byteLength, contentType: 'application/octet-stream' });
+      } catch {
+        failedRows.add(file.row);
       }
     }
-    const restored: AttachmentRestoreResult = {
-      imported: restoredAttachments.length,
-      restoredAttachments,
-      skipped: {
-        reason: restoreSkippedItems.length ? ATTACHMENT_RESTORE_FAILED_REASON : null,
-        attachments: restoreSkippedItems.length,
-        items: restoreSkippedItems,
-      },
-    };
-    const restoredAttachmentKeys = new Set(restored.restoredAttachments.map(attachmentRowKey));
-    const failedRestoreRows = db.attachments.filter((row) => !restoredAttachmentKeys.has(attachmentRowKey(row)));
-    // Drop the staged rows of attachments whose blobs were not restored. A failed drop is left to the
-    // count validation below, which then rejects the restore.
-    try {
-      const staged = shadowTable(attachments);
-      const drops = failedRestoreRows.flatMap((row) => {
-        const attachmentId = String(row.id || '').trim();
-        const cipherId = String(row.cipher_id || '').trim();
-        return attachmentId && cipherId
-          ? [orm.delete(staged).where(and(eq(staged.id, attachmentId), eq(staged.cipherId, cipherId)))]
-          : [];
-      });
-      if (drops.length) {
-        await orm.batch(drops as [(typeof drops)[0], ...typeof drops]);
-      }
-    } catch {
-      // Reported by the count validation below.
-    }
-    await validateShadowTableCounts(env.DB, { ...stagedCounts, attachments: restored.restoredAttachments.length });
+    const failed = files.filter(({ row }) => failedRows.has(row));
+    const stagedAttachments = shadowTable(attachments);
+    const stagedSends = shadowTable(sends);
+    const drops = failed.map(({ table, row }) =>
+      table === 'sends'
+        ? orm.delete(stagedSends).where(eq(stagedSends.id, String(row.id || '').trim()))
+        : orm
+            .delete(stagedAttachments)
+            .where(
+              and(
+                eq(stagedAttachments.id, String(row.id || '').trim()),
+                eq(stagedAttachments.cipherId, String(row.cipher_id || '').trim()),
+              ),
+            ),
+    );
+    if (drops.length) await orm.batch(drops as [(typeof drops)[0], ...typeof drops]).catch(() => undefined);
+    // What each file-owning table restored: its rows, and the files among them.
+    const restored = (table: ArchivedFile['table']) => ({
+      rows: db[table].filter((row) => !failedRows.has(row)).length,
+      files: files.filter((file) => file.table === table && !failedRows.has(file.row)).length,
+    });
+    await validateShadowTableCounts(env.DB, {
+      ...stagedCounts,
+      attachments: restored('attachments').rows,
+      sends: restored('sends').rows,
+    });
     await report('finalize', 'finalize');
     // Commit by replacing live table contents from validated shadow tables.
     // This avoids D1 schema-rename edge cases while keeping current data intact
@@ -615,6 +420,7 @@ export async function importBackupArchiveBytes(
     }
 
     await report('complete', 'finalize', { done: true, ok: true });
+    const skippedItems = [...prepared.skipped, ...failed.map((file) => describe(file).item)];
     return {
       auditActorUserId: db.users.some((row) => String(row.id || '').trim() === actorUserId) ? actorUserId : null,
       result: {
@@ -627,13 +433,16 @@ export async function importBackupArchiveBytes(
           webauthnCredentials: db.webauthn_credentials.length,
           folders: db.folders.length,
           ciphers: db.ciphers.length,
-          attachments: restored.restoredAttachments.length,
-          attachmentFiles: restored.imported,
+          attachments: restored('attachments').rows,
+          attachmentFiles: restored('attachments').files,
+          sends: restored('sends').rows,
+          sendFiles: restored('sends').files,
         },
         skipped: {
-          reason: restored.skipped.reason || prepared.skipped.reason,
-          attachments: prepared.skipped.attachments + restored.skipped.attachments,
-          items: [...prepared.skipped.items, ...restored.skipped.items],
+          reason: failed.length ? FILE_RESTORE_FAILED_REASON : prepared.reason,
+          attachments: skippedItems.filter((item) => item.kind === 'attachment').length,
+          sendFiles: skippedItems.filter((item) => item.kind === 'send').length,
+          items: skippedItems,
         },
       },
     };

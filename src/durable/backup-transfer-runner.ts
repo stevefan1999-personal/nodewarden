@@ -17,7 +17,7 @@ import type { BackupImportResultBody } from '../services/backup-import';
 import { getBlobObject } from '../services/blob-store';
 import { notifyUserBackupProgress, notifyUserBackupRestoreProgress } from './notifications-hub';
 import { executeConfiguredBackup, importAndAuditRemoteBackupFile } from '../handlers/backup';
-import { isSafeBackupAttachmentBlobName, verifyBackupArchiveFileNameChecksum } from '../services/backup-archive';
+import { isSafeBackupBlobName, verifyBackupArchiveFileNameChecksum } from '../services/backup-archive';
 import { zipSync } from 'fflate';
 import { withoutQueryParams } from '../db/client';
 
@@ -222,7 +222,7 @@ export class BackupTransferRunner extends DurableObject<Env> {
     destination: BackupDestinationRecord,
     blobName: string,
   ): Promise<ReadableStream<Uint8Array> | null> {
-    if (!isSafeBackupAttachmentBlobName(blobName)) {
+    if (!isSafeBackupBlobName(blobName)) {
       throw new Error('Remote attachment download payload is invalid');
     }
     const file = await downloadRemoteBackupFile(destination, `attachments/${blobName}`).catch(() => null);
@@ -233,7 +233,7 @@ export class BackupTransferRunner extends DurableObject<Env> {
     destination: BackupDestinationRecord,
     blobNames: string[],
   ): Promise<ReadableStream<Uint8Array>> {
-    const names = Array.from(new Set(blobNames.filter(isSafeBackupAttachmentBlobName)));
+    const names = Array.from(new Set(blobNames.filter(isSafeBackupBlobName)));
     if (!names.length || names.length > REMOTE_ATTACHMENT_BATCH_LIMIT) {
       throw new Error('Remote attachment batch download payload is invalid');
     }
@@ -257,7 +257,7 @@ export class BackupTransferRunner extends DurableObject<Env> {
   ): Promise<void> {
     const remoteSession = createRemoteBackupTransferSession(destination);
     for (const { blobName } of attachments) {
-      if (!isSafeBackupAttachmentBlobName(blobName)) {
+      if (!isSafeBackupBlobName(blobName)) {
         throw new Error('Attachment chunk payload is invalid');
       }
       const object = await getBlobObject(this.env, blobName);

@@ -51,7 +51,8 @@ import { APP_VERSION } from '../../shared/app-version';
 import { BACKUP_SETTINGS_CONFIG_KEY } from './backup-config';
 import { YUBICO_BOOTSTRAP_CLAIM_CONFIG_KEY } from './yubico-config';
 import { exportPortableBackupSettingsEnvelope } from './backup-settings-crypto';
-import { getAttachmentObjectKey, getBlobStorageKind } from './blob-store';
+import { getAttachmentObjectKey, getBlobStorageKind, getSendFileObjectKey } from './blob-store';
+import { jsonText } from './org-types';
 
 // CONTRACT:
 // This file defines the exported instance-backup archive shape. Keep it in lock
@@ -94,10 +95,12 @@ export interface BackupManifest {
   };
   blobSummary: {
     attachmentFiles: number;
+    sendFiles: number;
     totalBytes: number;
     largestObjectBytes: number;
   };
   attachmentBlobs?: BackupManifestAttachmentBlob[];
+  sendFileBlobs?: BackupManifestSendFileBlob[];
 }
 
 const BackupManifestAttachmentBlobSchema = z.object({
@@ -107,6 +110,14 @@ const BackupManifestAttachmentBlobSchema = z.object({
   sizeBytes: z.number(),
 });
 export type BackupManifestAttachmentBlob = z.infer<typeof BackupManifestAttachmentBlobSchema>;
+
+const BackupManifestSendFileBlobSchema = z.object({
+  sendId: z.string().trim(),
+  fileId: z.string().trim(),
+  blobName: z.string().trim(),
+  sizeBytes: z.number(),
+});
+type BackupManifestSendFileBlob = z.infer<typeof BackupManifestSendFileBlobSchema>;
 
 const sqlRows = z.array(z.record(z.string(), z.union([z.string(), z.number(), z.null()])));
 const optionalSqlRows = sqlRows.nullish().transform((rows) => rows ?? []);
@@ -181,6 +192,10 @@ const BackupPayloadSchema = z.object({
         .array(BackupManifestAttachmentBlobSchema)
         .nullish()
         .transform((blobs) => blobs ?? []),
+      sendFileBlobs: z
+        .array(BackupManifestSendFileBlobSchema)
+        .nullish()
+        .transform((blobs) => blobs ?? []),
     },
     { error: 'Unsupported backup format version' },
   ),
@@ -253,10 +268,64 @@ function isSafeBackupPathSegment(value: string): boolean {
   return /^[A-Za-z0-9._-]+$/.test(value);
 }
 
-export function isSafeBackupAttachmentBlobName(value: unknown): boolean {
-  const normalized = String(value ?? '').trim();
-  const parts = normalized.split('/');
-  return parts.length === 2 && parts.every(isSafeBackupPathSegment);
+// A blob storage key an archive may carry: <cipher>/<attachment> for an attachment, sends/<send>/<file> for
+// a file Send's file.
+export function isSafeBackupBlobName(value: unknown): boolean {
+  const parts = String(value ?? '')
+    .trim()
+    .split('/');
+  const segments = parts.length === 3 && parts[0] === 'sends' ? parts.slice(1) : parts;
+  return segments.length === 2 && segments.every(isSafeBackupPathSegment);
+}
+
+// A file an archived row owns: an attachment's, or a file Send's. The archive carries it inline as
+// attachments/<key>.bin, or a remote destination keeps it as attachments/<key>, where key is its blob
+// storage key.
+export type ArchivedFile = { table: 'attachments' | 'sends'; row: SqlRow; key: string; sizeBytes: number };
+
+// The file a file Send's data names. A Send whose data names none owns no file.
+const SendFile = jsonText.pipe(z.object({ id: z.string(), size: z.coerce.number().catch(0) }).nullable()).catch(null);
+
+export function archivedFiles(db: Pick<BackupPayload['db'], 'attachments' | 'sends'>): ArchivedFile[] {
+  return [
+    ...db.attachments.map((row) => ({
+      table: 'attachments' as const,
+      row,
+      key: getAttachmentObjectKey(String(row.cipher_id || '').trim(), String(row.id || '').trim()),
+      sizeBytes: Number(row.size || 0) || 0,
+    })),
+    ...db.sends.flatMap((row) => {
+      const file = Number(row.type) === SendType.File ? SendFile.parse(row.data) : null;
+      return file
+        ? [
+            {
+              table: 'sends' as const,
+              row,
+              key: getSendFileObjectKey(String(row.id || '').trim(), file.id),
+              sizeBytes: file.size,
+            },
+          ]
+        : [];
+    }),
+  ];
+}
+
+// The files a remote destination keeps for an archive, by blob storage key, with the name to fetch each by.
+export function externalFiles(
+  manifest: BackupPayload['manifest'],
+): Map<string, { blobName: string; sizeBytes: number }> {
+  return new Map(
+    [
+      ...manifest.attachmentBlobs.map(
+        ({ cipherId, attachmentId, blobName, sizeBytes }) =>
+          [getAttachmentObjectKey(cipherId, attachmentId), { blobName, sizeBytes }] as const,
+      ),
+      ...manifest.sendFileBlobs.map(
+        ({ sendId, fileId, blobName, sizeBytes }) =>
+          [getSendFileObjectKey(sendId, fileId), { blobName, sizeBytes }] as const,
+      ),
+    ].filter(([key, { blobName }]) => isSafeBackupBlobName(key) && isSafeBackupBlobName(blobName)),
+  );
 }
 
 function validateBackupEntryName(name: string): void {
@@ -272,25 +341,14 @@ function validateBackupEntryName(name: string): void {
   ) {
     throw new Error(`Backup archive contains an unsafe file name: ${normalized}`);
   }
-  // Besides the two metadata files, only attachments/<cipher>/<attachment>.bin with safe segments is accepted.
+  // Besides the two metadata files, only attachments/<blob storage key>.bin with safe segments is accepted.
   const attachmentEntry =
     normalized.startsWith('attachments/') &&
     normalized.endsWith('.bin') &&
-    isSafeBackupAttachmentBlobName(normalized.slice('attachments/'.length, -'.bin'.length));
+    isSafeBackupBlobName(normalized.slice('attachments/'.length, -'.bin'.length));
   if (normalized !== 'manifest.json' && normalized !== 'db.json' && !attachmentEntry) {
     throw new Error(`Backup archive contains an unsupported file: ${normalized}`);
   }
-}
-
-function externalAttachmentPaths(
-  manifest: BackupPayload['manifest'],
-  allowExternalAttachmentBlobs = false,
-): Set<string> {
-  return new Set(
-    allowExternalAttachmentBlobs
-      ? manifest.attachmentBlobs.map(({ cipherId, attachmentId }) => `attachments/${cipherId}/${attachmentId}.bin`)
-      : [],
-  );
 }
 
 export interface ParseBackupArchiveOptions {
@@ -379,13 +437,11 @@ export function parseBackupArchive(
   if (!parsed.success) throw new Error(parsed.error.issues[0].message);
   const payload = parsed.data;
 
-  const externalAttachmentKeys = externalAttachmentPaths(payload.manifest, options.allowExternalAttachmentBlobs);
-  for (const row of payload.db.attachments) {
-    const cipherId = String(row.cipher_id || '').trim();
-    const attachmentId = String(row.id || '').trim();
-    if (!cipherId || !attachmentId) continue;
-    const entry = `attachments/${cipherId}/${attachmentId}.bin`;
-    if (!externalAttachmentKeys.has(entry) && !zipped[entry]) {
+  // A file with an unsafe key is reported by validateBackupPayloadContents() as an invalid row.
+  const external = options.allowExternalAttachmentBlobs ? externalFiles(payload.manifest) : new Map();
+  for (const { key } of archivedFiles(payload.db)) {
+    const entry = `attachments/${key}.bin`;
+    if (isSafeBackupBlobName(key) && !external.has(key) && !zipped[entry]) {
       throw new Error(`Backup archive is missing required file: ${entry}`);
     }
   }
@@ -415,7 +471,7 @@ export function validateBackupPayloadContents(
     attachments: attachmentRows,
     webauthn_credentials: accountPasskeyRows,
   } = payload.db;
-  const externalAttachmentKeys = externalAttachmentPaths(payload.manifest, options.allowExternalAttachmentBlobs);
+  const external = options.allowExternalAttachmentBlobs ? externalFiles(payload.manifest) : new Map();
 
   const userIds = new Set<string>();
   for (const row of userRows) {
@@ -484,9 +540,17 @@ export function validateBackupPayloadContents(
     ) {
       throw new Error('Backup archive contains an invalid attachment row');
     }
-    const attachmentPath = `attachments/${cipherId}/${id}.bin`;
-    if (!files[attachmentPath] && !externalAttachmentKeys.has(attachmentPath)) {
+    if (!files[`attachments/${cipherId}/${id}.bin`] && !external.has(`${cipherId}/${id}`)) {
       throw new Error(`Backup archive is missing required file: attachments/${cipherId}/${id}.bin`);
+    }
+  }
+
+  // A file Send's file travels like an attachment's.
+  for (const { table, key } of archivedFiles(payload.db)) {
+    if (table !== 'sends') continue;
+    if (!isSafeBackupBlobName(key)) throw new Error('Backup archive contains an invalid Send file');
+    if (!files[`attachments/${key}.bin`] && !external.has(key)) {
+      throw new Error(`Backup archive is missing required file: attachments/${key}.bin`);
     }
   }
 
@@ -578,11 +642,24 @@ export async function buildBackupArchive(
     };
   });
 
+  // Without attachments an archive carries no files, and a file Send is useless without its file.
+  const exportedSendRows = includeAttachments
+    ? rows.sends
+    : rows.sends.filter((row) => Number(row.type) !== SendType.File);
+  const sendFileBlobs: BackupManifestSendFileBlob[] = archivedFiles({ attachments: [], sends: exportedSendRows }).map(
+    ({ row, key, sizeBytes }) => ({
+      sendId: String(row.id || '').trim(),
+      fileId: key.split('/')[2],
+      blobName: key,
+      sizeBytes,
+    }),
+  );
+  const fileSizes = [...attachmentBlobs, ...sendFileBlobs].map((blob) => blob.sizeBytes);
+
   const exported: Record<BackupTableName, SqlRow[]> = {
     ...rows,
     config: exportedConfigRows,
-    // A file Send is useless without its file, which archives do not carry yet.
-    sends: rows.sends.filter((row) => Number(row.type) !== SendType.File),
+    sends: exportedSendRows,
     attachments: exportedAttachmentRows,
   };
   const manifestBase = {
@@ -596,10 +673,12 @@ export async function buildBackupArchive(
     },
     blobSummary: {
       attachmentFiles: attachmentBlobs.length,
-      totalBytes: attachmentBlobs.reduce((sum, item) => sum + item.sizeBytes, 0),
-      largestObjectBytes: attachmentBlobs.reduce((max, item) => Math.max(max, item.sizeBytes), 0),
+      sendFiles: sendFileBlobs.length,
+      totalBytes: fileSizes.reduce((sum, size) => sum + size, 0),
+      largestObjectBytes: Math.max(0, ...fileSizes),
     },
     attachmentBlobs: includeAttachments ? attachmentBlobs : [],
+    sendFileBlobs,
   } satisfies BackupManifest;
 
   const files: Record<string, Uint8Array> = {

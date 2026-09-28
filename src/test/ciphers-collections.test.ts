@@ -343,3 +343,30 @@ test('collection changes stay within the D1 bound-parameter limit however many c
   );
   assert.deepEqual(await storedCollectionIds(env, cipherId), [collectionA]);
 });
+
+test('sync lists org items for a member assigned more collections than one D1 statement can bind', async () => {
+  const { env, owner, orgId, collectionA } = await setup();
+  const cipherId = await createCipher(env, owner, orgId, [collectionA]);
+  const now = new Date().toISOString();
+  // Binding one parameter per assigned collection, plus the org id, would exceed the cap.
+  const manyCollectionIds = Array.from({ length: D1_MAX_BOUND_PARAMETERS }, () => crypto.randomUUID());
+  for (const id of manyCollectionIds) {
+    await orgRepo.saveCollection(env.DB, {
+      id,
+      orgId,
+      name: ORG_ENCRYPTED,
+      externalId: null,
+      createdAt: now,
+      updatedAt: now,
+    });
+  }
+  const { user: member } = await seedMember(env, orgId, {
+    collections: [collectionA, ...manyCollectionIds].map((id) => access(id)),
+  });
+  const synced = await authedFetch(env, { path: '/api/sync', userId: member.id });
+  assert.equal(synced.status, 200);
+  assert.deepEqual(
+    ((await synced.json()) as { ciphers: CipherBody[] }).ciphers.map((cipher) => cipher.id),
+    [cipherId],
+  );
+});

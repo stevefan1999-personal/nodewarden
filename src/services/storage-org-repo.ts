@@ -895,24 +895,28 @@ export async function listAccessibleOrgCiphers(db: D1Database, userId: string): 
         .where(eq(ciphers.organizationId, member.orgId))
         .orderBy(desc(ciphers.updatedAt));
     } else {
+      // The allowed collections stay subqueries: binding one id each would exceed D1's parameter limit
+      // for a member assigned about a hundred collections.
       const orm = getOrm(db);
-      const direct = await orm
+      const direct = orm
         .select({ collectionId: collectionUsers.collectionId })
         .from(collectionUsers)
         .where(eq(collectionUsers.userId, userId));
-      const grouped = await orm
+      const grouped = orm
         .select({ collectionId: collectionGroups.collectionId })
         .from(collectionGroups)
         .innerJoin(orgGroupMembers, eq(orgGroupMembers.groupId, collectionGroups.groupId))
         .where(eq(orgGroupMembers.membershipId, member.id));
-      const allowed = [...new Set([...direct, ...grouped].map((row) => row.collectionId))];
-      if (!allowed.length) continue;
-
       const joined = await orm
         .select({ cipher: ciphers })
         .from(ciphers)
         .innerJoin(cipherCollections, eq(cipherCollections.cipherId, ciphers.id))
-        .where(and(eq(ciphers.organizationId, member.orgId), inArray(cipherCollections.collectionId, allowed)))
+        .where(
+          and(
+            eq(ciphers.organizationId, member.orgId),
+            or(inArray(cipherCollections.collectionId, direct), inArray(cipherCollections.collectionId, grouped)),
+          ),
+        )
         .orderBy(desc(ciphers.updatedAt));
 
       // The join repeats a cipher once per allowed collection; keep its first row.

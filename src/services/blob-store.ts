@@ -1,3 +1,4 @@
+import { withoutQueryParams } from '../db/client';
 import { Env } from '../types';
 
 const DEFAULT_CONTENT_TYPE = 'application/octet-stream';
@@ -120,5 +121,17 @@ export async function deleteBlobObject(env: Env, key: string): Promise<void> {
   if (hasKvStorage(env)) {
     await env.ATTACHMENTS_KV.delete(key);
     return;
+  }
+}
+
+// Cleanup after the rows are gone: a file left behind only costs storage, so a failed delete is logged and the
+// rest continue.
+export async function deleteBlobObjects(env: Env, keys: string[]): Promise<void> {
+  for (const key of keys) {
+    try {
+      await deleteBlobObject(env, key);
+    } catch (error) {
+      console.error('Blob cleanup failed', { key, error: withoutQueryParams(error) });
+    }
   }
 }

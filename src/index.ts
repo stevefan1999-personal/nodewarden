@@ -1,6 +1,7 @@
 import { pruneEvents } from './services/events';
 import { purgeExpiredEmailOtps } from './services/email-otp';
 import { purgeSecretsTrash } from './services/storage-secret-repo';
+import { purgeExpiredSends, purgeOldTrash } from './services/retention';
 import { syncVaultAdminRoles } from './services/vault-admin-role';
 import { Env } from './types';
 import { NotificationsHub } from './durable/notifications-hub';
@@ -114,6 +115,8 @@ export default {
       'Secrets Manager trash purge': () => purgeSecretsTrash(env.DB),
       'emergency access timeouts': () => approveExpiredEmergencyAccess(env),
       'emergency access reminders': () => remindPendingEmergencyAccess(env),
+      'expired Send purge': () => purgeExpiredSends(env),
+      'trash purge': () => purgeOldTrash(env),
     };
     const outcomes = await Promise.allSettled(Object.values(jobs).map((job) => job()));
     const failed = Object.keys(jobs).filter((name, index) => {

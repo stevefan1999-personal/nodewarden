@@ -1,7 +1,7 @@
 import { and, eq, exists, isNotNull, isNull, ne, not, notExists } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/sqlite-core';
 
-import { getOrm, userRowMatches, withoutQueryParams, type Orm } from '../db/client';
+import { getOrm, userRowMatches, type Orm } from '../db/client';
 import {
   attachments,
   ciphers,
@@ -18,7 +18,7 @@ import { AuthService } from './auth';
 import { normalizeImportedBackupSettings } from './backup-config';
 import { syncVaultAdminRoles } from './vault-admin-role';
 import { auditEventStatement, writeAuditEvent, type AuditEventInput } from './audit-events';
-import { deleteBlobObject, getAttachmentObjectKey, getSendFileObjectKey } from './blob-store';
+import { deleteBlobObjects, getAttachmentObjectKey, getSendFileObjectKey } from './blob-store';
 import { deleteCiphersByOrganization, reassignOrganizationCiphers } from './storage-cipher-repo';
 import { MembershipStatus, MembershipType } from './org-types';
 import { bumpOrgMemberRevisions, deleteOrganization } from './storage-org-repo';
@@ -160,16 +160,6 @@ async function userDeletionRefusal(
   return user.lastAdmin ? { kind: 'last-vault-admin' } : null;
 }
 
-async function deleteBlobs(env: Env, keys: string[]): Promise<void> {
-  for (const key of keys) {
-    try {
-      await deleteBlobObject(env, key);
-    } catch (error) {
-      console.error('account deletion blob cleanup failed', { key, error: withoutQueryParams(error) });
-    }
-  }
-}
-
 export async function deleteUserAccount(
   env: Env,
   userId: string,
@@ -217,7 +207,7 @@ export async function deleteUserAccount(
       console.warn('account deletion skipped malformed Send data', { sendId: send.id });
     }
   }
-  await deleteBlobs(env, keys);
+  await deleteBlobObjects(env, keys);
   AuthService.invalidateUserCache(userId);
   return { kind: 'deleted' };
 }
@@ -239,7 +229,7 @@ export async function deleteOrganizationAccount(env: Env, orgId: string, audit: 
     ),
     deleteOrganization(env.DB, orgId),
   ]);
-  await deleteBlobs(
+  await deleteBlobObjects(
     env,
     orgAttachments.map((attachment) => getAttachmentObjectKey(attachment.cipherId, attachment.id)),
   );

@@ -77,6 +77,9 @@ ALLOW_OPEN_REGISTRATION = "1"
 WEB_VAULT_ORIGINS = "https://nodewarden.stevefan1999.workers.dev"
 EMAIL_FROM = "noreply@stevefan1999.tech"
 EMAIL_FROM_NAME = "NodeWarden"
+# The BACKUPS bucket_name, for presigned archive transfers; they also need the R2_ACCOUNT_ID, R2_ACCESS_KEY_ID and
+# R2_SECRET_ACCESS_KEY secrets of an R2 API token that reads and writes it.
+BACKUPS_BUCKET_NAME = "nodewarden-backups"
 
 [[send_email]]
 name = "EMAIL"
@@ -101,7 +104,7 @@ class_name = "BackupTransferRunner"
 binding = "ATTACHMENTS"
 bucket_name = "nodewarden-attachments"
 
-# Instance backup archives.
+# Instance backup archives. Admins download and upload them through presigned URLs, never through the Worker.
 [[r2_buckets]]
 binding = "BACKUPS"
 bucket_name = "nodewarden-backups"

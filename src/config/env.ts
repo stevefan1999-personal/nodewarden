@@ -69,6 +69,12 @@ export const EnvConfig = z.object({
   SSO_CLIENT_ID: optionalText,
   SSO_CLIENT_SECRET: optionalText,
   SSO_SCOPES: z.string().min(1).catch('openid profile email'),
+  // The S3 credentials of an R2 API token that reads and writes the BACKUPS bucket, which presigned archive downloads
+  // and uploads are signed with, and the bucket_name the S3 API addresses that bucket by.
+  R2_ACCOUNT_ID: text,
+  R2_ACCESS_KEY_ID: text,
+  R2_SECRET_ACCESS_KEY: text,
+  BACKUPS_BUCKET_NAME: text,
 });
 export type EnvConfig = z.output<typeof EnvConfig>;
 

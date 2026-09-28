@@ -156,6 +156,20 @@ The web vault built by this repository creates organizations from a name, withou
 
 `npm run test:e2e` runs the API suite and the official-web signup smoke. `npm run test:e2e:official` is only the signup file. Pass `OFFICIAL_WEB_ORIGIN` when the vault is not on the `E2E_ORIGIN` origin.
 
+## Instance backups
+
+Backups are zip archives in the `nodewarden-backups` R2 bucket, which a deploy creates in both storage modes. An administrator schedules them with `PUT /api/admin/backup/settings`, runs one with `POST /api/admin/backup/run`, and lists, restores and deletes archives under `/api/admin/backup/archives`; every change asks for the master password hash. An archive carries the database and every attachment and Send file, so it restores on its own.
+
+Archives never pass through the Worker, so no request size limit applies to them. Downloads and uploads use presigned R2 URLs, which need an R2 API token with Object Read & Write on the `nodewarden-backups` bucket:
+
+```bash
+npx wrangler secret put R2_ACCOUNT_ID
+npx wrangler secret put R2_ACCESS_KEY_ID
+npx wrangler secret put R2_SECRET_ACCESS_KEY
+```
+
+`POST /api/admin/backup/archives/download` answers with a URL that downloads the archive for 15 minutes (`curl -o backup.zip "$url"`). To restore an archive from elsewhere, `POST /api/admin/backup/archives/upload` answers with a key and a URL to upload it to (`curl -T backup.zip "$url"`); then restore that key. A browser upload also needs a CORS rule on the bucket that allows `PUT` from the vault origin.
+
 ---
 
 

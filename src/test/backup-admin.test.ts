@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import test from 'node:test';
 
 import { getOrm } from '../db/client';
@@ -11,6 +13,13 @@ import { authedFetch, createTestEnv, memoryR2, seedUser } from './support/env';
 const PASSWORD = 'client-derived-password-hash';
 // 03:01 UTC on a day the default 03:00 UTC slot is due.
 const DUE = new Date('2026-09-29T03:01:00Z');
+// The settings of an R2 API token for the BACKUPS bucket, which presigned URLs are signed with.
+const TRANSFER_SETTINGS = {
+  R2_ACCOUNT_ID: 'account-id',
+  R2_ACCESS_KEY_ID: 'key-id',
+  R2_SECRET_ACCESS_KEY: 'secret-key',
+  BACKUPS_BUCKET_NAME: 'nodewarden-backups',
+};
 
 // An instance whose administrator knows PASSWORD, with calls made as that administrator.
 async function adminInstance(overrides: Partial<Env> = {}) {
@@ -37,6 +46,7 @@ test('backup settings start from the defaults, merge a partial save and name eac
       lastArchiveBytes: null,
     },
     storageConfigured: true,
+    transfersConfigured: false,
   });
 
   for (const [body, message] of [
@@ -172,4 +182,73 @@ test('the scheduled runner backs up once for a due slot', async (t) => {
   t.mock.timers.tick(60_000);
   await runner.runScheduledBackups();
   assert.equal(bucket.objects.size, 1);
+});
+
+test('archive transfers are refused until the R2 S3 credentials are set', async () => {
+  const { call } = await adminInstance();
+  for (const path of ['/api/admin/backup/archives/download', '/api/admin/backup/archives/upload']) {
+    const refused = await call('POST', path, { key: 'uploads/a.zip', masterPasswordHash: PASSWORD });
+    assert.equal(refused.status, 409, path);
+    assert.equal(
+      ((await refused.json()) as { message: string }).message,
+      'Presigned backup transfers need R2 S3 credentials',
+    );
+  }
+});
+
+test('an archive downloads and uploads through presigned R2 URLs that expire in 15 minutes', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: DUE });
+  const bucket = memoryR2();
+  const { call } = await adminInstance({ BACKUPS: bucket.binding, ...TRANSFER_SETTINGS });
+  const key = 'nodewarden_backup_20260929_030000_abcde.zip';
+  await bucket.binding.put(key, 'archive');
+  const signing = {
+    'X-Amz-Expires': '900',
+    'X-Amz-Date': '20260929T030100Z',
+    'X-Amz-Algorithm': 'AWS4-HMAC-SHA256',
+    'X-Amz-Credential': 'key-id/20260929/auto/s3/aws4_request',
+    'X-Amz-SignedHeaders': 'host',
+  };
+  type Transfer = { method: string; key: string; url: string; expiresAt: string };
+  const unsigned = (url: URL) =>
+    Object.fromEntries([...url.searchParams].filter(([name]) => name !== 'X-Amz-Signature'));
+
+  const missing = await call('POST', '/api/admin/backup/archives/download', {
+    key: 'uploads/absent.zip',
+    masterPasswordHash: PASSWORD,
+  });
+  assert.equal(missing.status, 404);
+
+  const download = (await (
+    await call('POST', '/api/admin/backup/archives/download', { key, masterPasswordHash: PASSWORD })
+  ).json()) as Transfer;
+  const downloadUrl = new URL(download.url);
+  assert.deepEqual([download.method, download.key, download.expiresAt], ['GET', key, '2026-09-29T03:16:00.000Z']);
+  assert.equal(
+    downloadUrl.origin + downloadUrl.pathname,
+    `https://account-id.r2.cloudflarestorage.com/nodewarden-backups/${key}`,
+  );
+  assert.deepEqual(unsigned(downloadUrl), {
+    ...signing,
+    'response-content-disposition': `attachment; filename="${key}"`,
+  });
+  assert.match(downloadUrl.searchParams.get('X-Amz-Signature')!, /^[0-9a-f]{64}$/);
+
+  const upload = (await (
+    await call('POST', '/api/admin/backup/archives/upload', { masterPasswordHash: PASSWORD })
+  ).json()) as Transfer;
+  const uploadUrl = new URL(upload.url);
+  assert.equal(upload.method, 'PUT');
+  assert.match(upload.key, /^uploads\/[0-9a-f-]{36}\.zip$/);
+  assert.equal(uploadUrl.pathname, `/nodewarden-backups/${upload.key}`);
+  assert.deepEqual(unsigned(uploadUrl), signing);
+});
+
+test('each wrangler config names the BACKUPS bucket that presigned URLs address', () => {
+  for (const file of ['wrangler.toml', 'wrangler.kv.toml']) {
+    const toml = readFileSync(resolve(import.meta.dirname, '../..', file), 'utf8');
+    const bucket = /\[\[r2_buckets\]\]\s*binding = "BACKUPS"\s*bucket_name = "([^"]+)"/.exec(toml)?.[1];
+    assert.ok(bucket, file);
+    assert.equal(/^BACKUPS_BUCKET_NAME = "([^"]+)"/m.exec(toml)?.[1], bucket, file);
+  }
 });

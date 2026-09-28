@@ -38,6 +38,10 @@ export interface Env {
   SSO_CLIENT_ID?: string;
   SSO_CLIENT_SECRET?: string;
   SSO_SCOPES?: string;
+  R2_ACCOUNT_ID?: string;
+  R2_ACCESS_KEY_ID?: string;
+  R2_SECRET_ACCESS_KEY?: string;
+  BACKUPS_BUCKET_NAME?: string;
   SSO_SIGNUPS?: string;
   SSO_ONLY?: string;
   R2_JURISDICTION?: string;

@@ -8,6 +8,7 @@ import {
   saveBackupSchedule,
 } from '../services/backup-config';
 import { deleteBackupArchive, isBackupArchiveKey, listBackupArchives } from '../services/backup-runs';
+import { backupTransfersConfigured, presignBackupTransfer } from '../services/backup-transfers';
 import { AuthService } from '../services/auth';
 import { auditRequestMetadata, writeAuditEvent } from '../services/audit-events';
 
@@ -72,6 +73,7 @@ async function backupSettingsResponse(env: Env): Promise<Response> {
     schedule: await loadBackupSchedule(env.DB),
     status: await loadBackupStatus(env.DB),
     storageConfigured: !!env.BACKUPS,
+    transfersConfigured: backupTransfersConfigured(env),
   });
 }
 
@@ -200,4 +202,46 @@ export async function handleDeleteAdminBackupArchive(request: Request, env: Env,
   await deleteBackupArchive(env, key);
   await writeAuditLog(env.DB, actorUser.id, 'admin.backup.archive.delete', key, {}, request);
   return jsonResponse({ object: 'backup-archive-delete', deleted: true, key });
+}
+
+// Archives move in and out only through presigned URLs, straight between the administrator and the bucket.
+export async function handleDownloadAdminBackupArchive(request: Request, env: Env, actorUser: User): Promise<Response> {
+  if (!isAdmin(actorUser)) return errorResponse('Forbidden', 403);
+
+  const body = await parseBackupBody(request, archiveShape, 'Backup archive download payload is invalid');
+  if (body instanceof Response) return body;
+
+  const verificationError = await requireBackupUserVerification(actorUser, body.masterPasswordHash, env);
+  if (verificationError) return verificationError;
+  const key = (body.key ?? '').trim();
+  if (!isBackupArchiveKey(key)) return errorResponse('Backup archive key is invalid', 400);
+  if (!env.BACKUPS) return errorResponse('Backup storage is not configured', 409);
+  if (!backupTransfersConfigured(env)) return errorResponse('Presigned backup transfers need R2 S3 credentials', 409);
+  if (!(await env.BACKUPS.head(key))) return errorResponse('Backup archive not found', 404);
+
+  const transfer = await presignBackupTransfer(env, 'GET', key);
+  await writeAuditLog(env.DB, actorUser.id, 'admin.backup.archive.download', key, {}, request);
+  return jsonResponse({ object: 'backup-transfer', method: 'GET', key, ...transfer });
+}
+
+// A fresh key under uploads/, which a restore then names.
+export async function handleUploadAdminBackupArchive(request: Request, env: Env, actorUser: User): Promise<Response> {
+  if (!isAdmin(actorUser)) return errorResponse('Forbidden', 403);
+
+  const body = await parseBackupBody(
+    request,
+    { masterPasswordHash: optionalString },
+    'Backup archive upload payload is invalid',
+  );
+  if (body instanceof Response) return body;
+
+  const verificationError = await requireBackupUserVerification(actorUser, body.masterPasswordHash, env);
+  if (verificationError) return verificationError;
+  if (!env.BACKUPS) return errorResponse('Backup storage is not configured', 409);
+  if (!backupTransfersConfigured(env)) return errorResponse('Presigned backup transfers need R2 S3 credentials', 409);
+
+  const key = `uploads/${crypto.randomUUID()}.zip`;
+  const transfer = await presignBackupTransfer(env, 'PUT', key);
+  await writeAuditLog(env.DB, actorUser.id, 'admin.backup.archive.upload', key, {}, request);
+  return jsonResponse({ object: 'backup-transfer', method: 'PUT', key, ...transfer });
 }

@@ -78,10 +78,11 @@ const BACKUP_FILE_HASH_PREFIX_LENGTH = 5;
 // Prefer store-only ZIP entries over heavier compression to keep exports reliable.
 const BACKUP_TEXT_COMPRESSION_LEVEL = 0;
 const BACKUP_JSON_INDENT = 2;
-export const MAX_BACKUP_ARCHIVE_BYTES = 64 * 1024 * 1024;
+const BYTES_PER_MIB = 1024 * 1024;
+export const MAX_BACKUP_ARCHIVE_BYTES = 64 * BYTES_PER_MIB;
 const MAX_BACKUP_ARCHIVE_ENTRY_COUNT = 10_000;
-const MAX_BACKUP_EXTRACTED_BYTES = 64 * 1024 * 1024;
-const MAX_BACKUP_DB_JSON_BYTES = 32 * 1024 * 1024;
+const MAX_BACKUP_EXTRACTED_BYTES = 64 * BYTES_PER_MIB;
+const MAX_BACKUP_DB_JSON_BYTES = 32 * BYTES_PER_MIB;
 const MAX_BACKUP_PATH_SEGMENT_LENGTH = 128;
 
 export interface BackupManifest {
@@ -361,7 +362,7 @@ export function parseBackupArchive(
 ): { payload: BackupPayload; files: Record<string, Uint8Array> } {
   if (bytes.byteLength > MAX_BACKUP_ARCHIVE_BYTES) {
     throw new Error(
-      `Backup archive is too large. The current restore limit is ${Math.floor(MAX_BACKUP_ARCHIVE_BYTES / (1024 * 1024))} MiB`,
+      `Backup archive is too large. The current restore limit is ${MAX_BACKUP_ARCHIVE_BYTES / BYTES_PER_MIB} MiB`,
     );
   }
   // The filter vets each entry's name and declared size before fflate inflates it; the loop below
@@ -681,9 +682,16 @@ export async function buildBackupArchive(
     sendFileBlobs,
   } satisfies BackupManifest;
 
+  const dbJson = encoder.encode(JSON.stringify(exported, null, BACKUP_JSON_INDENT));
+  // Restore refuses a larger payload, so such an archive could never come back.
+  if (dbJson.byteLength > MAX_BACKUP_DB_JSON_BYTES) {
+    throw new Error(
+      `Backup database payload is ${Math.round(dbJson.byteLength / BYTES_PER_MIB)} MiB; restore accepts at most ${MAX_BACKUP_DB_JSON_BYTES / BYTES_PER_MIB} MiB`,
+    );
+  }
   const files: Record<string, Uint8Array> = {
     'manifest.json': encoder.encode(JSON.stringify(manifestBase, null, BACKUP_JSON_INDENT)),
-    'db.json': encoder.encode(JSON.stringify(exported, null, BACKUP_JSON_INDENT)),
+    'db.json': dbJson,
   };
 
   await options.progress?.({

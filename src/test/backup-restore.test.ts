@@ -415,3 +415,14 @@ test('file Sends travel with their files the way attachments do', async () => {
   ]);
   assert.deepEqual(await getOrm(noStorage.DB).select({ id: sends.id }).from(sends), [{ id: 'text-send' }]);
 });
+
+test('backup export refuses an archive whose database payload restore would reject', async () => {
+  const source = await createTestEnv();
+  await seedUser(source);
+  await getOrm(source.DB)
+    .insert(config)
+    .values({ key: 'oversized', value: 'x'.repeat(33 * 1024 * 1024) });
+  await assert.rejects(buildBackupArchive(source, new Date(), { includeAttachments: false }), {
+    message: 'Backup database payload is 33 MiB; restore accepts at most 32 MiB',
+  });
+});

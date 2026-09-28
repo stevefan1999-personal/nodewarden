@@ -466,27 +466,29 @@ export async function buildBackupArchive(
   });
   const encoder = new TextEncoder();
   const orm = getOrm(env.DB);
-  const rows = Object.fromEntries(
-    await Promise.all(
-      BACKUP_TABLE_NAMES.map(async (name) => {
-        // Rows keep database column names and raw stored values: every column is selected through
-        // unmapped(), so no drizzle value mapping runs. Rows follow the primary key, so repeated exports
-        // list them in the same order.
-        const { table } = BACKUP_TABLES[name];
-        const { primaryKeys, columns } = getTableConfig(table);
-        const primaryKey = primaryKeys[0]?.columns ?? columns.filter((column) => column.primary);
-        const selected = await orm
-          .select(
-            Object.fromEntries(
-              backupColumns(name).map(([, column]) => [column.name, unmapped<string | number | null>(column)]),
-            ),
-          )
-          .from(table)
-          .orderBy(...primaryKey.map((column) => asc(column)));
-        return [name, selected];
-      }),
-    ),
-  ) as Record<BackupTableName, SqlRow[]>;
+  const selects = BACKUP_TABLE_NAMES.map((name) => {
+    // Rows keep database column names and raw stored values: every column is selected through unmapped(),
+    // so no drizzle value mapping runs. Rows follow the primary key, so repeated exports list them in the
+    // same order.
+    const { table } = BACKUP_TABLES[name];
+    const { primaryKeys, columns } = getTableConfig(table);
+    const primaryKey = primaryKeys[0]?.columns ?? columns.filter((column) => column.primary);
+    return orm
+      .select(
+        Object.fromEntries(
+          backupColumns(name).map(([, column]) => [column.name, unmapped<string | number | null>(column)]),
+        ),
+      )
+      .from(table)
+      .orderBy(...primaryKey.map((column) => asc(column)));
+  });
+  // One batch reads every table inside a single D1 transaction. Separate reads would let a write land
+  // between them and export a row whose parent the archive lacks, which restore then rejects.
+  const results = await orm.batch(selects as [(typeof selects)[0], ...typeof selects]);
+  const rows = Object.fromEntries(BACKUP_TABLE_NAMES.map((name, index) => [name, results[index]])) as Record<
+    BackupTableName,
+    SqlRow[]
+  >;
   // Runner locks and the Yubico bootstrap claim stay with this instance; backup settings leave only as
   // their portable envelope.
   const exportedConfigRows = rows.config.flatMap((row): SqlRow[] => {

@@ -18,7 +18,7 @@ import {
 import { unmapped } from '../db/sql';
 import { buildBackupArchive } from '../services/backup-archive';
 import { importBackupArchiveBytes } from '../services/backup-import';
-import { createTestEnv, memoryKv, seedUser } from './support/env';
+import { createTestEnv, interceptStatement, memoryKv, seedUser } from './support/env';
 
 type Row = Record<string, unknown>;
 
@@ -233,4 +233,28 @@ test('backup restore writes tables with more rows than one D1 statement can bind
     (await getOrm(restored.DB).select({ id: users.id }).from(users)).map((row) => row.id).toSorted(),
     seeded.map((user) => user.id).toSorted(),
   );
+});
+
+test('backup export reads every table in one snapshot, so a concurrent write cannot split parent from child', async () => {
+  const source = await createTestEnv();
+  const owner = await seedUser(source);
+  const orm = getOrm(source.DB);
+  // Lands between the folder and cipher reads if they run separately, exporting a cipher whose folder the
+  // archive lacks, which restore then rejects.
+  interceptStatement(source, /^select .* from "ciphers" order by/, async () => {
+    await orm
+      .insert(folders)
+      .values({ id: 'late-folder', userId: owner.id, name: 'enc', createdAt: 'c', updatedAt: 'u' });
+    await orm.insert(ciphers).values({
+      id: 'late-cipher',
+      userId: owner.id,
+      type: 1,
+      folderId: 'late-folder',
+      data: '{}',
+      createdAt: 'c',
+      updatedAt: 'u',
+    });
+  });
+  const archive = await buildBackupArchive(source, new Date(), { includeAttachments: false });
+  await importBackupArchiveBytes(archive.bytes, await createTestEnv(), owner.id, false);
 });

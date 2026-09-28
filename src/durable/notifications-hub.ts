@@ -424,251 +424,44 @@ export function notifyUserCiphersSync(env: Env, userId: string, revisionDate: st
   waitUntil(notifyUserUpdate(env, userId, SIGNALR_UPDATE_TYPE_SYNC_CIPHERS, revisionDate, contextId ?? null, null));
 }
 
-export function notifyUserCipherCreate(
-  env: Env,
-  payload: {
-    userId: string;
-    cipherId: string;
-    revisionDate: string;
-    organizationId?: string | null;
-    collectionIds?: string[] | null;
-    contextId?: string | null;
-  },
-): void {
-  waitUntil(
-    notifyUserUpdate(
-      env,
-      payload.userId,
-      SIGNALR_UPDATE_TYPE_SYNC_CIPHER_CREATE,
-      payload.revisionDate,
-      payload.contextId ?? null,
-      null,
-      {
-        UserId: payload.userId,
-        Id: payload.cipherId,
-        OrganizationId: payload.organizationId ?? null,
-        CollectionIds: Array.isArray(payload.collectionIds) ? payload.collectionIds : null,
-        RevisionDate: payload.revisionDate,
-      },
-    ),
-  );
+// Cipher, folder and Send changes notify { UserId, Id, ..., RevisionDate } under their own update types, and cipher
+// changes also carry the organization and collections.
+interface ItemChange {
+  userId: string;
+  revisionDate: string;
+  contextId?: string | null;
 }
 
-export function notifyUserCipherUpdate(
-  env: Env,
-  payload: {
-    userId: string;
-    cipherId: string;
-    revisionDate: string;
-    organizationId?: string | null;
-    collectionIds?: string[] | null;
-    contextId?: string | null;
-  },
-): void {
-  waitUntil(
-    notifyUserUpdate(
-      env,
-      payload.userId,
-      SIGNALR_UPDATE_TYPE_SYNC_CIPHER_UPDATE,
-      payload.revisionDate,
-      payload.contextId ?? null,
-      null,
-      {
-        UserId: payload.userId,
-        Id: payload.cipherId,
-        OrganizationId: payload.organizationId ?? null,
-        CollectionIds: Array.isArray(payload.collectionIds) ? payload.collectionIds : null,
-        RevisionDate: payload.revisionDate,
-      },
-    ),
-  );
-}
+const notifyChange =
+  <Change extends ItemChange>(updateType: number, fields: (change: Change) => Record<string, unknown>) =>
+  (env: Env, change: Change): void =>
+    waitUntil(
+      notifyUserUpdate(env, change.userId, updateType, change.revisionDate, change.contextId ?? null, null, {
+        UserId: change.userId,
+        ...fields(change),
+        RevisionDate: change.revisionDate,
+      }),
+    );
 
-export function notifyUserCipherDelete(
-  env: Env,
-  payload: {
-    userId: string;
-    cipherId: string;
-    revisionDate: string;
-    organizationId?: string | null;
-    collectionIds?: string[] | null;
-    contextId?: string | null;
-  },
-): void {
-  waitUntil(
-    notifyUserUpdate(
-      env,
-      payload.userId,
-      SIGNALR_UPDATE_TYPE_SYNC_CIPHER_DELETE,
-      payload.revisionDate,
-      payload.contextId ?? null,
-      null,
-      {
-        UserId: payload.userId,
-        Id: payload.cipherId,
-        OrganizationId: payload.organizationId ?? null,
-        CollectionIds: Array.isArray(payload.collectionIds) ? payload.collectionIds : null,
-        RevisionDate: payload.revisionDate,
-      },
-    ),
-  );
-}
+const cipherFields = (
+  change: ItemChange & { cipherId: string; organizationId?: string | null; collectionIds?: string[] | null },
+) => ({
+  Id: change.cipherId,
+  OrganizationId: change.organizationId ?? null,
+  CollectionIds: Array.isArray(change.collectionIds) ? change.collectionIds : null,
+});
+const folderFields = (change: ItemChange & { folderId: string }) => ({ Id: change.folderId });
+const sendFields = (change: ItemChange & { sendId: string }) => ({ Id: change.sendId });
 
-export function notifyUserFolderCreate(
-  env: Env,
-  payload: {
-    userId: string;
-    folderId: string;
-    revisionDate: string;
-    contextId?: string | null;
-  },
-): void {
-  waitUntil(
-    notifyUserUpdate(
-      env,
-      payload.userId,
-      SIGNALR_UPDATE_TYPE_SYNC_FOLDER_CREATE,
-      payload.revisionDate,
-      payload.contextId ?? null,
-      null,
-      {
-        UserId: payload.userId,
-        Id: payload.folderId,
-        RevisionDate: payload.revisionDate,
-      },
-    ),
-  );
-}
-
-export function notifyUserFolderUpdate(
-  env: Env,
-  payload: {
-    userId: string;
-    folderId: string;
-    revisionDate: string;
-    contextId?: string | null;
-  },
-): void {
-  waitUntil(
-    notifyUserUpdate(
-      env,
-      payload.userId,
-      SIGNALR_UPDATE_TYPE_SYNC_FOLDER_UPDATE,
-      payload.revisionDate,
-      payload.contextId ?? null,
-      null,
-      {
-        UserId: payload.userId,
-        Id: payload.folderId,
-        RevisionDate: payload.revisionDate,
-      },
-    ),
-  );
-}
-
-export function notifyUserFolderDelete(
-  env: Env,
-  payload: {
-    userId: string;
-    folderId: string;
-    revisionDate: string;
-    contextId?: string | null;
-  },
-): void {
-  waitUntil(
-    notifyUserUpdate(
-      env,
-      payload.userId,
-      SIGNALR_UPDATE_TYPE_SYNC_FOLDER_DELETE,
-      payload.revisionDate,
-      payload.contextId ?? null,
-      null,
-      {
-        UserId: payload.userId,
-        Id: payload.folderId,
-        RevisionDate: payload.revisionDate,
-      },
-    ),
-  );
-}
-
-export function notifyUserSendCreate(
-  env: Env,
-  payload: {
-    userId: string;
-    sendId: string;
-    revisionDate: string;
-    contextId?: string | null;
-  },
-): void {
-  waitUntil(
-    notifyUserUpdate(
-      env,
-      payload.userId,
-      SIGNALR_UPDATE_TYPE_SYNC_SEND_CREATE,
-      payload.revisionDate,
-      payload.contextId ?? null,
-      null,
-      {
-        UserId: payload.userId,
-        Id: payload.sendId,
-        RevisionDate: payload.revisionDate,
-      },
-    ),
-  );
-}
-
-export function notifyUserSendUpdate(
-  env: Env,
-  payload: {
-    userId: string;
-    sendId: string;
-    revisionDate: string;
-    contextId?: string | null;
-  },
-): void {
-  waitUntil(
-    notifyUserUpdate(
-      env,
-      payload.userId,
-      SIGNALR_UPDATE_TYPE_SYNC_SEND_UPDATE,
-      payload.revisionDate,
-      payload.contextId ?? null,
-      null,
-      {
-        UserId: payload.userId,
-        Id: payload.sendId,
-        RevisionDate: payload.revisionDate,
-      },
-    ),
-  );
-}
-
-export function notifyUserSendDelete(
-  env: Env,
-  payload: {
-    userId: string;
-    sendId: string;
-    revisionDate: string;
-    contextId?: string | null;
-  },
-): void {
-  waitUntil(
-    notifyUserUpdate(
-      env,
-      payload.userId,
-      SIGNALR_UPDATE_TYPE_SYNC_SEND_DELETE,
-      payload.revisionDate,
-      payload.contextId ?? null,
-      null,
-      {
-        UserId: payload.userId,
-        Id: payload.sendId,
-        RevisionDate: payload.revisionDate,
-      },
-    ),
-  );
-}
+export const notifyUserCipherCreate = notifyChange(SIGNALR_UPDATE_TYPE_SYNC_CIPHER_CREATE, cipherFields);
+export const notifyUserCipherUpdate = notifyChange(SIGNALR_UPDATE_TYPE_SYNC_CIPHER_UPDATE, cipherFields);
+export const notifyUserCipherDelete = notifyChange(SIGNALR_UPDATE_TYPE_SYNC_CIPHER_DELETE, cipherFields);
+export const notifyUserFolderCreate = notifyChange(SIGNALR_UPDATE_TYPE_SYNC_FOLDER_CREATE, folderFields);
+export const notifyUserFolderUpdate = notifyChange(SIGNALR_UPDATE_TYPE_SYNC_FOLDER_UPDATE, folderFields);
+export const notifyUserFolderDelete = notifyChange(SIGNALR_UPDATE_TYPE_SYNC_FOLDER_DELETE, folderFields);
+export const notifyUserSendCreate = notifyChange(SIGNALR_UPDATE_TYPE_SYNC_SEND_CREATE, sendFields);
+export const notifyUserSendUpdate = notifyChange(SIGNALR_UPDATE_TYPE_SYNC_SEND_UPDATE, sendFields);
+export const notifyUserSendDelete = notifyChange(SIGNALR_UPDATE_TYPE_SYNC_SEND_DELETE, sendFields);
 
 export function notifyUserLogout(env: Env, userId: string, targetDeviceIdentifier?: string | null): void {
   waitUntil(

@@ -11,6 +11,7 @@ import { deleteBackupArchive, isBackupArchiveKey, listBackupArchives } from '../
 import { backupTransfersConfigured, presignBackupTransfer } from '../services/backup-transfers';
 import { AuthService } from '../services/auth';
 import { auditRequestMetadata, writeAuditEvent } from '../services/audit-events';
+import { withoutQueryParams } from '../db/client';
 
 function isAdmin(user: User): boolean {
   return user.role === 'admin' && user.status === 'active';
@@ -172,7 +173,9 @@ export async function handleRestoreAdminBackupArchive(request: Request, env: Env
     if (!imported) return errorResponse('Another backup or restore run is already in progress', 409);
     return jsonResponse(imported);
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Backup restore failed';
+    // A failed statement's message ends with the values it bound, which stay out of the response.
+    const scrubbed = withoutQueryParams(error);
+    const message = scrubbed instanceof Error ? scrubbed.message : 'Backup restore failed';
     // What is wrong with the archive is the caller's to fix; an instance that is not fresh or has no storage
     // conflicts with the restore.
     const status =

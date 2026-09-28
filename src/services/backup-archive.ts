@@ -443,7 +443,6 @@ export async function writeBackupArchive(
     }),
     attachments: includeAttachments ? rows.attachments : [],
     sends: includeAttachments ? rows.sends : rows.sends.filter((row) => Number(row.type) !== SendType.File),
-    events: [],
   };
   const organizationIds = new Set(exported.organizations.map((row) => String(row.id)));
 
@@ -487,13 +486,18 @@ export async function writeBackupArchive(
           `Backup table ${name} holds a row of ${Math.round(json.length / BYTES_PER_MIB)} MiB; restore accepts at most ${MAX_DB_ENTRY_BYTES / BYTES_PER_MIB} MiB`,
         );
       if (sliceBytes && sliceBytes + json.length > DB_SLICE_TARGET_BYTES) await flushSlice();
-      slice.set(name, [...(slice.get(name) ?? []), json]);
+      // Appended in place: a slice holds thousands of rows, and copying the list per row would be quadratic.
+      const tableRows = slice.get(name);
+      if (tableRows) tableRows.push(json);
+      else slice.set(name, [json]);
       sliceBytes += json.length;
     }
   };
 
   try {
     for (const name of snapshotTables) await addRows(name, exported[name]);
+    // Events are only counted as their pages go by; none stays in memory past its page.
+    let eventRows = 0;
     for (let after: string | null = ''; after !== null;) {
       const page: SqlRow[] = await orm
         .select(columnsOf('events'))
@@ -504,7 +508,7 @@ export async function writeBackupArchive(
       const kept = page.filter(
         (row) => row.organization_id === null || organizationIds.has(String(row.organization_id)),
       );
-      exported.events.push(...kept);
+      eventRows += kept.length;
       await addRows('events', kept);
       after = page.length === EVENT_PAGE_ROWS ? String(page.at(-1)!.id) : null;
     }
@@ -533,7 +537,9 @@ export async function writeBackupArchive(
       exportedAt: date.toISOString(),
       appVersion: APP_VERSION,
       storageKind: getBlobStorageKind(env),
-      tableCounts: Object.fromEntries(BACKUP_TABLE_NAMES.map((name) => [name, exported[name].length])),
+      tableCounts: Object.fromEntries(
+        BACKUP_TABLE_NAMES.map((name) => [name, name === 'events' ? eventRows : exported[name].length]),
+      ),
       includes: { attachments: includeAttachments },
       blobSummary: {
         attachmentFiles: files.filter((file) => file.table === 'attachments').length,

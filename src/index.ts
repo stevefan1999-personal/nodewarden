@@ -101,31 +101,28 @@ export default {
     return applySecurityHeaders(normalizedRequest, await app.fetch(normalizedRequest, env, ctx));
   },
 
-  async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+  async scheduled(controller: ScheduledController, env: Env): Promise<void> {
     void controller;
     await ensureDatabaseInitialized(env);
-    if (dbInitError) {
-      console.error('Skipping scheduled backup because DB init failed:', dbInitError);
-      return;
-    }
-    ctx.waitUntil(
-      Promise.all([
-        pruneEvents(env).catch(() => console.error('Event cleanup failed')),
-        purgeExpiredEmailOtps(env).catch(() => console.error('Email code cleanup failed')),
-        runScheduledBackupIfDue(env).catch((error) => {
-          console.error('Scheduled backup failed:', withoutQueryParams(error));
-        }),
-        purgeSecretsTrash(env.DB).catch((error) => {
-          console.error('Secrets Manager trash purge failed:', withoutQueryParams(error));
-        }),
-        approveExpiredEmergencyAccess(env).catch((error) => {
-          console.error('Emergency access timeout job failed:', withoutQueryParams(error));
-        }),
-        remindPendingEmergencyAccess(env).catch((error) => {
-          console.error('Emergency access reminder job failed:', withoutQueryParams(error));
-        }),
-      ]),
-    );
+    if (dbInitError) throw new Error(`Scheduled jobs skipped: database initialization failed: ${dbInitError}`);
+    // Every job runs even when another fails. Each failure is logged, then fails the invocation, so it shows
+    // in the Worker's cron history instead of reading as success.
+    const jobs = {
+      'event cleanup': () => pruneEvents(env),
+      'email code cleanup': () => purgeExpiredEmailOtps(env),
+      'scheduled backup': () => runScheduledBackupIfDue(env),
+      'Secrets Manager trash purge': () => purgeSecretsTrash(env.DB),
+      'emergency access timeouts': () => approveExpiredEmergencyAccess(env),
+      'emergency access reminders': () => remindPendingEmergencyAccess(env),
+    };
+    const outcomes = await Promise.allSettled(Object.values(jobs).map((job) => job()));
+    const failed = Object.keys(jobs).filter((name, index) => {
+      const outcome = outcomes[index];
+      if (outcome.status === 'rejected')
+        console.error(`Scheduled job failed: ${name}`, withoutQueryParams(outcome.reason));
+      return outcome.status === 'rejected';
+    });
+    if (failed.length) throw new Error(`Scheduled jobs failed: ${failed.join(', ')}`);
   },
 
   async queue(batch: MessageBatch<PlatformEvent>, env: Env): Promise<void> {

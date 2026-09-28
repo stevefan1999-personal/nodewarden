@@ -92,7 +92,7 @@ for (const { parent, id, cascaded } of CASCADES) {
     // policy table, plus the secret's project link, the machine account's project grant and a token.
     const env = await createTestEnv();
     const owner = await seedUser(env);
-    const { id: orgId } = await createOwnedOrganization(env, owner, { name: 'Acme', key: TEST_ORG_KEY });
+    const { id: orgId } = await createOwnedOrganization(env.DB, owner, { name: 'Acme', key: TEST_ORG_KEY });
     const membership = await orgRepo.getMembershipByUserAndOrg(env.DB, owner.id, orgId);
     assert.ok(membership);
     const [groupId, projectId, secretId, serviceAccountId] = Array.from({ length: 4 }, () => crypto.randomUUID());

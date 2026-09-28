@@ -159,7 +159,7 @@ export async function handleEventRoute(
   }
   if (path === '/api/events')
     return method === 'GET'
-      ? listEventsResponse(request, env, { personalUserId: user.id })
+      ? listEventsResponse(request, env.DB, { personalUserId: user.id })
       : errorResponse('Method not allowed', 405);
   const cipherPath = path.match(/^\/api\/ciphers\/([a-f0-9-]+)\/events$/i);
   if (cipherPath) {
@@ -169,14 +169,14 @@ export async function handleEventRoute(
     if (cipher.organizationId) {
       if (!canAccessEventLogs(await orgRepo.getMembershipByUserAndOrg(env.DB, user.id, cipher.organizationId)))
         return errorResponse('Not found', 404);
-      return listEventsResponse(request, env, {
+      return listEventsResponse(request, env.DB, {
         organizationId: cipher.organizationId,
         resourceType: 'cipher',
         resourceId: cipher.id,
       });
     }
     return cipher.userId === user.id
-      ? listEventsResponse(request, env, { personalUserId: user.id, resourceType: 'cipher', resourceId: cipher.id })
+      ? listEventsResponse(request, env.DB, { personalUserId: user.id, resourceType: 'cipher', resourceId: cipher.id })
       : errorResponse('Not found', 404);
   }
   const orgPath = path.match(/^\/api\/organizations\/([a-f0-9-]+)(?:\/(users|sends)\/([a-f0-9-]+))?\/events$/i);
@@ -188,10 +188,10 @@ export async function handleEventRoute(
   if (orgPath[2] === 'users') {
     const member = await orgRepo.getMembership(env.DB, orgPath[3]);
     if (!member?.userId || member.orgId !== orgId) return errorResponse('Not found', 404);
-    return listEventsResponse(request, env, { organizationId: orgId, actingUserId: member.userId });
+    return listEventsResponse(request, env.DB, { organizationId: orgId, actingUserId: member.userId });
   }
   // As upstream GetSend: the rows are already scoped to this organization, so a deleted Send keeps its history.
   if (orgPath[2] === 'sends')
-    return listEventsResponse(request, env, { organizationId: orgId, resourceType: 'send', resourceId: orgPath[3] });
-  return listEventsResponse(request, env, { organizationId: orgId });
+    return listEventsResponse(request, env.DB, { organizationId: orgId, resourceType: 'send', resourceId: orgPath[3] });
+  return listEventsResponse(request, env.DB, { organizationId: orgId });
 }

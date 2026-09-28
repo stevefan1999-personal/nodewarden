@@ -112,7 +112,7 @@ test('unknown, banned, expired, foreign and revoked deletion tokens have identic
 
 test('sole Owners and the last administrator remain protected, and the sixth request is rate-limited', async () => {
   const f = await setup();
-  await createOwnedOrganization(f.env, f.active, { name: 'Sole Owner', key: '4.dGVzdA==' });
+  await createOwnedOrganization(f.env.DB, f.active, { name: 'Sole Owner', key: '4.dGVzdA==' });
   const owner = await authedFetch(f.env, {
     method: 'POST',
     path: tokenPath,

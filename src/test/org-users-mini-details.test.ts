@@ -38,7 +38,7 @@ async function assertOrganizationNotFound(response: Response): Promise<void> {
 test('mini-details lists every member, invited and revoked ones included, with exactly the upstream keys', async () => {
   const env = await createTestEnv();
   const owner = await seedUser(env);
-  const orgId = (await createOwnedOrganization(env, owner, { name: 'Acme', key: MEMBER_KEY })).id;
+  const orgId = (await createOwnedOrganization(env.DB, owner, { name: 'Acme', key: MEMBER_KEY })).id;
   const invitedEmail = 'invitee@example.test';
   const invited = await authedFetch(env, {
     method: 'POST',
@@ -80,7 +80,7 @@ test('mini-details lists every member, invited and revoked ones included, with e
 test('mini-details is served to any confirmed member but not to outsiders or unconfirmed members', async () => {
   const env = await createTestEnv();
   const owner = await seedUser(env);
-  const orgId = (await createOwnedOrganization(env, owner, { name: 'Acme', key: MEMBER_KEY })).id;
+  const orgId = (await createOwnedOrganization(env.DB, owner, { name: 'Acme', key: MEMBER_KEY })).id;
   const { user: plainMember } = await seedMember(env, orgId);
   const { user: accepted } = await seedMember(env, orgId, { status: MembershipStatus.Accepted });
   const outsider = await seedUser(env);

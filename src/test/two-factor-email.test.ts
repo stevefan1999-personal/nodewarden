@@ -129,7 +129,7 @@ test('setup codes bind the address, enable Email consistently, survive stale sav
   );
   const profile = await authedFetch(env, { path: '/api/accounts/profile', userId: user.id });
   assert.equal(((await profile.json()) as { twoFactorEnabled: boolean }).twoFactorEnabled, true);
-  const org = await createOwnedOrganization(env, updated, { name: 'Email factor', key: '4.dGVzdA==' });
+  const org = await createOwnedOrganization(env.DB, updated, { name: 'Email factor', key: '4.dGVzdA==' });
   const members = await authedFetch(env, { path: `/api/organizations/${org.id}/users`, userId: user.id });
   assert.equal(((await members.json()) as { data: { twoFactorEnabled: boolean }[] }).data[0].twoFactorEnabled, true);
 });

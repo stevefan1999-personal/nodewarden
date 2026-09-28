@@ -377,7 +377,7 @@ export async function signInToAdminPortal(env: Env, email: string): Promise<{ co
   const directory = parseAdminDirectory(env);
   if (directory.kind !== 'enabled' || !directory.admins.has(email))
     throw new Error('Test administrator is not configured');
-  const session = await createAdminSession(env, email, directory.admins.get(email)!);
+  const session = await createAdminSession(env.DB, email, directory.admins.get(email)!);
   return { cookie: adminCookie(ADMIN_COOKIE, session.token, LIMITS.admin.sessionTtlSeconds), csrf: session.csrf };
 }
 

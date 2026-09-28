@@ -109,8 +109,8 @@ test('a user public key is 404 for an unknown user or one without keys, and need
 test('bulk member public keys list only Accepted members of this organization, then confirm works', async () => {
   const env = await createTestEnv();
   const owner = await seedUser(env);
-  const orgId = (await createOwnedOrganization(env, owner, { name: 'Acme', key: WRAPPED_KEY })).id;
-  const otherOrgId = (await createOwnedOrganization(env, owner, { name: 'Other', key: WRAPPED_KEY })).id;
+  const orgId = (await createOwnedOrganization(env.DB, owner, { name: 'Acme', key: WRAPPED_KEY })).id;
+  const otherOrgId = (await createOwnedOrganization(env.DB, owner, { name: 'Other', key: WRAPPED_KEY })).id;
   const accepted = await addMember(env, orgId, MembershipStatus.Accepted);
   const confirmed = await addMember(env, orgId, MembershipStatus.Confirmed);
   const keyless = await addMember(env, orgId, MembershipStatus.Accepted, null);
@@ -156,7 +156,7 @@ test('bulk member public keys list only Accepted members of this organization, t
 test('bulk member public keys need manageUsers, an organization membership and at least one id', async () => {
   const env = await createTestEnv();
   const owner = await seedUser(env);
-  const orgId = (await createOwnedOrganization(env, owner, { name: 'Acme', key: WRAPPED_KEY })).id;
+  const orgId = (await createOwnedOrganization(env.DB, owner, { name: 'Acme', key: WRAPPED_KEY })).id;
   const accepted = await addMember(env, orgId, MembershipStatus.Accepted);
   const plainMember = await addMember(env, orgId, MembershipStatus.Confirmed);
   const outsider = await seedUser(env);

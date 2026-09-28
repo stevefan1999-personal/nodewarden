@@ -190,7 +190,7 @@ test('codes expire at the TTL and purge removes only expired OTP identifiers', a
   ] as const) {
     await getOrm(env.DB).insert(verification).values({ id, identifier, value: 'opaque', expiresAt: expires });
   }
-  await purgeExpiredEmailOtps(env);
+  await purgeExpiredEmailOtps(env.DB);
   const remaining = await getOrm(env.DB).select({ id: verification.id }).from(verification).orderBy(verification.id);
   assert.deepEqual(
     remaining.map((row) => row.id),

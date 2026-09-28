@@ -134,7 +134,7 @@ export function adminPortal(env: Env, request: Request): AdminPortal {
     },
 
     async redeemLoginLink(token) {
-      const value = await redeemAdminLogin(env, token, readAdminCookie(request, ADMIN_LOGIN_COOKIE));
+      const value = await redeemAdminLogin(env.DB, token, readAdminCookie(request, ADMIN_LOGIN_COOKIE));
       if (!value) {
         console.warn('Invalid administrator sign-in link');
         return { kind: 'invalid' };
@@ -143,7 +143,7 @@ export function adminPortal(env: Env, request: Request): AdminPortal {
         await audit('admin.portal.login.denied');
         return { kind: 'invalid' };
       }
-      const session = await createAdminSession(env, value.email, value.stampHash);
+      const session = await createAdminSession(env.DB, value.email, value.stampHash);
       await getOrm(env.DB)
         .delete(verification)
         .where(
@@ -157,7 +157,7 @@ export function adminPortal(env: Env, request: Request): AdminPortal {
     },
 
     async readSession() {
-      const { session, denied } = await readAdminSession(request, env, admins);
+      const { session, denied } = await readAdminSession(request, env.DB, admins);
       if (denied) await audit('admin.portal.login.denied');
       return session;
     },

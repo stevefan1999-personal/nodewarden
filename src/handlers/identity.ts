@@ -492,7 +492,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
   if (body.grant_type === 'authorization_code' && isSsoEnabled(env)) {
     const { code } = body;
     const context = await ssoContinuationContext(env, request, body, code);
-    const continuation = await getSsoContinuation(env, context);
+    const continuation = await getSsoContinuation(env.DB, context);
     if (continuation === null)
       return identityErrorResponse('SSO sign-in expired or was already completed', 'invalid_grant', 400);
     let user: User | null;
@@ -530,7 +530,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
       }
       await orgRepo.saveSsoUser(env.DB, user.id, claims.identifier, new Date().toISOString());
       if (user.status !== 'active') return identityErrorResponse('Account is disabled', 'invalid_grant', 400);
-      ssoContinuation = await saveSsoContinuation(env, context, user);
+      ssoContinuation = await saveSsoContinuation(env.DB, context, user);
       if (!ssoContinuation) return identityErrorResponse('SSO sign-in is already in progress', 'invalid_grant', 400);
     }
     // The verified SSO user continues as a password grant carrying the server-side hash.
@@ -822,7 +822,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
       ? { recoveryCode: createRecoveryCode(), securityStamp: generateUUID() }
       : undefined;
     if (ssoContinuation) {
-      if (!(await consumeSsoContinuation(env, ssoContinuation, user, recovery)))
+      if (!(await consumeSsoContinuation(env.DB, ssoContinuation, user, recovery)))
         return identityErrorResponse('SSO sign-in expired or was already completed', 'invalid_grant', 400);
     } else if (recovery) {
       const [cleared] = await getOrm(env.DB).batch(twoFactorClearStatements(env.DB, user.id, recovery, user));

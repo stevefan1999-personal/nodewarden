@@ -22,7 +22,7 @@ const TOKEN_PATH = '/identity/connect/token';
 test('a client-sent sso flag cannot bypass an organization SSO policy', async () => {
   const env = await createTestEnv(SSO_CONFIG);
   const user = await seedUser(env, { masterPasswordHash: await hashPassword(PASSWORD) });
-  const org = await createOwnedOrganization(env, user, { name: 'SSO org', key: '4.dGVzdA==' });
+  const org = await createOwnedOrganization(env.DB, user, { name: 'SSO org', key: '4.dGVzdA==' });
   await orgRepo.savePolicy(env.DB, {
     id: crypto.randomUUID(),
     orgId: org.id,

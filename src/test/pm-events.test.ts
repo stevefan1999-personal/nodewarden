@@ -19,7 +19,7 @@ async function setup() {
   const mail = captureEmail();
   const env = await createTestEnv(mail.overrides);
   const owner = await seedUser(env);
-  const org = await createOwnedOrganization(env, owner, { name: 'Private organization', key: ORG_KEY });
+  const org = await createOwnedOrganization(env.DB, owner, { name: 'Private organization', key: ORG_KEY });
   const [collection] = await orgRepo.listCollectionsByOrg(env.DB, org.id);
   const call = (method: string, path: string, body?: unknown, actor = owner) =>
     authedFetch(env, {
@@ -135,7 +135,7 @@ test('share and attachment events record only successful organization mutations,
 
 test('collections, groups, settings and policies emit changed events without encrypted content or foreign-org rows', async () => {
   const { env, owner, org, call } = await setup();
-  const foreign = await createOwnedOrganization(env, owner, { name: 'Other', key: ORG_KEY });
+  const foreign = await createOwnedOrganization(env.DB, owner, { name: 'Other', key: ORG_KEY });
   const base = `/api/organizations/${org.id}`;
   const collection = await call('POST', `${base}/collections`, { name: ENCRYPTED });
   assert.equal(collection.status, 200);
@@ -179,7 +179,7 @@ test('collections, groups, settings and policies emit changed events without enc
 
 test('membership events cover actual transitions and preserve the affected account after removal or leaving', async () => {
   const { env, owner, org, call } = await setup();
-  const foreign = await createOwnedOrganization(env, owner, { name: 'Other', key: ORG_KEY });
+  const foreign = await createOwnedOrganization(env.DB, owner, { name: 'Other', key: ORG_KEY });
   const target = await seedMember(env, org.id, { status: MembershipStatus.Accepted });
   const other = await seedMember(env, foreign.id, { status: MembershipStatus.Accepted });
   const base = `/api/organizations/${org.id}`;

@@ -14,8 +14,11 @@ test('portal organization searches use literal names and either member email; de
   const env = await createTestEnv({ ADMIN_EMAILS: email });
   const auth = await signInToAdminPortal(env, email);
   const owner = await seedUser(env);
-  const org = await createOwnedOrganization(env, owner, { name: '<img src=x onerror=bad()> 50%', key: '4.dGVzdA==' });
-  const other = await createOwnedOrganization(env, await seedUser(env), { name: 'other', key: '4.dGVzdA==' });
+  const org = await createOwnedOrganization(env.DB, owner, {
+    name: '<img src=x onerror=bad()> 50%',
+    key: '4.dGVzdA==',
+  });
+  const other = await createOwnedOrganization(env.DB, await seedUser(env), { name: 'other', key: '4.dGVzdA==' });
   await getOrm(env.DB)
     .update(organizations)
     .set({ privateKey: 'DO-NOT-RENDER-PRIVATE-KEY', publicKey: 'DO-NOT-RENDER-PUBLIC-KEY' })
@@ -86,7 +89,7 @@ test('portal organization searches use literal names and either member email; de
 test('portal organization deletion validates confirmation and audits the atomic deletion', async () => {
   const env = await createTestEnv({ ADMIN_EMAILS: email });
   const auth = await signInToAdminPortal(env, email);
-  const org = await createOwnedOrganization(env, await seedUser(env), { name: 'Delete me', key: '4.dGVzdA==' });
+  const org = await createOwnedOrganization(env.DB, await seedUser(env), { name: 'Delete me', key: '4.dGVzdA==' });
   const path = `/admin/organizations/delete/${org.id}`;
   assert.equal(
     (

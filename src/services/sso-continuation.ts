@@ -51,10 +51,10 @@ export async function ssoContinuationContext(
 
 // Missing permits the first IdP exchange; an expired, consumed or mismatched row never does.
 export async function getSsoContinuation(
-  env: Env,
+  db: D1Database,
   context: SsoContinuationContext,
 ): Promise<SsoContinuation | null | undefined> {
-  const row = await getOrm(env.DB)
+  const row = await getOrm(db)
     .select({ value: verification.value, expiresAt: verification.expiresAt })
     .from(verification)
     .where(and(eq(verification.id, context.id), eq(verification.identifier, PURPOSE)))
@@ -72,13 +72,13 @@ export async function getSsoContinuation(
 }
 
 export async function saveSsoContinuation(
-  env: Env,
+  db: D1Database,
   context: SsoContinuationContext,
   user: User,
 ): Promise<SsoContinuation | null> {
   const now = Date.now();
   const value = { ...context, userId: user.id, email: user.email, securityStamp: user.securityStamp };
-  const orm = getOrm(env.DB);
+  const orm = getOrm(db);
   const [, result] = await orm.batch([
     // Better Auth globally deletes expired verification rows, so keep tombstones beyond the logical login window.
     orm.delete(verification).where(and(eq(verification.identifier, PURPOSE), lt(verification.expiresAt, now))),
@@ -98,13 +98,13 @@ export async function saveSsoContinuation(
 }
 
 export async function consumeSsoContinuation(
-  env: Env,
+  db: D1Database,
   continuation: SsoContinuation,
   user: User,
   recovery?: { recoveryCode: string; securityStamp: string },
 ): Promise<boolean> {
   const now = Date.now();
-  const orm = getOrm(env.DB);
+  const orm = getOrm(db);
   const claim = orm
     .update(verification)
     .set({ value: jsonSet(verification.value, '$.consumed', 1), updatedAt: now })
@@ -135,7 +135,7 @@ export async function consumeSsoContinuation(
         ? [
             // D1 batches are atomic; a losing claim must not clear factors or rotate the account stamp.
             abortUnlessChanged(orm, 'invalid sso continuation'),
-            ...twoFactorClearStatements(env.DB, user.id, recovery),
+            ...twoFactorClearStatements(db, user.id, recovery),
           ]
         : []),
     ]);

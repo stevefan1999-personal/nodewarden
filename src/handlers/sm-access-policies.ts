@@ -19,11 +19,11 @@ import { errorResponse, jsonResponse, parseBody } from '../utils/response';
 import { listResponse, PolicyRequests, smContext } from './secrets-manager';
 import { EventType, recordEvents, type EventInput } from '../services/events';
 
-export async function peopleDirectory(env: Env, orgId: string, membershipId: string) {
+export async function peopleDirectory(db: D1Database, orgId: string, membershipId: string) {
   const [members, groups, ownGroups] = await Promise.all([
-    orgRepo.listMembershipsWithAccountsByOrg(env.DB, orgId),
-    orgRepo.listGroupsByOrg(env.DB, orgId),
-    getOrm(env.DB)
+    orgRepo.listMembershipsWithAccountsByOrg(db, orgId),
+    orgRepo.listGroupsByOrg(db, orgId),
+    getOrm(db)
       .select({ id: orgGroups.id })
       .from(orgGroups)
       .innerJoin(orgGroupMembers, eq(orgGroupMembers.groupId, orgGroups.id))
@@ -36,7 +36,7 @@ export async function handlePotentialPeople(env: Env, principal: Principal, orgI
   const context = await smContext(env, principal, orgId);
   if (!context || context.actor.kind === 'serviceAccount') return errorResponse('Not found', 404);
   const membershipId = context.actor.membershipId;
-  const { members, groups, ownGroups } = await peopleDirectory(env, orgId, membershipId);
+  const { members, groups, ownGroups } = await peopleDirectory(env.DB, orgId, membershipId);
   return jsonResponse(
     listResponse([
       ...members
@@ -69,7 +69,7 @@ export async function peoplePolicyResponse(
 ) {
   const [{ users, groups: policies }, directory] = await Promise.all([
     smRepo.readPeoplePolicies(env.DB, kind, id),
-    peopleDirectory(env, orgId, membershipId),
+    peopleDirectory(env.DB, orgId, membershipId),
   ]);
   return {
     userAccessPolicies: directory.members
@@ -123,7 +123,7 @@ export async function handlePeoplePolicies(
     const groups = parsePolicyRequests(body.groupAccessPolicyRequests ?? [], 'granteeId', kind === 'serviceAccount');
     if (!users.ok) return errorResponse(users.message, 400);
     if (!groups.ok) return errorResponse(groups.message, 400);
-    const directory = await peopleDirectory(env, row.orgId, context.actor.membershipId);
+    const directory = await peopleDirectory(env.DB, row.orgId, context.actor.membershipId);
     const memberIds = new Set(directory.members.map(({ item }) => item.id));
     const groupIds = new Set(directory.groups.map((group) => group.id));
     if (
@@ -315,7 +315,7 @@ export async function prepareSecretPolicies(
   if (!accounts.ok) return errorResponse(accounts.message, 400);
   if (context.actor.kind === 'serviceAccount')
     return users.value.size || groups.value.size || accounts.value.size ? errorResponse('Not found', 404) : [];
-  const directory = await peopleDirectory(env, orgId, context.actor.membershipId);
+  const directory = await peopleDirectory(env.DB, orgId, context.actor.membershipId);
   const members = new Set(directory.members.map(({ item }) => item.id));
   const groupIds = new Set(directory.groups.map((group) => group.id));
   const machines = new Set((await smRepo.listServiceAccounts(env.DB, orgId)).map((account) => account.id));

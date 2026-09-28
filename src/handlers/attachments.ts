@@ -137,7 +137,7 @@ export async function handleCreateAttachment(
   userId: string,
   cipherId: string,
 ): Promise<Response> {
-  const cipher = await loadAccessibleCipher(env, env.DB, userId, cipherId, 'edit');
+  const cipher = await loadAccessibleCipher(env.DB, userId, cipherId, 'edit');
   if (!cipher) return errorResponse('Cipher not found', 404);
   const body = await parseBody(request, CreateAttachmentBody);
   if (body instanceof Response) return body;
@@ -197,7 +197,7 @@ export async function handleUploadAttachment(
   cipherId: string,
   attachmentId: string,
 ): Promise<Response> {
-  const cipher = await loadAccessibleCipher(env, env.DB, userId, cipherId, 'edit');
+  const cipher = await loadAccessibleCipher(env.DB, userId, cipherId, 'edit');
   if (!cipher) return errorResponse('Cipher not found', 404);
 
   const attachment = await attachmentRepo.getAttachment(env.DB, attachmentId);
@@ -247,7 +247,7 @@ export async function handleGetAttachment(
   cipherId: string,
   attachmentId: string,
 ): Promise<Response> {
-  const cipher = await loadAccessibleCipher(env, env.DB, userId, cipherId, 'read');
+  const cipher = await loadAccessibleCipher(env.DB, userId, cipherId, 'read');
   if (!cipher) return errorResponse('Cipher not found', 404);
 
   const attachment = await attachmentRepo.getAttachment(env.DB, attachmentId);
@@ -283,7 +283,7 @@ export async function handleUpdateAttachmentMetadata(
   cipherId: string,
   attachmentId: string,
 ): Promise<Response> {
-  const cipher = await loadAccessibleCipher(env, env.DB, userId, cipherId, 'edit');
+  const cipher = await loadAccessibleCipher(env.DB, userId, cipherId, 'edit');
   if (!cipher) return errorResponse('Cipher not found', 404);
 
   const attachment = await attachmentRepo.getAttachment(env.DB, attachmentId);
@@ -372,7 +372,7 @@ export async function handleDeleteAttachment(
   cipherId: string,
   attachmentId: string,
 ): Promise<Response> {
-  const cipher = await loadAccessibleCipher(env, env.DB, userId, cipherId, 'edit');
+  const cipher = await loadAccessibleCipher(env.DB, userId, cipherId, 'edit');
   if (!cipher) return errorResponse('Cipher not found', 404);
 
   const attachment = await attachmentRepo.getAttachment(env.DB, attachmentId);

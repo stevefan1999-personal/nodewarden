@@ -107,8 +107,8 @@ export default {
     // Every job runs even when another fails. Each failure is logged, then fails the invocation, so it shows
     // in the Worker's cron history instead of reading as success.
     const jobs = {
-      'event cleanup': () => pruneEvents(env),
-      'email code cleanup': () => purgeExpiredEmailOtps(env),
+      'event cleanup': () => pruneEvents(env.DB),
+      'email code cleanup': () => purgeExpiredEmailOtps(env.DB),
       'scheduled backup': () => runScheduledBackupIfDue(env),
       'Secrets Manager trash purge': () => purgeSecretsTrash(env.DB),
       'emergency access timeouts': () => approveExpiredEmergencyAccess(env),

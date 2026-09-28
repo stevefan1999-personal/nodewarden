@@ -18,7 +18,7 @@ const ENC = '2.dGVzdA==|dGVzdA==|dGVzdA==';
 async function setup() {
   const env = await createTestEnv();
   const owner = await seedUser(env);
-  const org = await createOwnedOrganization(env, owner, { name: 'Event test', key: '4.dGVzdA==' });
+  const org = await createOwnedOrganization(env.DB, owner, { name: 'Event test', key: '4.dGVzdA==' });
   await getOrm(env.DB).delete(events);
   return { env, owner, org };
 }
@@ -158,7 +158,7 @@ test('continuation walks every page in date then id order when page boundaries f
 test('event scope is immutable across moves/deletion; membership filters use the actor and permissions remain tenant-bound', async () => {
   const { env, owner, org } = await setup();
   const otherOwner = await seedUser(env);
-  const other = await createOwnedOrganization(env, otherOwner, { name: 'Other', key: '4.dGVzdA==' });
+  const other = await createOwnedOrganization(env.DB, otherOwner, { name: 'Other', key: '4.dGVzdA==' });
   const { user: actor, memberId: actorMembership } = await seedMember(env, org.id, {
     type: MembershipType.Custom,
     permissions: { accessEventLogs: true },
@@ -221,7 +221,7 @@ test('event scope is immutable across moves/deletion; membership filters use the
 test('collector records authorized client actions, derives actor/scope and hides unknown versus foreign IDs', async () => {
   const { env, owner, org } = await setup();
   const otherOwner = await seedUser(env);
-  const other = await createOwnedOrganization(env, otherOwner, { name: 'Other', key: '4.dGVzdA==' });
+  const other = await createOwnedOrganization(env.DB, otherOwner, { name: 'Other', key: '4.dGVzdA==' });
   const id = await cipher(env, owner, org.id);
   const foreign = await cipher(env, otherOwner, other.id);
   const personal = await cipher(env, owner, null);
@@ -386,7 +386,7 @@ test('uploads spend a per-minute budget of 100-row batches, counting export copi
   );
 
   const exporter = await seedUser(env);
-  for (const name of ['First', 'Second']) await createOwnedOrganization(env, exporter, { name, key: '4.dGVzdA==' });
+  for (const name of ['First', 'Second']) await createOwnedOrganization(env.DB, exporter, { name, key: '4.dGVzdA==' });
   const exportsOverOneMinute = Math.floor(minuteOfBatches / 3) + 1;
   assert.equal(
     (
@@ -409,9 +409,9 @@ test('event cleanup reuses audit retention and deletes at most 1000 rows using r
     Array.from({ length: 1005 }, () => ({ type: 1600, organizationId: org.id, date: '2099-01-01T00:00:00.000Z' })),
   );
   await getOrm(env.DB).update(events).set({ recordedAt: '2000-01-01T00:00:00.000Z' });
-  await pruneEvents(env);
+  await pruneEvents(env.DB);
   assert.equal(await count(env), 5);
-  await pruneEvents(env);
+  await pruneEvents(env.DB);
   assert.equal(await count(env), 0);
 });
 
@@ -439,19 +439,19 @@ test('a row-cap audit setting never lets one account flood out another organizat
     })),
   );
   await saveAuditLogSettings(env.DB, { retentionDays: null, maxEntries: 1000 });
-  await pruneEvents(env);
+  await pruneEvents(env.DB);
   assert.equal(await count(env), 1010, 'recent rows are kept whatever their volume');
   await getOrm(env.DB)
     .update(events)
     .set({ recordedAt: daysAgo(91) })
     .where(eq(events.organizationId, org.id));
-  await pruneEvents(env);
+  await pruneEvents(env.DB);
   assert.equal(await count(env), 1005, 'row-cap mode still expires events at the default retention age');
   await saveAuditLogSettings(env.DB, { retentionDays: null, maxEntries: null });
   await getOrm(env.DB)
     .update(events)
     .set({ recordedAt: daysAgo(4000) });
-  await pruneEvents(env);
+  await pruneEvents(env.DB);
   assert.equal(await count(env), 1005, 'disabled retention keeps every event');
 });
 

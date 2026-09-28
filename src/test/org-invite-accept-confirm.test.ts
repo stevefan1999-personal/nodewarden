@@ -479,7 +479,7 @@ test('invite mail defuses links and addresses hidden in the organization name', 
   const invitee = await seedMailableUser(env);
   // Any user can create an org and name it, so the name is attacker text sent from EMAIL_FROM.
   const phishingName = `Vault locked, unlock at https://${FORWARDED_HOST}/x or mail a@${FORWARDED_HOST}`;
-  const { id: orgId } = await createOwnedOrganization(env, owner, { name: phishingName, key: MEMBER_KEY });
+  const { id: orgId } = await createOwnedOrganization(env.DB, owner, { name: phishingName, key: MEMBER_KEY });
 
   await invite(env, owner, orgId, [invitee.email]);
   const [sent] = capture.sent;

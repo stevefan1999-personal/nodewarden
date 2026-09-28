@@ -39,7 +39,7 @@ async function seedPasskey(env: Env, user: User, purpose: 'login' | 'twoFactor')
 test('TOTP, YubiKey and WebAuthn are reported consistently; login passkeys are not two-factor', async (t) => {
   const env = await createTestEnv();
   const owner = await seedUser(env, { role: 'admin' });
-  const org = await createOwnedOrganization(env, owner, { name: '2FA org', key: '4.dGVzdA==' });
+  const org = await createOwnedOrganization(env.DB, owner, { name: '2FA org', key: '4.dGVzdA==' });
   const users = [
     await seedUser(env, { totpSecret: TOTP }),
     await seedUser(env, { yubikeyKey1: 'cccccccccccc' }),

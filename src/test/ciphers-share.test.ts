@@ -47,7 +47,7 @@ interface Fixture {
 async function setup(): Promise<Fixture> {
   const env = await createTestEnv();
   const owner = await seedUser(env);
-  const orgId = (await createOwnedOrganization(env, owner, { name: 'Acme', key: ORG_KEY })).id;
+  const orgId = (await createOwnedOrganization(env.DB, owner, { name: 'Acme', key: ORG_KEY })).id;
   return { env, owner, orgId, collectionId: await createCollection(env, owner, orgId) };
 }
 
@@ -179,7 +179,7 @@ test("share refuses ciphers that are not the caller's personal items, orgs it is
   const { user: readOnlyMember } = await seedMember(env, orgId, {
     collections: [{ collectionId, readOnly: true, hidePasswords: false, manage: false }],
   });
-  const otherOrgId = (await createOwnedOrganization(env, outsider, { name: 'Other', key: ORG_KEY })).id;
+  const otherOrgId = (await createOwnedOrganization(env.DB, outsider, { name: 'Other', key: ORG_KEY })).id;
   const otherOrgCollectionId = await createCollection(env, outsider, otherOrgId);
   const ownerCipherId = await createPersonalCipher(env, owner);
   const outsiderCipherId = await createPersonalCipher(env, outsider);
@@ -244,7 +244,7 @@ test('POST /ciphers/share is the deprecated bulk alias', async () => {
 test("PUT /ciphers/share shares nothing when any cipher is not the caller's, the org is not theirs, or orgs differ", async () => {
   const { env, owner, orgId, collectionId } = await setup();
   const outsider = await seedUser(env);
-  const otherOrgId = (await createOwnedOrganization(env, owner, { name: 'Other', key: ORG_KEY })).id;
+  const otherOrgId = (await createOwnedOrganization(env.DB, owner, { name: 'Other', key: ORG_KEY })).id;
   const ownerCipherId = await createPersonalCipher(env, owner);
   const outsiderCipherId = await createPersonalCipher(env, outsider);
 

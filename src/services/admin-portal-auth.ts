@@ -89,11 +89,11 @@ export function randomAdminToken(): string {
   return bytesToBase64Url(crypto.getRandomValues(new Uint8Array(32)));
 }
 
-export async function createAdminSession(env: Env, email: string, stampHash: string): Promise<AdminSession> {
+export async function createAdminSession(db: D1Database, email: string, stampHash: string): Promise<AdminSession> {
   const token = randomAdminToken();
   const authTime = Date.now();
   const id = `admin-session:${await sha256Base64Url(token)}`;
-  await getOrm(env.DB)
+  await getOrm(db)
     .insert(verification)
     .values({
       id,
@@ -108,13 +108,13 @@ export async function createAdminSession(env: Env, email: string, stampHash: str
 
 export async function readAdminSession(
   request: Request,
-  env: Env,
+  db: D1Database,
   admins: ReadonlyMap<string, string>,
 ): Promise<{ session: AdminSession | null; denied: boolean }> {
   const token = readAdminCookie(request, ADMIN_COOKIE);
   if (!ADMIN_TOKEN_PATTERN.test(token)) return { session: null, denied: false };
   const id = `admin-session:${await sha256Base64Url(token)}`;
-  const row = await getOrm(env.DB)
+  const row = await getOrm(db)
     .select({ value: verification.value, expiresAt: verification.expiresAt })
     .from(verification)
     .where(eq(verification.id, id))
@@ -161,12 +161,12 @@ export async function issueAdminLogin(
 }
 
 export async function redeemAdminLogin(
-  env: Env,
+  db: D1Database,
   token: string,
   browser: string,
 ): Promise<{ email: string; stampHash: string; returnPath: string } | null> {
   if (!ADMIN_TOKEN_PATTERN.test(token) || !ADMIN_TOKEN_PATTERN.test(browser)) return null;
-  const row = await getOrm(env.DB)
+  const row = await getOrm(db)
     .delete(verification)
     .where(
       and(

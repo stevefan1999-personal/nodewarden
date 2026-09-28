@@ -61,7 +61,7 @@ export async function handleScimRoute(request: Request, env: Env, path: string):
   const id = match[3] || null;
   const org = await orgRepo.getOrganization(env.DB, orgId);
   if (!org) return scimError(404, 'Organization not found');
-  const authorized = await verifyScimBearer(env, orgId, request.headers.get('Authorization'));
+  const authorized = await verifyScimBearer(env.DB, orgId, request.headers.get('Authorization'));
   if (!authorized) return scimError(401, 'Invalid SCIM token');
 
   if (resource === 'users') {

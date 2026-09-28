@@ -305,25 +305,25 @@ test('an SSO continuation claim refuses another binding, account, stamp or email
   const env = await createTestEnv();
   const owner = await seedUser(env);
   const orm = getOrm(env.DB);
-  const issue = async (id: string) => (await saveSsoContinuation(env, { id, binding: 'issued-binding' }, owner))!;
+  const issue = async (id: string) => (await saveSsoContinuation(env.DB, { id, binding: 'issued-binding' }, owner))!;
   const updateOwner = (values: { securityStamp?: string; email?: string }) =>
     orm.update(users).set(values).where(eq(users.id, owner.id));
   const continuation = await issue('sso-continuation:claim');
-  assert.equal(await consumeSsoContinuation(env, { ...continuation, binding: 'other-binding' }, owner), false);
+  assert.equal(await consumeSsoContinuation(env.DB, { ...continuation, binding: 'other-binding' }, owner), false);
   await updateOwner({ securityStamp: 'rotated-stamp' });
-  assert.equal(await consumeSsoContinuation(env, continuation, { ...owner, securityStamp: 'rotated-stamp' }), false);
+  assert.equal(await consumeSsoContinuation(env.DB, continuation, { ...owner, securityStamp: 'rotated-stamp' }), false);
   await updateOwner({ securityStamp: owner.securityStamp, email: 'renamed@example.test' });
-  assert.equal(await consumeSsoContinuation(env, continuation, { ...owner, email: 'renamed@example.test' }), false);
+  assert.equal(await consumeSsoContinuation(env.DB, continuation, { ...owner, email: 'renamed@example.test' }), false);
   const heir = await seedUser(env, { email: owner.email, securityStamp: owner.securityStamp });
-  assert.equal(await consumeSsoContinuation(env, continuation, heir), false);
+  assert.equal(await consumeSsoContinuation(env.DB, continuation, heir), false);
   await orm.delete(users).where(eq(users.id, heir.id));
   await updateOwner({ email: owner.email });
-  assert.equal(await consumeSsoContinuation(env, continuation, owner), true);
+  assert.equal(await consumeSsoContinuation(env.DB, continuation, owner), true);
 
   const expired = await issue('sso-continuation:expired');
   await orm
     .update(verification)
     .set({ value: jsonSet(verification.value, '$.expiresAt', Date.now() - 1) })
     .where(eq(verification.id, expired.id));
-  assert.equal(await consumeSsoContinuation(env, expired, owner), false);
+  assert.equal(await consumeSsoContinuation(env.DB, expired, owner), false);
 });

@@ -105,7 +105,7 @@ async function requireMember(db: D1Database, userId: string, orgId: string): Pro
 }
 
 export async function createOwnedOrganization(
-  env: Env,
+  db: D1Database,
   user: User,
   input: {
     name: string;
@@ -129,8 +129,8 @@ export async function createOwnedOrganization(
     createdAt: now,
     updatedAt: now,
   };
-  await orgRepo.insertOrganization(env.DB, org);
-  await orgRepo.saveMembership(env.DB, {
+  await orgRepo.insertOrganization(db, org);
+  await orgRepo.saveMembership(db, {
     id: generateUUID(),
     userId: user.id,
     orgId,
@@ -146,7 +146,7 @@ export async function createOwnedOrganization(
     createdAt: now,
     updatedAt: now,
   });
-  await orgRepo.saveCollection(env.DB, {
+  await orgRepo.saveCollection(db, {
     id: generateUUID(),
     orgId,
     name: input.collectionName || 'Default Collection',
@@ -154,7 +154,7 @@ export async function createOwnedOrganization(
     createdAt: now,
     updatedAt: now,
   });
-  await orgRepo.bumpOrgMemberRevisions(env.DB, orgId);
+  await orgRepo.bumpOrgMemberRevisions(db, orgId);
   return org;
 }
 
@@ -162,7 +162,7 @@ export async function handleCreateOrganization(request: Request, env: Env, user:
   const body = await parseBody(request, CreateOrganizationRequest);
   if (body instanceof Response) return body;
 
-  const org = await createOwnedOrganization(env, user, {
+  const org = await createOwnedOrganization(env.DB, user, {
     name: body.name,
     billingEmail: body.billingEmail || user.email,
     collectionName: body.collectionName || 'Default Collection',
@@ -1652,12 +1652,12 @@ export async function handleRotateScimKey(env: Env, userId: string, orgId: strin
   return jsonResponse({ token, object: 'organizationScimKey' });
 }
 
-export async function verifyScimBearer(env: Env, orgId: string, authorization: string | null): Promise<boolean> {
+export async function verifyScimBearer(db: D1Database, orgId: string, authorization: string | null): Promise<boolean> {
   const token = String(authorization || '')
     .replace(/^Bearer\s+/i, '')
     .trim();
   if (!token) return false;
-  const stored = await orgRepo.getScimTokenHash(env.DB, orgId);
+  const stored = await orgRepo.getScimTokenHash(db, orgId);
   if (!stored) return false;
   return verifyApiKey(token, stored);
 }

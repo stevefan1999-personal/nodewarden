@@ -125,7 +125,7 @@ export async function seedSmOrg(
 
 // An org `owner` created directly, as the create routes are covered on their own.
 export async function createOrg(env: Env, owner: User): Promise<string> {
-  return (await createOwnedOrganization(env, owner, { name: TEST_ORG_NAME, key: TEST_ORG_KEY })).id;
+  return (await createOwnedOrganization(env.DB, owner, { name: TEST_ORG_NAME, key: TEST_ORG_KEY })).id;
 }
 
 export async function createCollection(env: Env, owner: User, orgId: string): Promise<string> {

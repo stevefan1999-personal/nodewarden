@@ -47,7 +47,7 @@ test('the sixth organization invite to a recipient is refused before saving its 
   const owner = await seedUser(env);
   const recipient = `invitee@${MAILABLE_DOMAIN}`;
   for (let i = 0; i < 6; i++) {
-    const org = await createOwnedOrganization(env, owner, { name: `Organization ${i}`, key: '4.dGVzdA==' });
+    const org = await createOwnedOrganization(env.DB, owner, { name: `Organization ${i}`, key: '4.dGVzdA==' });
     const response = await authedFetch(env, {
       method: 'POST',
       path: `/api/organizations/${org.id}/users/invite`,

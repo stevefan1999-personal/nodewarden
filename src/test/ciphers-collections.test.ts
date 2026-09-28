@@ -46,7 +46,7 @@ interface Fixture {
 async function setup(): Promise<Fixture> {
   const env = await createTestEnv();
   const owner = await seedUser(env);
-  const orgId = (await createOwnedOrganization(env, owner, { name: 'Acme', key: ORG_KEY })).id;
+  const orgId = (await createOwnedOrganization(env.DB, owner, { name: 'Acme', key: ORG_KEY })).id;
   const [collectionA, collectionB, collectionC] = [
     await createCollection(env, owner, orgId),
     await createCollection(env, owner, orgId),
@@ -262,7 +262,7 @@ test("collections-admin refuses non-admins, another org's collections and person
   const { env, owner, orgId, collectionA, collectionB } = await setup();
   const { user: member } = await seedMember(env, orgId, { collections: [access(collectionA), access(collectionB)] });
   const outsider = await seedUser(env);
-  const otherOrgId = (await createOwnedOrganization(env, outsider, { name: 'Other', key: ORG_KEY })).id;
+  const otherOrgId = (await createOwnedOrganization(env.DB, outsider, { name: 'Other', key: ORG_KEY })).id;
   const otherOrgCollectionId = await createCollection(env, outsider, otherOrgId);
   const cipherId = await createCipher(env, owner, orgId, [collectionA]);
   const personalCipherId = await createCipher(env, owner, null, []);
@@ -297,7 +297,7 @@ test('creating an org cipher refuses it whole unless the member can write every 
     collections: [access(collectionA), access(collectionB, { readOnly: true })],
   });
   const outsider = await seedUser(env);
-  const otherOrgId = (await createOwnedOrganization(env, outsider, { name: 'Other', key: ORG_KEY })).id;
+  const otherOrgId = (await createOwnedOrganization(env.DB, outsider, { name: 'Other', key: ORG_KEY })).id;
   const otherOrgCollectionId = await createCollection(env, outsider, otherOrgId);
 
   // One writable id must not carry a read-only or foreign one along; even full access stays in its org.

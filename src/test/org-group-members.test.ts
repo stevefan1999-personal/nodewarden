@@ -14,7 +14,7 @@ const RESOURCE_NOT_FOUND = 'Resource not found.';
 
 // An org `owner` creates, with the owner's own membership id in it.
 async function ownedOrg(env: Env, owner: User): Promise<{ orgId: string; membershipId: string }> {
-  const { id: orgId } = await createOwnedOrganization(env, owner, { name: 'Acme', key: TEST_ORG_KEY });
+  const { id: orgId } = await createOwnedOrganization(env.DB, owner, { name: 'Acme', key: TEST_ORG_KEY });
   const membership = await orgRepo.getMembershipByUserAndOrg(env.DB, owner.id, orgId);
   assert.ok(membership);
   return { orgId, membershipId: membership.id };

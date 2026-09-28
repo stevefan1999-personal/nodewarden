@@ -821,7 +821,7 @@ export async function handleGetOrganizationCiphers(request: Request, env: Env, u
   const orgId = new URL(request.url).searchParams.get('organizationId');
   if (!isUUID(orgId)) return errorResponse('OrganizationId must be a valid GUID.', 400);
   const id = orgId.toLowerCase();
-  if (!(await canReadOrganizationCiphers(env, userId, id, 'all'))) return errorResponse('Not found', 404);
+  if (!(await canReadOrganizationCiphers(env.DB, userId, id, 'all'))) return errorResponse('Not found', 404);
   const ciphers = await orgRepo.listOrganizationCiphers(env.DB, id);
   const attachments = await attachmentRepo.getAttachmentsByCipherIds(
     env.DB,
@@ -836,7 +836,7 @@ export async function handleGetOrganizationCiphers(request: Request, env: Env, u
 
 export async function handleGetCipherAdmin(request: Request, env: Env, userId: string, id: string): Promise<Response> {
   const cipher = await cipherRepo.getCipher(env.DB, id);
-  if (!cipher?.organizationId || !(await canReadOrganizationCiphers(env, userId, cipher.organizationId, 'admin')))
+  if (!cipher?.organizationId || !(await canReadOrganizationCiphers(env.DB, userId, cipher.organizationId, 'admin')))
     return errorResponse('Not found', 404);
   const collectionIds = await orgRepo.listCipherCollectionIds(env.DB, id, cipher.organizationId);
   return jsonResponse(
@@ -900,7 +900,7 @@ export async function handleGetCiphers(request: Request, env: Env, userId: strin
 
 // GET /api/ciphers/:id
 export async function handleGetCipher(request: Request, env: Env, userId: string, id: string): Promise<Response> {
-  const cipher = await loadAccessibleCipher(env, env.DB, userId, id, 'read');
+  const cipher = await loadAccessibleCipher(env.DB, userId, id, 'read');
   if (!cipher) return errorResponse('Cipher not found', 404);
 
   return cipherJsonResponse(request, cipher, await attachmentRepo.getAttachmentsByCipher(env.DB, cipher.id));
@@ -1046,7 +1046,7 @@ export async function handleUpdateCipher(
   id: string,
   asAdmin = false,
 ): Promise<Response> {
-  const existingCipher = await loadAccessibleCipher(env, env.DB, userId, id, asAdmin ? 'admin-edit' : 'edit');
+  const existingCipher = await loadAccessibleCipher(env.DB, userId, id, asAdmin ? 'admin-edit' : 'edit');
   if (!existingCipher) return errorResponse('Cipher not found', 404);
 
   const body = await parseBody(request, CipherBody);
@@ -1249,7 +1249,7 @@ export async function handleUpdateCipherCollections(
     return jsonResponse({ ...cipherToResponse(cipher, attachments, responseOptions), object: 'cipherMiniDetails' });
   // A member who dropped its last collection holding the item can no longer read it; upstream
   // answers unavailable and the client deletes its local copy.
-  const readable = await loadAccessibleCipher(env, env.DB, userId, cipher.id, 'read');
+  const readable = await loadAccessibleCipher(env.DB, userId, cipher.id, 'read');
   return jsonResponse({
     object: 'optionalCipherDetails',
     unavailable: !readable,
@@ -1265,7 +1265,7 @@ export async function handleDeleteCipher(
   id: string,
   asAdmin = false,
 ): Promise<Response> {
-  const cipher = await loadAccessibleCipher(env, env.DB, userId, id, asAdmin ? 'admin-edit' : 'edit');
+  const cipher = await loadAccessibleCipher(env.DB, userId, id, asAdmin ? 'admin-edit' : 'edit');
   if (!cipher) return errorResponse('Cipher not found', 404);
 
   const wasDeleted = !!cipher.deletedAt;
@@ -1302,7 +1302,7 @@ export async function handleDeleteCipherCompat(
   userId: string,
   id: string,
 ): Promise<Response> {
-  const cipher = await loadAccessibleCipher(env, env.DB, userId, id, 'edit');
+  const cipher = await loadAccessibleCipher(env.DB, userId, id, 'edit');
   if (!cipher) return errorResponse('Cipher not found', 404);
 
   if (cipher.deletedAt) {
@@ -1329,7 +1329,7 @@ export async function handlePermanentDeleteCipher(
   id: string,
   asAdmin = false,
 ): Promise<Response> {
-  const cipher = await loadAccessibleCipher(env, env.DB, userId, id, asAdmin ? 'admin-edit' : 'edit');
+  const cipher = await loadAccessibleCipher(env.DB, userId, id, asAdmin ? 'admin-edit' : 'edit');
   if (!cipher) return errorResponse('Cipher not found', 404);
 
   // Delete all attachments first
@@ -1348,7 +1348,7 @@ export async function handlePermanentDeleteCipher(
 
 // PUT /api/ciphers/:id/restore
 export async function handleRestoreCipher(request: Request, env: Env, userId: string, id: string): Promise<Response> {
-  const cipher = await loadAccessibleCipher(env, env.DB, userId, id, 'edit');
+  const cipher = await loadAccessibleCipher(env.DB, userId, id, 'edit');
   if (!cipher) return errorResponse('Cipher not found', 404);
 
   const wasDeleted = !!cipher.deletedAt;
@@ -1375,7 +1375,7 @@ export async function handlePartialUpdateCipher(
   userId: string,
   id: string,
 ): Promise<Response> {
-  const cipher = await loadAccessibleCipher(env, env.DB, userId, id, 'edit');
+  const cipher = await loadAccessibleCipher(env.DB, userId, id, 'edit');
   if (!cipher) return errorResponse('Cipher not found', 404);
 
   const body = await parseBody(
@@ -1444,7 +1444,7 @@ async function buildCipherListResponse(
 
 // PUT/POST /api/ciphers/:id/archive
 export async function handleArchiveCipher(request: Request, env: Env, userId: string, id: string): Promise<Response> {
-  const cipher = await loadAccessibleCipher(env, env.DB, userId, id, 'edit');
+  const cipher = await loadAccessibleCipher(env.DB, userId, id, 'edit');
   if (!cipher) return errorResponse('Cipher not found', 404);
   if (cipher.deletedAt) {
     return errorResponse('Cannot archive a deleted cipher', 400);
@@ -1461,7 +1461,7 @@ export async function handleArchiveCipher(request: Request, env: Env, userId: st
 
 // PUT/POST /api/ciphers/:id/unarchive
 export async function handleUnarchiveCipher(request: Request, env: Env, userId: string, id: string): Promise<Response> {
-  const cipher = await loadAccessibleCipher(env, env.DB, userId, id, 'edit');
+  const cipher = await loadAccessibleCipher(env.DB, userId, id, 'edit');
   if (!cipher) return errorResponse('Cipher not found', 404);
 
   cipher.archivedAt = null;

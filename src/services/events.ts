@@ -270,7 +270,7 @@ const DateRange = z.object({ start: queryDate, end: queryDate });
 // A cursor is the last row's canonical ISO date and id, exactly as listEventsResponse writes them.
 const Cursor = z.tuple([z.iso.datetime({ precision: 3 }), z.string().regex(/^[a-f0-9-]{36}$/i)]);
 
-export async function listEventsResponse(request: Request, env: Env, filter: EventFilter): Promise<Response> {
+export async function listEventsResponse(request: Request, db: D1Database, filter: EventFilter): Promise<Response> {
   const params = new URL(request.url).searchParams;
   const range = DateRange.safeParse({ start: params.get('start') ?? undefined, end: params.get('end') ?? undefined });
   if (!range.success) return errorResponse(range.error.issues[0].message, 400, {}, bodyIssues(range.error));
@@ -305,7 +305,7 @@ export async function listEventsResponse(request: Request, env: Env, filter: Eve
       return errorResponse('Invalid continuation token.', 400);
     }
   }
-  const rows = await getOrm(env.DB)
+  const rows = await getOrm(db)
     .select()
     .from(events)
     .where(and(...conditions))
@@ -362,11 +362,11 @@ const EVENT_PRUNE_BATCH_ROWS = 1000;
 // account's self-reported /events/collect volume evict other organizations' history, so the audit
 // row-cap mode bounds only audit_logs and events then keep the default retention age. Retention
 // switched off keeps events too.
-export async function pruneEvents(env: Env): Promise<void> {
-  const { retentionDays, maxEntries } = await getAuditLogSettings(env.DB);
+export async function pruneEvents(db: D1Database): Promise<void> {
+  const { retentionDays, maxEntries } = await getAuditLogSettings(db);
   const days = retentionDays ?? (maxEntries ? DEFAULT_AUDIT_LOG_SETTINGS.retentionDays : null);
   if (!days) return;
-  const orm = getOrm(env.DB);
+  const orm = getOrm(db);
   const oldest = orm
     .select({ id: events.id })
     .from(events)

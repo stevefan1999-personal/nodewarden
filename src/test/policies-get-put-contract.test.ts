@@ -30,7 +30,7 @@ function policyPath(orgId: string, type: number): string {
 test('the SavePolicyRequest envelope round-trips enabled and data through GET /policies/{type} and sync', async () => {
   const env = await createTestEnv();
   const owner = await seedUser(env);
-  const { id: orgId } = await createOwnedOrganization(env, owner, { name: 'Acme', key: MEMBER_KEY });
+  const { id: orgId } = await createOwnedOrganization(env.DB, owner, { name: 'Acme', key: MEMBER_KEY });
   const { user: member } = await seedMember(env, orgId);
 
   const absent = await authedFetch(env, { path: policyPath(orgId, PolicyType.MasterPassword), userId: owner.id });
@@ -73,7 +73,7 @@ test('the SavePolicyRequest envelope round-trips enabled and data through GET /p
 test('a Custom policy manager reads a single policy while other members cannot read or save it', async () => {
   const env = await createTestEnv();
   const owner = await seedUser(env);
-  const { id: orgId } = await createOwnedOrganization(env, owner, { name: 'Acme', key: MEMBER_KEY });
+  const { id: orgId } = await createOwnedOrganization(env.DB, owner, { name: 'Acme', key: MEMBER_KEY });
   const { user: member } = await seedMember(env, orgId);
   const { user: policyManager } = await seedMember(env, orgId, {
     type: MembershipType.Custom,
@@ -110,7 +110,7 @@ test('a Custom policy manager reads a single policy while other members cannot r
 test('a malformed SavePolicyRequest envelope is rejected and leaves the saved policy enabled', async () => {
   const env = await createTestEnv();
   const owner = await seedUser(env);
-  const { id: orgId } = await createOwnedOrganization(env, owner, { name: 'Acme', key: MEMBER_KEY });
+  const { id: orgId } = await createOwnedOrganization(env.DB, owner, { name: 'Acme', key: MEMBER_KEY });
   const path = policyPath(orgId, PolicyType.MasterPassword);
   const enabled = await authedFetch(env, {
     method: 'PUT',

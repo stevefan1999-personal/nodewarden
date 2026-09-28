@@ -22,7 +22,7 @@ type EventRow = {
 async function setup() {
   const env = await createTestEnv();
   const owner = await seedUser(env);
-  const org = await createOwnedOrganization(env, owner, { name: 'Send audit', key: ORG_KEY });
+  const org = await createOwnedOrganization(env.DB, owner, { name: 'Send audit', key: ORG_KEY });
   await getOrm(env.DB).delete(events);
   const call = (method: string, path: string, body?: unknown, userId: string | undefined = owner.id) =>
     authedFetch(env, { method, path, body, userId, headers: { 'Device-Type': '8' } });

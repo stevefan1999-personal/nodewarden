@@ -1007,8 +1007,8 @@ function twoFactorAuthenticatorResponse(
   };
 }
 
-async function yubiKeySettingsResponse(env: Env, user: User): Promise<Record<string, unknown>> {
-  const credentials = await getYubicoCredentials(env.DB);
+async function yubiKeySettingsResponse(db: D1Database, user: User): Promise<Record<string, unknown>> {
+  const credentials = await getYubicoCredentials(db);
   const canManageCredentials = user.role === 'admin' && user.status === 'active';
   const provider = {
     Enabled: isYubiKeyEnabled(user),
@@ -1086,7 +1086,7 @@ export async function handleGetTwoFactorYubiKey(request: Request, env: Env, user
   if (!verified) return errorResponse('User verification failed.', 400);
 
   return jsonResponse({
-    ...(await yubiKeySettingsResponse(env, user)),
+    ...(await yubiKeySettingsResponse(env.DB, user)),
     UserVerificationToken: await createTwoFactorUserVerificationToken(env, user, TWO_FACTOR_PROVIDER_YUBIKEY),
   });
 }
@@ -1421,7 +1421,7 @@ export async function handlePutTwoFactorYubiKey(request: Request, env: Env, user
     factorChanged ? EventType.UserUpdated2fa : null,
   );
 
-  return jsonResponse({ ...(await yubiKeySettingsResponse(env, user)), Object: 'twoFactorYubiKeyUpdate' });
+  return jsonResponse({ ...(await yubiKeySettingsResponse(env.DB, user)), Object: 'twoFactorYubiKeyUpdate' });
 }
 
 // PUT/POST /api/two-factor/yubikey/config
@@ -1455,7 +1455,7 @@ export async function handlePutTwoFactorYubiKeyConfig(request: Request, env: Env
     metadata: auditRequestMetadata(request),
   });
 
-  return jsonResponse(await yubiKeySettingsResponse(env, user));
+  return jsonResponse(await yubiKeySettingsResponse(env.DB, user));
 }
 
 // POST /api/two-factor/yubikey/bootstrap
@@ -1511,7 +1511,7 @@ export async function handleBootstrapTwoFactorYubiKeyConfig(
     metadata: auditRequestMetadata(request),
   });
 
-  return jsonResponse(await yubiKeySettingsResponse(env, user));
+  return jsonResponse(await yubiKeySettingsResponse(env.DB, user));
 }
 
 // DELETE /api/two-factor/authenticator and PUT/POST /api/two-factor/disable

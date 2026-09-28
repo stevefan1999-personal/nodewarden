@@ -78,9 +78,9 @@ export async function redeemEmailOtp(env: Env, target: EmailOtpTarget, input: st
     .get());
 }
 
-export async function purgeExpiredEmailOtps(env: Env): Promise<void> {
+export async function purgeExpiredEmailOtps(db: D1Database): Promise<void> {
   // ';' follows ':' in byte order, so the range is exactly the 'otp:' prefix and stays on the identifier index.
-  await getOrm(env.DB)
+  await getOrm(db)
     .delete(verification)
     .where(
       and(

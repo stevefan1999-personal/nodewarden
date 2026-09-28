@@ -72,8 +72,8 @@ function eventActor(principal: Principal) {
 // Upstream ProjectsAreInOrganization: a missing or foreign project is 404 before any write, so a
 // secret or machine account in one org can never link to another org's project. Like upstream's
 // count comparison, a repeated id fails too instead of hitting the link table's primary key.
-async function allProjectsInOrg(env: Env, orgId: string, projectIds: string[]): Promise<boolean> {
-  const orgProjectIds = await smRepo.projectsInOrg(env.DB, orgId, projectIds);
+async function allProjectsInOrg(db: D1Database, orgId: string, projectIds: string[]): Promise<boolean> {
+  const orgProjectIds = await smRepo.projectsInOrg(db, orgId, projectIds);
   return new Set(projectIds).size === projectIds.length && projectIds.every((id) => orgProjectIds.has(id));
 }
 
@@ -97,8 +97,8 @@ export function secretResponse(
   };
 }
 
-export async function projectNames(env: Env, orgId: string): Promise<Map<string, string>> {
-  return new Map((await smRepo.listProjects(env.DB, orgId)).map((project) => [project.id, project.name]));
+export async function projectNames(db: D1Database, orgId: string): Promise<Map<string, string>> {
+  return new Map((await smRepo.listProjects(db, orgId)).map((project) => [project.id, project.name]));
 }
 
 export async function secretsListResponse(
@@ -107,7 +107,7 @@ export async function secretsListResponse(
   secrets: smRepo.SmSecret[],
   context: NonNullable<Awaited<ReturnType<typeof smContext>>>,
 ) {
-  const names = await projectNames(env, orgId);
+  const names = await projectNames(env.DB, orgId);
   const visible = secrets.filter((secret) => secretAccess(context.actor, context.grants, secret) !== 'none');
   return {
     secrets: visible.map((secret) => {
@@ -163,7 +163,7 @@ export async function handleCreateSecret(
   if (!context) return errorResponse('Not found', 404);
   const input = await secretInput(request);
   if (input instanceof Response) return input;
-  if (!(await allProjectsInOrg(env, orgId, input.projectIds))) return errorResponse('Resource not found.', 404);
+  if (!(await allProjectsInOrg(env.DB, orgId, input.projectIds))) return errorResponse('Resource not found.', 404);
   if (!canCreateSecret(context.actor, context.grants, input.projectIds[0])) return errorResponse('Not found', 404);
   const now = new Date().toISOString();
   const secret = { ...input, id: generateUUID(), orgId, createdAt: now, updatedAt: now, deletedAt: null };
@@ -179,7 +179,7 @@ export async function handleCreateSecret(
   await recordEvents(env, request, eventActor(principal), [
     { organizationId: orgId, type: EventType.SecretCreated, resourceType: 'secret', resourceId: secret.id },
   ]);
-  return jsonResponse(secretResponse(secret, await projectNames(env, orgId)));
+  return jsonResponse(secretResponse(secret, await projectNames(env.DB, orgId)));
 }
 
 export async function handleGetSecret(
@@ -196,7 +196,7 @@ export async function handleGetSecret(
   await recordEvents(env, request, eventActor(principal), [
     { organizationId: secret.orgId, type: EventType.SecretRetrieved, resourceType: 'secret', resourceId: secret.id },
   ]);
-  return jsonResponse(secretResponse(secret, await projectNames(env, secret.orgId), access));
+  return jsonResponse(secretResponse(secret, await projectNames(env.DB, secret.orgId), access));
 }
 
 export async function handleUpdateSecret(
@@ -210,7 +210,7 @@ export async function handleUpdateSecret(
   if (!existing || !context) return errorResponse('Not found', 404);
   const input = await secretInput(request);
   if (input instanceof Response) return input;
-  if (!(await allProjectsInOrg(env, existing.orgId, input.projectIds)))
+  if (!(await allProjectsInOrg(env.DB, existing.orgId, input.projectIds)))
     return errorResponse('Resource not found.', 404);
   if (!canUpdateSecret(context.actor, context.grants, existing, input.projectIds))
     return errorResponse('Not found', 404);
@@ -235,7 +235,7 @@ export async function handleUpdateSecret(
   await recordEvents(env, request, eventActor(principal), [
     { organizationId: secret.orgId, type: EventType.SecretEdited, resourceType: 'secret', resourceId: secret.id },
   ]);
-  return jsonResponse(secretResponse(secret, await projectNames(env, secret.orgId)));
+  return jsonResponse(secretResponse(secret, await projectNames(env.DB, secret.orgId)));
 }
 
 export async function handleDeleteSecrets(request: Request, env: Env, principal: Principal): Promise<Response> {
@@ -281,7 +281,7 @@ export async function handleSecretsByIds(request: Request, env: Env, principal: 
   const context = await smContext(env, principal, orgId);
   if (!context || secrets.some((secret) => secretAccess(context.actor, context.grants, secret) === 'none'))
     return errorResponse('Not found', 404);
-  const names = await projectNames(env, orgId);
+  const names = await projectNames(env.DB, orgId);
   await recordEvents(
     env,
     request,
@@ -297,7 +297,7 @@ export async function handleSecretsByIds(request: Request, env: Env, principal: 
 }
 
 export async function smContext(env: Env, principal: Principal, orgId: string) {
-  const actor = await resolveSmActor(env, principal, orgId);
+  const actor = await resolveSmActor(env.DB, principal, orgId);
   return actor ? { actor, grants: await smRepo.loadSmGrants(env.DB, actor, orgId) } : null;
 }
 
@@ -660,7 +660,7 @@ export async function handleSmEvents(
   }
   return listEventsResponse(
     request,
-    env,
+    env.DB,
     kind === 'service-account'
       ? { organizationId: orgId, serviceAccountId: id }
       : { organizationId: orgId, resourceType: kind === 'secrets' ? 'secret' : 'project', resourceId: id },
@@ -684,7 +684,7 @@ export async function handleSecretsSync(
   if (!account) return errorResponse('Not found', 404);
   const hasChanges = lastSynced === null || lastSynced <= Date.parse(account.updatedAt);
   if (!hasChanges) return jsonResponse({ hasChanges, secrets: null, object: 'secretsSync' });
-  const names = await projectNames(env, orgId);
+  const names = await projectNames(env.DB, orgId);
   const secrets = (await smRepo.listSecrets(env.DB, orgId)).filter(
     (secret) => secretAccess(context.actor, context.grants, secret) !== 'none',
   );

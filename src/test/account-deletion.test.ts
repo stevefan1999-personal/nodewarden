@@ -76,7 +76,7 @@ async function setup() {
   const env = await createTestEnv({ ATTACHMENTS_KV: blobs.binding });
   const admin = await seedUser(env, { role: 'admin' });
   const target = await seedUser(env);
-  const org = await createOwnedOrganization(env, target, { name: 'Co-owned', key: '4.dGVzdA==' });
+  const org = await createOwnedOrganization(env.DB, target, { name: 'Co-owned', key: '4.dGVzdA==' });
   const { user: successor } = await addMember(env, org.id);
   const orgCipher = await addCipher(env, target.id, org.id);
   const personalCipher = await addCipher(env, target.id, null);
@@ -300,7 +300,7 @@ test('self-deletion requires the master password and refuses sole Owners and the
     assert.equal(response.status, 400);
     assert.ok(await userRepo.getUserById(env.DB, user.id));
   }
-  const org = await createOwnedOrganization(env, user, { name: 'Sole Owner', key: '4.dGVzdA==' });
+  const org = await createOwnedOrganization(env.DB, user, { name: 'Sole Owner', key: '4.dGVzdA==' });
   const owner = await authedFetch(env, {
     method: 'DELETE',
     path: '/api/accounts',
@@ -400,7 +400,7 @@ test('Better Auth cannot delete accounts or change email outside the vault adapt
 test('Owner org deletion cleans blobs and Secrets Manager data and bumps over 100 member revisions without touching another org', async () => {
   const f = await setup();
   const otherOwner = await seedUser(f.env);
-  const otherOrg = await createOwnedOrganization(f.env, otherOwner, { name: 'Unchanged', key: '4.dGVzdA==' });
+  const otherOrg = await createOwnedOrganization(f.env.DB, otherOwner, { name: 'Unchanged', key: '4.dGVzdA==' });
   const otherCipher = await addCipher(f.env, otherOwner.id, otherOrg.id);
   // One row in every Secrets Manager table per org: after the deletion only the other org's rows remain.
   for (const orgId of [f.org.id, otherOrg.id]) {

@@ -83,8 +83,8 @@ export async function ensurePushInstallationCredentials(db: D1Database): Promise
   return { id, key };
 }
 
-async function postToPushRelay(env: Env, path: string, body?: unknown): Promise<boolean> {
-  const credentials = await ensurePushInstallationCredentials(env.DB);
+async function postToPushRelay(db: D1Database, path: string, body?: unknown): Promise<boolean> {
+  const credentials = await ensurePushInstallationCredentials(db);
   if (!credentials) return false;
 
   // Reuse the cached relay access token while it has over 30 seconds left; otherwise request a new one.
@@ -172,7 +172,7 @@ export async function registerMobilePushDevice(
   const credentials = await ensurePushInstallationCredentials(env.DB);
   if (!credentials) return false;
 
-  return postToPushRelay(env, '/push/register', {
+  return postToPushRelay(env.DB, '/push/register', {
     deviceId: input.pushUuid,
     pushToken: input.pushToken,
     userId: input.userId,
@@ -185,7 +185,7 @@ export async function registerMobilePushDevice(
 export async function unregisterMobilePushDevice(env: Env, pushUuid: string | null | undefined): Promise<boolean> {
   const normalized = String(pushUuid || '').trim();
   if (!normalized) return false;
-  return postToPushRelay(env, '/push/delete', { id: normalized });
+  return postToPushRelay(env.DB, '/push/delete', { id: normalized });
 }
 
 export async function notifyMobilePush(
@@ -206,7 +206,7 @@ export async function notifyMobilePush(
   // carries its id and scope, anything else only the user and date.
   const source = input.payload || {};
   const id = source.Id ?? source.id;
-  await postToPushRelay(env, '/push/send', {
+  await postToPushRelay(env.DB, '/push/send', {
     userId: input.userId,
     organizationId: null,
     deviceId: actingPushUuid,

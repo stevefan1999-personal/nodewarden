@@ -56,7 +56,7 @@ export async function handleCreateSelfHostedOrganizationLicense(
   }
   if (!form.key) return errorResponse('Organization key is required', 400);
   const parsed = parseOrganizationLicense(form.license, user.name || 'Organization');
-  const org = await createOwnedOrganization(env, user, {
+  const org = await createOwnedOrganization(env.DB, user, {
     name: parsed.name,
     billingEmail: parsed.billingEmail || user.email,
     collectionName: form.collectionName || 'Default Collection',

@@ -18,7 +18,7 @@ test('real login, failed login, password and factor changes record immutable use
     masterPasswordHash: await hashPassword(PASSWORD),
     totpSecret: 'JBSWY3DPEHPK3PXP',
   });
-  const org = await createOwnedOrganization(env, user, { name: 'User events', key: '4.dGVzdA==' });
+  const org = await createOwnedOrganization(env.DB, user, { name: 'User events', key: '4.dGVzdA==' });
   await getOrm(env.DB).delete(events);
   for (let i = 0; i < 2; i++)
     assert.equal(
@@ -73,12 +73,12 @@ test('real login, failed login, password and factor changes record immutable use
 test('client export events fan out only to confirmed organizations and factor failures use their own event type', async () => {
   const env = await createTestEnv();
   const owner = await seedUser(env);
-  const acceptedOrg = await createOwnedOrganization(env, owner, { name: 'Accepted only', key: '4.dGVzdA==' });
+  const acceptedOrg = await createOwnedOrganization(env.DB, owner, { name: 'Accepted only', key: '4.dGVzdA==' });
   const user = await seedUser(env, {
     masterPasswordHash: await hashPassword(PASSWORD),
     totpSecret: 'JBSWY3DPEHPK3PXP',
   });
-  const org = await createOwnedOrganization(env, user, { name: 'Confirmed', key: '4.dGVzdA==' });
+  const org = await createOwnedOrganization(env.DB, user, { name: 'Confirmed', key: '4.dGVzdA==' });
   await seedMembership(env, acceptedOrg.id, { userId: user.id, email: user.email, status: MembershipStatus.Accepted });
   await getOrm(env.DB).delete(events);
   assert.equal(
@@ -121,7 +121,7 @@ test('client export events fan out only to confirmed organizations and factor fa
 test('a backdated client export keeps its date only on the personal row', async () => {
   const env = await createTestEnv();
   const user = await seedUser(env);
-  const org = await createOwnedOrganization(env, user, { name: 'Export review', key: '4.dGVzdA==' });
+  const org = await createOwnedOrganization(env.DB, user, { name: 'Export review', key: '4.dGVzdA==' });
   await getOrm(env.DB).delete(events);
   const backdated = '2001-01-01T00:00:00.000Z';
   const before = new Date().toISOString();

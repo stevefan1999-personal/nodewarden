@@ -23,7 +23,7 @@ async function setup() {
   const capture = captureEmail();
   const env = await createTestEnv(capture.overrides);
   const owner = await seedUser(env, { email: `owner-${crypto.randomUUID()}@${MAILABLE_DOMAIN}` });
-  const org = await createOwnedOrganization(env, owner, { name: '<Org> https://x.y @home', key: KEY });
+  const org = await createOwnedOrganization(env.DB, owner, { name: '<Org> https://x.y @home', key: KEY });
   return { env, owner, org, sent: capture.sent };
 }
 

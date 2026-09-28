@@ -69,14 +69,15 @@ class SqliteD1Statement {
         return { columns: [], rows: [], changes, lastRowId: Number(lastInsertRowid) };
       }
       const rows = statement.raw(true).all(...this.bindings) as unknown[][];
-      // Row-returning writes (INSERT ... RETURNING) still report their changes, as D1 does.
-      const writeInfo = statement.readonly
-        ? { changes: 0, lastRowId: 0 }
-        : (this.connection.prepare('SELECT changes() AS changes, last_insert_rowid() AS lastRowId').get() as {
-            changes: number;
-            lastRowId: number;
-          });
-      return { columns: statement.columns().map((column: { name: string }) => column.name), rows, ...writeInfo };
+      // A row-returning write (INSERT ... RETURNING) still reports its changes, as D1 does: one returned row
+      // per changed row.
+      const changes = statement.readonly ? 0 : rows.length;
+      return {
+        columns: statement.columns().map((column: { name: string }) => column.name),
+        rows,
+        changes,
+        lastRowId: 0,
+      };
     } catch (error) {
       throw new Error(`D1_ERROR: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
     }
@@ -103,24 +104,56 @@ class SqliteD1Statement {
   }
 }
 
+export type StatementWrapper = (query: string, statement: D1PreparedStatement) => D1PreparedStatement;
+
+export type FailingWrite = {
+  table: string;
+  event: 'INSERT' | 'UPDATE' | 'DELETE';
+  column?: string;
+  rowId?: string;
+};
+
 class SqliteD1Database {
+  private readonly wrappers = new Set<StatementWrapper>();
+
   constructor(private readonly connection: SqliteConnection) {}
 
-  prepare(query: string): SqliteD1Statement {
-    return new SqliteD1Statement(this.connection, query);
+  prepare(query: string): D1PreparedStatement {
+    const statement = new SqliteD1Statement(this.connection, query) as unknown as D1PreparedStatement;
+    return [...this.wrappers].reduce((wrapped, wrap) => wrap(query, wrapped), statement);
+  }
+
+  // Test seam: every statement prepared from now on passes through wrap, which may read its SQL text, fail it by
+  // throwing, or return a wrapped statement. Returns the undo.
+  wrapStatements(wrap: StatementWrapper): () => void {
+    this.wrappers.add(wrap);
+    return () => this.wrappers.delete(wrap);
+  }
+
+  // Test fault injection: SQLite aborts a matching write with `message`, so it fails inside its statement or batch
+  // exactly as a failing D1 statement would and the whole batch rolls back; `rowId` narrows it to one row. A
+  // trigger is the only per-row hook SQLite has, and this class is the tests' SQL driver. Returns the undo.
+  failWrites({ table, event, column, rowId }: FailingWrite, message: string): () => void {
+    const name = `abort_${crypto.randomUUID().replaceAll('-', '')}`;
+    const literal = (value: string) => `'${value.replaceAll("'", "''")}'`;
+    const when = column ? `${event} OF "${column}"` : event;
+    const onRow = rowId === undefined ? '' : ` WHEN ${event === 'DELETE' ? 'OLD' : 'NEW'}.id = ${literal(rowId)}`;
+    this.connection.exec(
+      `CREATE TRIGGER ${name} BEFORE ${when} ON "${table}"${onRow} BEGIN SELECT RAISE(ABORT, ${literal(message)}); END`,
+    );
+    return () => this.connection.exec(`DROP TRIGGER ${name}`);
   }
 
   // D1 runs a batch as one implicit transaction: a failing statement rolls back all of them.
   async batch(statements: SqliteD1Statement[]): Promise<D1Result<Record<string, unknown>>[]> {
     return this.connection.transaction(() => statements.map((statement) => toD1Result(statement.execute())))();
   }
+}
 
-  // D1 exec() runs each line as its own statement, so multi-line SQL fails here as it does there.
-  async exec(query: string): Promise<D1ExecResult> {
-    const lines = query.trim().split('\n');
-    lines.forEach((line) => this.connection.exec(line));
-    return { count: lines.length, duration: 0 };
-  }
+// The stand-in behind a test env's DB binding, for its test seams.
+export function sqliteD1(db: D1Database): SqliteD1Database {
+  if (!(db instanceof SqliteD1Database)) throw new Error('Not a SQLite-backed test database');
+  return db;
 }
 
 // A fresh in-memory database per call, with the schema applied by the production bootstrap.

@@ -9,7 +9,7 @@ import { AuthService } from '../../services/auth';
 import type { Env, User } from '../../types';
 import { waitUntil } from './cloudflare-workers';
 import './workers-crypto';
-import { createSqliteD1 } from './d1-sqlite';
+import { createSqliteD1, sqliteD1, type StatementWrapper } from './d1-sqlite';
 import { initializeDatabase } from '../../db/migrate';
 import * as userRepo from '../../services/storage-user-repo';
 
@@ -244,18 +244,9 @@ export async function signInToAdminPortal(env: Env, email: string): Promise<{ co
   return { cookie: adminCookie(ADMIN_COOKIE, session.token, LIMITS.admin.sessionTtlSeconds), csrf: session.csrf };
 }
 
-// The tests' one seam onto the raw binding: every statement drizzle prepares from now on passes through
-// wrap, which may read its SQL text, fail it by throwing, or return a wrapped statement. Returns the undo.
-export function wrapStatements(
-  env: Env,
-  wrap: (query: string, statement: D1PreparedStatement) => D1PreparedStatement,
-): () => void {
-  // eslint-disable-next-line nodewarden/no-raw-sql -- test seam: forwards the statements drizzle prepares
-  const prepare = env.DB.prepare.bind(env.DB);
-  env.DB.prepare = (query: string) => wrap(query, prepare(query));
-  return () => {
-    env.DB.prepare = prepare;
-  };
+// Every statement drizzle prepares from now on passes through wrap (see SqliteD1Database.wrapStatements).
+export function wrapStatements(env: Env, wrap: StatementWrapper): () => void {
+  return sqliteD1(env.DB).wrapStatements(wrap);
 }
 
 // Runs `before` right before the first statement matching `pattern` executes, so a test can slip a
@@ -285,21 +276,17 @@ export type FailingWrite =
   | { table: Table; event: 'INSERT' | 'DELETE'; rowId?: string }
   | { table: Table; event: 'UPDATE'; column?: SQLiteColumn; rowId?: string };
 
-// Makes SQLite abort a matching write with `message`, so it fails inside its statement or batch exactly as a
-// failing D1 statement would and the whole batch rolls back; `rowId` narrows it to one row. Returns the undo
-// for tests that retry after the failure. A trigger is DDL, which drizzle cannot build.
+// Makes a matching write fail with `message` inside its statement or batch, so the whole batch rolls back
+// (see SqliteD1Database.failWrites); `rowId` narrows it to one row. Returns the undo for tests that retry.
 export async function abortWrites(env: Env, write: FailingWrite, message: string): Promise<() => Promise<void>> {
-  const name = `abort_${crypto.randomUUID().replaceAll('-', '')}`;
-  const literal = (value: string) => `'${value.replaceAll("'", "''")}'`;
-  const event = write.event === 'UPDATE' && write.column ? `UPDATE OF "${write.column.name}"` : write.event;
-  const onRow =
-    write.rowId === undefined ? '' : ` WHEN ${write.event === 'DELETE' ? 'OLD' : 'NEW'}.id = ${literal(write.rowId)}`;
-  // eslint-disable-next-line nodewarden/no-raw-sql -- test fault injection: drizzle cannot build triggers
-  await env.DB.exec(
-    `CREATE TRIGGER ${name} BEFORE ${event} ON "${getTableName(write.table)}"${onRow} BEGIN SELECT RAISE(ABORT, ${literal(message)}); END`,
+  const undo = sqliteD1(env.DB).failWrites(
+    {
+      table: getTableName(write.table),
+      event: write.event,
+      column: write.event === 'UPDATE' ? write.column?.name : undefined,
+      rowId: write.rowId,
+    },
+    message,
   );
-  return async () => {
-    // eslint-disable-next-line nodewarden/no-raw-sql -- drops the trigger created above
-    await env.DB.exec(`DROP TRIGGER ${name}`);
-  };
+  return async () => undo();
 }

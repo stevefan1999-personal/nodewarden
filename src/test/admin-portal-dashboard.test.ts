@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { captureEmail, createTestEnv, portalFetch, signInToAdminPortal, MAILABLE_DOMAIN } from './support/env';
-import { safeWriteAuditEvent } from '../services/audit-events';
+import { writeAuditEvent } from '../services/audit-events';
 
 test('dashboard shows configuration facts and portal events without credentials or the directory', async (t) => {
   t.mock.method(console, 'error', () => {});
@@ -12,12 +12,12 @@ test('dashboard shows configuration facts and portal events without credentials 
     SSO_CLIENT_SECRET: 'never-print-sso-secret',
   });
   const auth = await signInToAdminPortal(env, email);
-  await safeWriteAuditEvent(env, {
+  await writeAuditEvent(env.DB, {
     action: 'admin.portal.login',
     category: 'security',
     metadata: { adminEmail: email },
   });
-  await safeWriteAuditEvent(env, { action: 'nonportal_event', category: 'security' });
+  await writeAuditEvent(env.DB, { action: 'nonportal_event', category: 'security' });
   for (const state of ['enabled', 'misconfigured', 'disabled']) {
     if (state === 'misconfigured') env.EMAIL_FROM = 'bad';
     if (state === 'disabled') env.EMAIL = undefined;

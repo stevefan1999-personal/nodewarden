@@ -30,7 +30,7 @@ import {
   userIdToWebAuthnUserId,
   verifyAccountPasskeyToken,
 } from '../utils/account-passkeys';
-import { auditRequestMetadata, safeWriteAuditEvent } from '../services/audit-events';
+import { auditRequestMetadata, writeAuditEvent } from '../services/audit-events';
 import { ensureTwoFactorRecoveryCode } from '../services/two-factor-providers';
 import { createTwoFactorUserVerificationToken, verifyTwoFactorUserVerificationToken } from '../utils/jwt';
 import * as passkeyRepo from '../services/storage-account-passkey-repo';
@@ -477,7 +477,7 @@ export async function handlePutTwoFactorWebAuthn(
   AuthService.invalidateUserCache(userId);
 
   await recordUserEvent(env, request, user.id, EventType.UserUpdated2fa);
-  await safeWriteAuditEvent(env, {
+  await writeAuditEvent(env.DB, {
     actorUserId: userId,
     action: 'account.webauthn_2fa.enable',
     category: 'security',
@@ -523,7 +523,7 @@ export async function handleDeleteTwoFactorWebAuthn(
   AuthService.invalidateUserCache(userId);
 
   await recordUserEvent(env, request, user.id, EventType.UserUpdated2fa);
-  await safeWriteAuditEvent(env, {
+  await writeAuditEvent(env.DB, {
     actorUserId: userId,
     action: 'account.webauthn_2fa.delete',
     category: 'security',
@@ -750,7 +750,7 @@ export async function handleCreateAccountPasskeyCredential(
   };
 
   await passkeyRepo.saveAccountPasskeyCredential(env.DB, credential);
-  await safeWriteAuditEvent(env, {
+  await writeAuditEvent(env.DB, {
     actorUserId: userId,
     action: 'account.passkey.create',
     category: 'security',
@@ -800,7 +800,7 @@ export async function handleUpdateAccountPasskeyEncryption(
   );
   if (!updated) return errorResponse('Passkey not found', 404);
 
-  await safeWriteAuditEvent(env, {
+  await writeAuditEvent(env.DB, {
     actorUserId: userId,
     action: 'account.passkey.encryption.enable',
     category: 'security',
@@ -828,7 +828,7 @@ export async function handleDeleteAccountPasskeyCredential(
   const deleted = await passkeyRepo.deleteAccountPasskeyCredential(env.DB, userId, credentialId);
   if (!deleted) return errorResponse('Passkey not found', 404);
 
-  await safeWriteAuditEvent(env, {
+  await writeAuditEvent(env.DB, {
     actorUserId: userId,
     action: 'account.passkey.delete',
     category: 'security',

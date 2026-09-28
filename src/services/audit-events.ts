@@ -2,7 +2,6 @@ import type { SQL } from 'drizzle-orm';
 import { getOrm, withoutQueryParams } from '../db/client';
 import { auditLogs } from '../db/schema';
 import { SINGLE_ROW, boundRow } from '../db/sql';
-import type { Env } from '../types';
 import { generateUUID } from '../utils/uuid';
 import * as adminRepo from './storage-admin-repo';
 import * as configRepo from './storage-config-repo';
@@ -211,10 +210,6 @@ export async function writeAuditEvent(db: D1Database, event: AuditEventInput): P
   } catch (error) {
     console.error('audit log write failed', withoutQueryParams(error));
   }
-}
-
-export async function safeWriteAuditEvent(env: Env, event: AuditEventInput): Promise<void> {
-  await writeAuditEvent(env.DB, event);
 }
 
 // Folder, cipher, attachment and Send mutations leave the same row apart from the target type;

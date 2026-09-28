@@ -31,7 +31,7 @@ import { generateUUID, isUUID } from '../utils/uuid';
 import { issueSendAccessToken } from './sends';
 import { registerMobilePushDevice } from '../services/push-relay';
 import { buildAccountKeys, buildUserDecryptionOptions } from '../utils/user-decryption';
-import { auditRequestMetadata, safeWriteAuditEvent } from '../services/audit-events';
+import { auditRequestMetadata, writeAuditEvent } from '../services/audit-events';
 import {
   assertAccountPasskeyCredential,
   assertTwoFactorPasskeyCredential,
@@ -353,7 +353,7 @@ async function recordLoginFailure(
   action: string,
 ): Promise<void> {
   await recordUserEvent(env, request, user.id, EventType.UserFailedLogIn);
-  await safeWriteAuditEvent(env, {
+  await writeAuditEvent(env.DB, {
     actorUserId: user.id,
     action,
     category: 'auth',
@@ -435,7 +435,7 @@ async function completeLogin(
     shouldUseWebSession(request) ? 'web' : (body.client_id ?? '').toLowerCase() || 'other',
   );
   await recordUserEvent(env, request, user.id, EventType.UserLoggedIn);
-  await safeWriteAuditEvent(env, {
+  await writeAuditEvent(env.DB, {
     actorUserId: user.id,
     action: audit.action,
     category: 'auth',
@@ -477,7 +477,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
   let ssoContinuation: SsoContinuation | null = null;
   const clientIdentifier = getClientIdentifier(request);
   if (!clientIdentifier && body.grant_type !== 'refresh_token') {
-    await safeWriteAuditEvent(env, {
+    await writeAuditEvent(env.DB, {
       action: 'auth.client_ip.missing',
       category: 'auth',
       level: 'error',
@@ -893,7 +893,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
       });
     } catch (error) {
       await rateLimit.recordFailedLogin(loginIdentifier);
-      await safeWriteAuditEvent(env, {
+      await writeAuditEvent(env.DB, {
         actorUserId: null,
         action: 'auth.passkey.login.failed',
         category: 'auth',
@@ -1105,7 +1105,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
         );
       }
     } catch (error) {
-      await safeWriteAuditEvent(env, {
+      await writeAuditEvent(env.DB, {
         action: 'auth.refresh.failed.rate_limit_unavailable',
         category: 'auth',
         level: 'error',
@@ -1123,7 +1123,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
     }
 
     if (!clientIdentifier) {
-      await safeWriteAuditEvent(env, {
+      await writeAuditEvent(env.DB, {
         action: 'auth.client_ip.missing',
         category: 'auth',
         level: 'warn',
@@ -1141,7 +1141,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
     try {
       result = await auth.refreshAccessTokenDetailed(refreshToken);
     } catch (error) {
-      await safeWriteAuditEvent(env, {
+      await writeAuditEvent(env.DB, {
         action: 'auth.refresh.failed.temporarily_unavailable',
         category: 'auth',
         level: 'error',
@@ -1159,7 +1159,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
       });
     }
     if (!result.ok) {
-      await safeWriteAuditEvent(env, {
+      await writeAuditEvent(env.DB, {
         actorUserId: result.userId ?? null,
         action: `auth.refresh.failed.${result.reason}`,
         category: 'auth',

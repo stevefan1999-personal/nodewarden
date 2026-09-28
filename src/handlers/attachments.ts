@@ -414,9 +414,6 @@ export async function handleDeleteAttachment(
 }
 
 // Delete all attachments for a cipher (used when deleting cipher)
-export async function deleteAllAttachmentsForCipher(env: Env, cipherId: string): Promise<void> {
-  await deleteAllAttachmentsForCiphers(env, [cipherId]);
-}
 
 export async function deleteAllAttachmentsForCiphers(env: Env, cipherIds: string[]): Promise<void> {
   const attachmentsByCipher = await attachmentRepo.getAttachmentsByCipherIds(env.DB, cipherIds);

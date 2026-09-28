@@ -26,7 +26,7 @@ import {
 } from '../durable/notifications-hub';
 import { errorResponse, jsonResponse, parseBody } from '../utils/response';
 import { generateUUID, isUUID } from '../utils/uuid';
-import { deleteAllAttachmentsForCipher, deleteAllAttachmentsForCiphers } from './attachments';
+import { deleteAllAttachmentsForCiphers } from './attachments';
 import { parsePagination, encodeContinuationToken } from '../utils/pagination';
 import { cipherNotifyPayload, readActingDeviceIdentifier } from '../utils/device';
 import { writeDataAudit } from '../services/audit-events';
@@ -1306,7 +1306,7 @@ export async function handleDeleteCipherCompat(
   if (!cipher) return errorResponse('Cipher not found', 404);
 
   if (cipher.deletedAt) {
-    await deleteAllAttachmentsForCipher(env, id);
+    await deleteAllAttachmentsForCiphers(env, [id]);
     await deleteAuthorizedCipher(env.DB, cipher, userId);
     await afterCipherMutation(request, env, userId, cipher, notifyUserCipherDelete, EventType.CipherDeleted);
     await writeDataAudit(env.DB, request, userId, 'cipher', 'cipher.delete.permanent', {
@@ -1333,7 +1333,7 @@ export async function handlePermanentDeleteCipher(
   if (!cipher) return errorResponse('Cipher not found', 404);
 
   // Delete all attachments first
-  await deleteAllAttachmentsForCipher(env, id);
+  await deleteAllAttachmentsForCiphers(env, [id]);
 
   await deleteAuthorizedCipher(env.DB, cipher, userId);
   await afterCipherMutation(request, env, userId, cipher, notifyUserCipherDelete, EventType.CipherDeleted);

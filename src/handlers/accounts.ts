@@ -26,12 +26,7 @@ import {
 } from '../services/two-factor-providers';
 import { upsertCredentialAccount, credentialAccountStatement } from '../services/auth-accounts';
 import { RateLimitService, getClientIdentifier } from '../services/ratelimit';
-import {
-  auditRequestMetadata,
-  writeAuditEvent,
-  safeWriteAuditEvent,
-  auditEventStatement,
-} from '../services/audit-events';
+import { auditRequestMetadata, writeAuditEvent, auditEventStatement } from '../services/audit-events';
 import { z } from 'zod';
 import { errorResponse, jsonResponse, parseBody, unsupportedResponse } from '../utils/response';
 import { generateUUID } from '../utils/uuid';
@@ -1744,7 +1739,7 @@ export async function handleRecoverTwoFactor(request: Request, env: Env): Promis
     ip: getClientIdentifier(request) ?? 'Unknown',
   });
   await rateLimit.clearLoginAttempts(recoverLimitKey);
-  await safeWriteAuditEvent(env, {
+  await writeAuditEvent(env.DB, {
     actorUserId: user.id,
     action: 'account.totp.recover',
     category: 'security',

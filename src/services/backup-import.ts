@@ -2,7 +2,7 @@ import { syncVaultAdminRoles } from './vault-admin-role';
 import { and, count, eq, getTableName, TableAliasProxyHandler } from 'drizzle-orm';
 import type { SQLiteTable } from 'drizzle-orm/sqlite-core';
 
-import { getOrm } from '../db/client';
+import { chunkRows, columnCount, getOrm } from '../db/client';
 import { sqliteMaster } from '../db/migrate';
 import { attachments, ciphers, folders, sends } from '../db/schema';
 import type { Env, User } from '../types';
@@ -456,21 +456,21 @@ export async function importBackupArchiveBytes(
     const replaced = new Set<BackupTableName>(['config', 'user_revisions', 'domain_settings']);
     for (const name of BACKUP_TABLE_NAMES) {
       if (!db[name].length) continue;
-      // One statement per row into the table's shadow copy, one batch per table. Only the archived
-      // columns come from the row; every other column keeps its default.
+      // Multi-row inserts into the table's shadow copy, one batch per table. Only the archived columns come
+      // from the row; every other column keeps its default. Each row binds at most one parameter per
+      // schema column, so chunks by column count stay within D1's parameter limit.
       const target: SQLiteTable = shadowTable(BACKUP_TABLES[name].table);
       const replace = replaced.has(name);
-      const statements = db[name].map((row) => {
-        const insert = orm
-          .insert(target)
-          .values(
-            Object.fromEntries(
-              backupColumns(name).map(([key, column]) => [
-                key,
-                row[column.name] ?? (replace && column.notNull ? undefined : null),
-              ]),
-            ),
-          );
+      const values = db[name].map((row) =>
+        Object.fromEntries(
+          backupColumns(name).map(([key, column]) => [
+            key,
+            row[column.name] ?? (replace && column.notNull ? undefined : null),
+          ]),
+        ),
+      );
+      const statements = chunkRows(values, columnCount(target)).map((chunk) => {
+        const insert = orm.insert(target).values(chunk);
         return replace ? insert.onConflictDoNothing() : insert;
       });
       try {

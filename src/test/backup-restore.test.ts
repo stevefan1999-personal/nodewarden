@@ -216,3 +216,21 @@ test('backup restore rejects a row missing a required value outside the replace 
   );
   assert.deepEqual(await rowsOf(restored.DB, users, users.id), []);
 });
+
+test('backup restore writes tables with more rows than one D1 statement can bind', async () => {
+  const source = await createTestEnv();
+  // users has 31 columns, so each insert statement carries at most three rows under the 100-parameter cap.
+  const seeded = [];
+  for (let index = 0; index < 7; index++) seeded.push(await seedUser(source));
+  const restored = await createTestEnv();
+  await importBackupArchiveBytes(
+    (await buildBackupArchive(source, new Date(), { includeAttachments: false })).bytes,
+    restored,
+    seeded[0].id,
+    false,
+  );
+  assert.deepEqual(
+    (await getOrm(restored.DB).select({ id: users.id }).from(users)).map((row) => row.id).toSorted(),
+    seeded.map((user) => user.id).toSorted(),
+  );
+});

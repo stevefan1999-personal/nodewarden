@@ -1,20 +1,10 @@
 import { syncVaultAdminRoles } from './vault-admin-role';
-import { and, count, eq, getColumns, getTableName, TableAliasProxyHandler } from 'drizzle-orm';
+import { and, count, eq, getTableName, TableAliasProxyHandler } from 'drizzle-orm';
 import type { SQLiteTable } from 'drizzle-orm/sqlite-core';
 
 import { getOrm } from '../db/client';
 import { sqliteMaster } from '../db/migrate';
-import {
-  attachments,
-  ciphers,
-  config,
-  domainSettings,
-  folders,
-  sends,
-  userRevisions,
-  users,
-  webauthnCredentials,
-} from '../db/schema';
+import { attachments, ciphers, folders, sends } from '../db/schema';
 import type { Env, User } from '../types';
 import {
   KV_MAX_OBJECT_BYTES,
@@ -26,8 +16,12 @@ import {
 import { BACKUP_SETTINGS_CONFIG_KEY, normalizeImportedBackupSettingsValue } from './backup-config';
 import { YUBICO_BOOTSTRAP_CLAIM_CONFIG_KEY } from './yubico-config';
 import {
+  BACKUP_TABLE_NAMES,
+  BACKUP_TABLES,
+  backupColumns,
   type BackupManifestAttachmentBlob,
   type BackupPayload,
+  type BackupTableName,
   isSafeBackupAttachmentBlobName,
   parseBackupArchive,
   validateBackupPayloadContents,
@@ -35,31 +29,16 @@ import {
 
 // CONTRACT:
 // Restore is intentionally whitelist-based. Old backups may contain retired
-// fields, but only the columns listed here are imported. Keep this file in sync
-// with src/services/backup-archive.ts whenever backup contents change.
+// fields, but only the tables and columns BACKUP_TABLES (backup-archive.ts)
+// archives are imported.
 //
 // WHEN CHANGING THIS:
-// - Update BACKUP_TABLES, reset statements, prepared payloads,
-//   shadow-table count validation, insert column lists, and frontend import
-//   count types together.
+// - Give rows from older archives a value for every column a table gains in
+//   the prepared payload, as users, passkeys and ciphers do.
 // - Do not import users.api_key, even if an older backup contains it.
 // - Do not import, clear, or replace runtime authentication state such as
 //   devices, sessions, auth requests, or remembered 2FA device tokens.
 type SqlRow = Record<string, string | number | null>;
-
-// Restore order: every table follows the tables its rows reference.
-const BACKUP_TABLES = {
-  config,
-  users,
-  domain_settings: domainSettings,
-  user_revisions: userRevisions,
-  webauthn_credentials: webauthnCredentials,
-  folders,
-  ciphers,
-  attachments,
-};
-type BackupTableName = keyof typeof BACKUP_TABLES;
-const BACKUP_TABLE_NAMES = Object.keys(BACKUP_TABLES) as BackupTableName[];
 
 function shadowTableName(table: string): string {
   return `${table}__restore`;
@@ -119,7 +98,7 @@ async function validateShadowTableCounts(
   await Promise.all(
     BACKUP_TABLE_NAMES.map(async (table) => {
       const expected = expectedCounts[table] ?? 0;
-      const actual = await orm.$count(shadowTable(BACKUP_TABLES[table]));
+      const actual = await orm.$count(shadowTable(BACKUP_TABLES[table].table));
       if (actual !== expected) {
         throw new Error(`Restore shadow validation failed for ${table}: expected ${expected}, received ${actual}`);
       }
@@ -191,10 +170,6 @@ function attachmentRowKey(row: SqlRow): string {
   return `${cipherId}/${attachmentId}`;
 }
 
-function cloneRows(rows: SqlRow[]): SqlRow[] {
-  return rows.map((row) => ({ ...row }));
-}
-
 function upsertConfigRow(rows: SqlRow[], key: string, value: string): SqlRow[] {
   let replaced = false;
   const nextRows = rows.map((row) => {
@@ -206,41 +181,6 @@ function upsertConfigRow(rows: SqlRow[], key: string, value: string): SqlRow[] {
     nextRows.push({ key, value });
   }
   return nextRows;
-}
-
-// Writes archive rows into a table's shadow copy: one statement per row, one batch per table. Only the
-// allowlisted columns come from the archive; every other column keeps its default.
-async function restoreRows(
-  db: D1Database,
-  table: BackupTableName,
-  columns: readonly string[],
-  rows: SqlRow[],
-  replace = false,
-): Promise<void> {
-  if (!rows.length) return;
-  const orm = getOrm(db);
-  const target: SQLiteTable = shadowTable(BACKUP_TABLES[table]);
-  const imported = Object.entries(getColumns(target)).filter(([, column]) => columns.includes(column.name));
-  // `replace` keeps the INSERT OR REPLACE semantics these tables always had. REPLACE turns a NULL in a
-  // NOT NULL column into the column default, which drizzle binds for undefined. The shadow copy starts
-  // empty, so only a key the archive repeats can conflict; skipping it leaves the count check to reject
-  // the archive, as it did after REPLACE deduplicated the rows.
-  const statements = rows.map((row) => {
-    const insert = orm
-      .insert(target)
-      .values(
-        Object.fromEntries(
-          imported.map(([key, column]) => [key, row[column.name] ?? (replace && column.notNull ? undefined : null)]),
-        ),
-      );
-    return replace ? insert.onConflictDoNothing() : insert;
-  });
-  try {
-    await orm.batch(statements as [(typeof statements)[0], ...typeof statements]);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`Restore insert failed for ${shadowTableName(table)}: ${message}`);
-  }
 }
 
 function buildAttachmentBlobLookup(manifest: BackupPayload['manifest']): Map<string, BackupManifestAttachmentBlob> {
@@ -469,7 +409,7 @@ export async function importBackupArchiveBytes(
     // eslint-disable-next-line nodewarden/no-raw-sql -- shadow DDL is rewritten at runtime from the live tables' sqlite_master text
     await env.DB.batch(createStatements.map((statement) => env.DB.prepare(statement)));
     await report('import_data', 'data');
-    let configRows = cloneRows(prepared.payload.db.config).filter(
+    let configRows = prepared.payload.db.config.filter(
       (row) => String(row.key || '').trim() !== YUBICO_BOOTSTRAP_CLAIM_CONFIG_KEY,
     );
     const rawBackupSettings = configRows.find((row) => String(row.key || '').trim() === BACKUP_SETTINGS_CONFIG_KEY);
@@ -491,139 +431,57 @@ export async function importBackupArchiveBytes(
     // Imported preferences must survive a later baseline replay, including archives without this marker.
     configRows = upsertConfigRow(configRows, 'migration.verify-devices-on', '1');
     const db: BackupPayload['db'] = {
+      ...prepared.payload.db,
       config: configRows,
-      users: cloneRows(prepared.payload.db.users).map((row) => ({
+      users: prepared.payload.db.users.map((row) => ({
         ...row,
         email_verified: row.email_verified ?? 1,
         verify_devices: row.verify_devices ?? 0,
         yubikey_nfc: row.yubikey_nfc ?? 0,
       })),
-      domain_settings: cloneRows(prepared.payload.db.domain_settings),
-      user_revisions: cloneRows(prepared.payload.db.user_revisions),
       // Archives from before passkey purposes hold login passkeys only.
-      webauthn_credentials: cloneRows(prepared.payload.db.webauthn_credentials).map((row) => ({
+      webauthn_credentials: prepared.payload.db.webauthn_credentials.map((row) => ({
         ...row,
         purpose: row.purpose == null ? 'login' : String(row.purpose).trim() === 'twoFactor' ? 'twoFactor' : 'login',
       })),
-      folders: cloneRows(prepared.payload.db.folders),
-      ciphers: cloneRows(prepared.payload.db.ciphers).map((row) => ({
+      ciphers: prepared.payload.db.ciphers.map((row) => ({
         ...row,
         archived_at: row.archived_at ?? null,
       })),
-      attachments: cloneRows(prepared.payload.db.attachments),
     };
-    await restoreRows(env.DB, 'config', ['key', 'value'], db.config, true);
-    await restoreRows(
-      env.DB,
-      'users',
-      [
-        'id',
-        'email',
-        'email_verified',
-        'name',
-        'master_password_hint',
-        'master_password_hash',
-        'key',
-        'private_key',
-        'public_key',
-        'kdf_type',
-        'kdf_iterations',
-        'kdf_memory',
-        'kdf_parallelism',
-        'security_stamp',
-        'role',
-        'status',
-        'verify_devices',
-        'totp_secret',
-        'totp_recovery_code',
-        'two_factor_email',
-        'yubikey_key1',
-        'yubikey_key2',
-        'yubikey_key3',
-        'yubikey_key4',
-        'yubikey_key5',
-        'yubikey_nfc',
-        'created_at',
-        'updated_at',
-      ],
-      db.users,
-    );
-    await restoreRows(env.DB, 'user_revisions', ['user_id', 'revision_date'], db.user_revisions, true);
-    await restoreRows(
-      env.DB,
-      'domain_settings',
-      [
-        'user_id',
-        'equivalent_domains',
-        'custom_equivalent_domains',
-        'excluded_global_equivalent_domains',
-        'updated_at',
-      ],
-      db.domain_settings,
-      true,
-    );
-    await restoreRows(
-      env.DB,
-      'webauthn_credentials',
-      [
-        'id',
-        'user_id',
-        'purpose',
-        'name',
-        'public_key',
-        'credential_id',
-        'counter',
-        'type',
-        'aa_guid',
-        'transports',
-        'encrypted_user_key',
-        'encrypted_public_key',
-        'encrypted_private_key',
-        'supports_prf',
-        'created_at',
-        'updated_at',
-      ],
-      db.webauthn_credentials,
-    );
-    await restoreRows(env.DB, 'folders', ['id', 'user_id', 'name', 'created_at', 'updated_at'], db.folders);
-    await restoreRows(
-      env.DB,
-      'ciphers',
-      [
-        'id',
-        'user_id',
-        'organization_id',
-        'type',
-        'folder_id',
-        'name',
-        'notes',
-        'favorite',
-        'data',
-        'reprompt',
-        'key',
-        'created_at',
-        'updated_at',
-        'archived_at',
-        'deleted_at',
-      ],
-      db.ciphers,
-    );
-    await restoreRows(
-      env.DB,
-      'attachments',
-      ['id', 'cipher_id', 'file_name', 'size', 'size_name', 'key'],
-      db.attachments,
-    );
-    await validateShadowTableCounts(env.DB, {
-      config: db.config.length,
-      users: db.users.length,
-      domain_settings: db.domain_settings.length,
-      user_revisions: db.user_revisions.length,
-      webauthn_credentials: db.webauthn_credentials.length,
-      folders: db.folders.length,
-      ciphers: db.ciphers.length,
-      attachments: db.attachments.length,
-    });
+    // Config, revisions and domain settings keep the INSERT OR REPLACE semantics they always had. REPLACE
+    // turns a NULL in a NOT NULL column into the column default, which drizzle binds for undefined. The
+    // shadow copy starts empty, so only a key the archive repeats can conflict; skipping it leaves the
+    // count check to reject the archive, as it did after REPLACE deduplicated the rows.
+    const replaced = new Set<BackupTableName>(['config', 'user_revisions', 'domain_settings']);
+    for (const name of BACKUP_TABLE_NAMES) {
+      if (!db[name].length) continue;
+      // One statement per row into the table's shadow copy, one batch per table. Only the archived
+      // columns come from the row; every other column keeps its default.
+      const target: SQLiteTable = shadowTable(BACKUP_TABLES[name].table);
+      const replace = replaced.has(name);
+      const statements = db[name].map((row) => {
+        const insert = orm
+          .insert(target)
+          .values(
+            Object.fromEntries(
+              backupColumns(name).map(([key, column]) => [
+                key,
+                row[column.name] ?? (replace && column.notNull ? undefined : null),
+              ]),
+            ),
+          );
+        return replace ? insert.onConflictDoNothing() : insert;
+      });
+      try {
+        await orm.batch(statements as [(typeof statements)[0], ...typeof statements]);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        throw new Error(`Restore insert failed for ${shadowTableName(name)}: ${message}`);
+      }
+    }
+    const stagedCounts = Object.fromEntries(BACKUP_TABLE_NAMES.map((name) => [name, db[name].length]));
+    await validateShadowTableCounts(env.DB, stagedCounts);
 
     await report('restore_files', 'files');
     // Store each attachment blob; a row whose blob is missing or cannot be stored is skipped.
@@ -725,27 +583,16 @@ export async function importBackupArchiveBytes(
     } catch {
       // Reported by the count validation below.
     }
-    await validateShadowTableCounts(env.DB, {
-      config: db.config.length,
-      users: db.users.length,
-      domain_settings: db.domain_settings.length,
-      user_revisions: db.user_revisions.length,
-      webauthn_credentials: db.webauthn_credentials.length,
-      folders: db.folders.length,
-      ciphers: db.ciphers.length,
-      attachments: restored.restoredAttachments.length,
-    });
+    await validateShadowTableCounts(env.DB, { ...stagedCounts, attachments: restored.restoredAttachments.length });
     await report('finalize', 'finalize');
     // Commit by replacing live table contents from validated shadow tables.
     // This avoids D1 schema-rename edge cases while keeping current data intact
     // until the final batch succeeds.
     const swap = [
-      ...[attachments, ciphers, folders, webauthnCredentials, domainSettings, userRevisions, users, config].map(
-        (table) => orm.delete(table),
-      ),
+      ...BACKUP_TABLE_NAMES.toReversed().map((name) => orm.delete(BACKUP_TABLES[name].table)),
       // Copies by column name, not SELECT *: a live table's physical column order can differ from its
       // schema order (users does), so a positional copy under drizzle's column list would misplace values.
-      ...Object.values(BACKUP_TABLES).map(<T extends SQLiteTable>(live: T) =>
+      ...BACKUP_TABLE_NAMES.map((name) => BACKUP_TABLES[name].table).map(<T extends SQLiteTable>(live: T) =>
         orm.insert(live).select(orm.select().from(shadowTable(live))),
       ),
     ];

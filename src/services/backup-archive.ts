@@ -1,8 +1,8 @@
 import { zipSync, unzipSync, type UnzipFileInfo } from 'fflate';
 import { sha256 } from 'hono/utils/crypto';
 import { z } from 'zod';
-import { asc, getColumns, getTableName } from 'drizzle-orm';
-import type { SQLiteTable } from 'drizzle-orm/sqlite-core';
+import { asc, getColumns } from 'drizzle-orm';
+import { getTableConfig, type SQLiteColumn } from 'drizzle-orm/sqlite-core';
 
 import { getOrm } from '../db/client';
 import {
@@ -28,8 +28,9 @@ import { getAttachmentObjectKey, getBlobStorageKind } from './blob-store';
 // step with src/services/backup-import.ts.
 //
 // WHEN CHANGING THIS:
-// - Add persistent tables to BackupPayload, export SQL, manifest tableCounts,
-//   and validateBackupPayloadContents().
+// - Add persistent tables to BACKUP_TABLES, in restore order: export, restore,
+//   manifest tableCounts and the db allowlist all follow it. Put cross-row rules
+//   the database cannot check in validateBackupPayloadContents().
 // - Keep secrets and transient runtime rows sanitized before writing db.json.
 // - Runtime authentication state (devices, sessions, auth requests, remembered
 //   2FA devices, and one-time tokens) must never enter an instance backup.
@@ -79,6 +80,30 @@ export type BackupManifestAttachmentBlob = z.infer<typeof BackupManifestAttachme
 const sqlRows = z.array(z.record(z.string(), z.union([z.string(), z.number(), z.null()])));
 const optionalSqlRows = sqlRows.nullish().transform((rows) => rows ?? []);
 
+// The tables an instance backup carries, in restore order: each follows the tables its rows reference.
+// An archived row holds every column of its table except `omit`: the personal API key and the runtime user
+// key id never leave an instance, nor does Better Auth's profile image, which Bitwarden clients never set.
+// Every archive carries the `required` tables.
+export const BACKUP_TABLES = {
+  config: { table: config, required: true },
+  users: { table: users, required: true, omit: ['api_key', 'user_key_id', 'image'] },
+  domain_settings: { table: domainSettings },
+  user_revisions: { table: userRevisions, required: true },
+  webauthn_credentials: { table: webauthnCredentials },
+  folders: { table: folders, required: true },
+  ciphers: { table: ciphers, required: true },
+  attachments: { table: attachments, required: true },
+} as const;
+export type BackupTableName = keyof typeof BACKUP_TABLES;
+export const BACKUP_TABLE_NAMES = Object.keys(BACKUP_TABLES) as BackupTableName[];
+
+// Each archived column of a table with its drizzle property key, in schema order.
+export function backupColumns(name: BackupTableName): Array<[string, SQLiteColumn]> {
+  const spec = BACKUP_TABLES[name];
+  const omit: readonly string[] = 'omit' in spec ? spec.omit : [];
+  return Object.entries(getColumns(spec.table)).filter(([, column]) => !omit.includes(column.name));
+}
+
 // Restore reads only the format version and the attachment references from the manifest. The db
 // shape is an explicit allowlist: z.object strips extra tables from old or modified archives,
 // especially runtime authentication state.
@@ -94,16 +119,9 @@ const BackupPayloadSchema = z.object({
     { error: 'Unsupported backup format version' },
   ),
   db: z.object(
-    {
-      config: sqlRows,
-      users: sqlRows,
-      user_revisions: sqlRows,
-      domain_settings: optionalSqlRows,
-      folders: sqlRows,
-      ciphers: sqlRows,
-      attachments: sqlRows,
-      webauthn_credentials: optionalSqlRows,
-    },
+    Object.fromEntries(
+      BACKUP_TABLE_NAMES.map((name) => [name, 'required' in BACKUP_TABLES[name] ? sqlRows : optionalSqlRows]),
+    ) as Record<BackupTableName, typeof optionalSqlRows>,
     { error: 'Backup archive database payload is invalid' },
   ),
 });
@@ -137,27 +155,6 @@ export interface BackupArchiveBuildProgressEvent {
 }
 
 export type BackupArchiveBuildProgressReporter = (event: BackupArchiveBuildProgressEvent) => Promise<void>;
-
-// Archive rows keep database column names, their order and the raw stored values: each listed column
-// is selected through unmapped(), so no drizzle value mapping runs. A name the schema lacks
-// throws instead of exporting undefined.
-async function queryRows(
-  db: D1Database,
-  table: SQLiteTable,
-  columnNames: string[],
-  orderBy: string[],
-): Promise<SqlRow[]> {
-  const columns = new Map(Object.values(getColumns(table)).map((column) => [column.name, column]));
-  const schemaColumn = (name: string) => {
-    const column = columns.get(name);
-    if (!column) throw new Error(`Backup export column ${getTableName(table)}.${name} is not in the schema`);
-    return column;
-  };
-  return getOrm(db)
-    .select(Object.fromEntries(columnNames.map((name) => [name, unmapped<string | number | null>(schemaColumn(name))])))
-    .from(table)
-    .orderBy(...orderBy.map((name) => asc(schemaColumn(name))));
-}
 
 export function extractBackupFileChecksumPrefix(fileName: string): string | null {
   const normalized = String(fileName || '').trim();
@@ -468,116 +465,31 @@ export async function buildBackupArchive(
     includeAttachments,
   });
   const encoder = new TextEncoder();
-  const [
-    configRows,
-    userRows,
-    domainSettingsRows,
-    revisionRows,
-    folderRows,
-    cipherRows,
-    attachmentRows,
-    accountPasskeyRows,
-  ] = await Promise.all([
-    queryRows(env.DB, config, ['key', 'value'], ['key']),
-    queryRows(
-      env.DB,
-      users,
-      [
-        'id',
-        'email',
-        'email_verified',
-        'name',
-        'master_password_hint',
-        'master_password_hash',
-        'key',
-        'private_key',
-        'public_key',
-        'kdf_type',
-        'kdf_iterations',
-        'kdf_memory',
-        'kdf_parallelism',
-        'security_stamp',
-        'role',
-        'status',
-        'verify_devices',
-        'totp_secret',
-        'totp_recovery_code',
-        'two_factor_email',
-        'yubikey_key1',
-        'yubikey_key2',
-        'yubikey_key3',
-        'yubikey_key4',
-        'yubikey_key5',
-        'yubikey_nfc',
-        'created_at',
-        'updated_at',
-      ],
-      ['created_at'],
+  const orm = getOrm(env.DB);
+  const rows = Object.fromEntries(
+    await Promise.all(
+      BACKUP_TABLE_NAMES.map(async (name) => {
+        // Rows keep database column names and raw stored values: every column is selected through
+        // unmapped(), so no drizzle value mapping runs. Rows follow the primary key, so repeated exports
+        // list them in the same order.
+        const { table } = BACKUP_TABLES[name];
+        const { primaryKeys, columns } = getTableConfig(table);
+        const primaryKey = primaryKeys[0]?.columns ?? columns.filter((column) => column.primary);
+        const selected = await orm
+          .select(
+            Object.fromEntries(
+              backupColumns(name).map(([, column]) => [column.name, unmapped<string | number | null>(column)]),
+            ),
+          )
+          .from(table)
+          .orderBy(...primaryKey.map((column) => asc(column)));
+        return [name, selected];
+      }),
     ),
-    queryRows(
-      env.DB,
-      domainSettings,
-      [
-        'user_id',
-        'equivalent_domains',
-        'custom_equivalent_domains',
-        'excluded_global_equivalent_domains',
-        'updated_at',
-      ],
-      ['user_id'],
-    ),
-    queryRows(env.DB, userRevisions, ['user_id', 'revision_date'], ['user_id']),
-    queryRows(env.DB, folders, ['id', 'user_id', 'name', 'created_at', 'updated_at'], ['created_at']),
-    queryRows(
-      env.DB,
-      ciphers,
-      [
-        'id',
-        'user_id',
-        'organization_id',
-        'type',
-        'folder_id',
-        'name',
-        'notes',
-        'favorite',
-        'data',
-        'reprompt',
-        'key',
-        'created_at',
-        'updated_at',
-        'archived_at',
-        'deleted_at',
-      ],
-      ['created_at'],
-    ),
-    queryRows(env.DB, attachments, ['id', 'cipher_id', 'file_name', 'size', 'size_name', 'key'], ['cipher_id', 'id']),
-    queryRows(
-      env.DB,
-      webauthnCredentials,
-      [
-        'id',
-        'user_id',
-        'purpose',
-        'name',
-        'public_key',
-        'credential_id',
-        'counter',
-        'type',
-        'aa_guid',
-        'transports',
-        'encrypted_user_key',
-        'encrypted_public_key',
-        'encrypted_private_key',
-        'supports_prf',
-        'created_at',
-        'updated_at',
-      ],
-      ['created_at'],
-    ),
-  ]);
+  ) as Record<BackupTableName, SqlRow[]>;
   // Runner locks and the Yubico bootstrap claim stay with this instance; backup settings leave only as
   // their portable envelope.
-  const exportedConfigRows = configRows.flatMap((row): SqlRow[] => {
+  const exportedConfigRows = rows.config.flatMap((row): SqlRow[] => {
     const key = String(row.key || '').trim();
     if (!key || key === BACKUP_RUNNER_LOCK_CONFIG_KEY || key === YUBICO_BOOTSTRAP_CLAIM_CONFIG_KEY) return [];
     if (key === BACKUP_SETTINGS_CONFIG_KEY) {
@@ -586,7 +498,7 @@ export async function buildBackupArchive(
     }
     return [{ ...row }];
   });
-  const exportedAttachmentRows = includeAttachments ? attachmentRows : [];
+  const exportedAttachmentRows = includeAttachments ? rows.attachments : [];
   const attachmentBlobs: BackupManifestAttachmentBlob[] = exportedAttachmentRows.map((row) => {
     const cipherId = String(row.cipher_id || '').trim();
     const attachmentId = String(row.id || '').trim();
@@ -598,21 +510,17 @@ export async function buildBackupArchive(
     };
   });
 
+  const exported: Record<BackupTableName, SqlRow[]> = {
+    ...rows,
+    config: exportedConfigRows,
+    attachments: exportedAttachmentRows,
+  };
   const manifestBase = {
     formatVersion: BACKUP_FORMAT_VERSION,
     exportedAt: date.toISOString(),
     appVersion: APP_VERSION,
     storageKind: getBlobStorageKind(env),
-    tableCounts: {
-      config: exportedConfigRows.length,
-      users: userRows.length,
-      domain_settings: domainSettingsRows.length,
-      user_revisions: revisionRows.length,
-      folders: folderRows.length,
-      ciphers: cipherRows.length,
-      attachments: exportedAttachmentRows.length,
-      webauthn_credentials: accountPasskeyRows.length,
-    },
+    tableCounts: Object.fromEntries(BACKUP_TABLE_NAMES.map((name) => [name, exported[name].length])),
     includes: {
       attachments: includeAttachments,
     },
@@ -626,22 +534,7 @@ export async function buildBackupArchive(
 
   const files: Record<string, Uint8Array> = {
     'manifest.json': encoder.encode(JSON.stringify(manifestBase, null, BACKUP_JSON_INDENT)),
-    'db.json': encoder.encode(
-      JSON.stringify(
-        {
-          config: exportedConfigRows,
-          users: userRows,
-          domain_settings: domainSettingsRows,
-          user_revisions: revisionRows,
-          folders: folderRows,
-          ciphers: cipherRows,
-          attachments: exportedAttachmentRows,
-          webauthn_credentials: accountPasskeyRows,
-        },
-        null,
-        BACKUP_JSON_INDENT,
-      ),
-    ),
+    'db.json': encoder.encode(JSON.stringify(exported, null, BACKUP_JSON_INDENT)),
   };
 
   await options.progress?.({

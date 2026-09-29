@@ -25,7 +25,7 @@ import {
   notifyUserCiphersSync,
   notifyUserVaultSync,
 } from '../durable/notifications-hub';
-import { errorResponse, jsonResponse, parseBody } from '../utils/response';
+import { errorResponse, jsonResponse, type BodyContext } from '../utils/response';
 import { generateUUID, isUUID } from '../utils/uuid';
 import { deleteAllAttachmentsForCiphers } from './attachments';
 import { parsePagination, encodeContinuationToken } from '../utils/pagination';
@@ -167,7 +167,7 @@ const CipherData = z.looseObject({
 type CipherData = z.output<typeof CipherData>;
 
 // Android wraps organization ciphers as { cipher, collectionIds }; other clients send the cipher itself.
-const CipherBody = CipherData.extend({ cipher: CipherData.nullish() });
+export const CipherBody = CipherData.extend({ cipher: CipherData.nullish() });
 
 // Ids are compared as trimmed strings; blanks and repeats are dropped before any lookup.
 function idList(error?: string) {
@@ -182,7 +182,7 @@ export function nonEmptyIdList(error: string) {
 
 const requiredId = (error: string) => z.unknown().transform(normalizeOptionalId).pipe(z.string({ error }));
 
-const CipherIdsBody = z.object({ ids: idList('ids array is required') });
+export const CipherIdsBody = z.object({ ids: idList('ids array is required') });
 
 // Upstream CipherShareRequestModel / CipherBulkShareRequestModel validation messages.
 const NO_SHARE_COLLECTION = 'You must select at least one collection.';
@@ -190,7 +190,7 @@ const NO_SHARE_CIPHER = 'You must select at least one cipher.';
 const SHARE_CIPHER_UNIDENTIFIED = 'All Ciphers must have an Id and OrganizationId.';
 const SHARE_ORGANIZATION_REQUIRED = 'Cipher OrganizationId is required.';
 
-const ShareCipherBody = z.object({
+export const ShareCipherBody = z.object({
   cipher: z.looseObject(
     { ...CipherData.shape, organizationId: requiredId(SHARE_ORGANIZATION_REQUIRED) },
     { error: SHARE_ORGANIZATION_REQUIRED },
@@ -200,7 +200,7 @@ const ShareCipherBody = z.object({
 
 // The whole share is one D1 batch, so its size is capped like an import. The piped item checks run
 // only once the count checks pass, so an oversized or empty list answers with its count message.
-const BulkShareCiphersBody = z.object({
+export const BulkShareCiphersBody = z.object({
   ciphers: z
     .array(z.unknown(), { error: NO_SHARE_CIPHER })
     .min(1, { error: NO_SHARE_CIPHER })
@@ -923,10 +923,9 @@ async function verifyFolderOwnership(
 }
 
 // POST /api/ciphers
-export async function handleCreateCipher(c: AppContext): Promise<Response> {
+export async function handleCreateCipher(c: BodyContext<typeof CipherBody>): Promise<Response> {
   const { userId } = c.var;
-  const body = await parseBody(c.req.raw, CipherBody);
-  if (body instanceof Response) return body;
+  const body = c.req.valid('json');
   const cipherData = body.cipher ?? body;
 
   const now = new Date().toISOString();
@@ -1046,13 +1045,16 @@ function mergeFullCipherUpdate(
 }
 
 // PUT /api/ciphers/:id
-export async function handleUpdateCipher(c: AppContext, id: string, asAdmin = false): Promise<Response> {
+export async function handleUpdateCipher(
+  c: BodyContext<typeof CipherBody>,
+  id: string,
+  asAdmin = false,
+): Promise<Response> {
   const { userId } = c.var;
   const existingCipher = await loadAccessibleCipher(c.env.DB, userId, id, asAdmin ? 'admin-edit' : 'edit');
   if (!existingCipher) return errorResponse('Cipher not found', 404);
 
-  const body = await parseBody(c.req.raw, CipherBody);
-  if (body instanceof Response) return body;
+  const body = c.req.valid('json');
   const cipherData = body.cipher ?? body;
   // Upstream CiphersController.Put: an item changes owner only through share, so a different
   // organizationId means a stale client copy. An omitted one (NodeWarden web repair) keeps the owner.
@@ -1149,10 +1151,9 @@ async function shareOwnedCiphers(
 }
 
 // PUT/POST /api/ciphers/:id/share
-export async function handleShareCipher(c: AppContext, id: string): Promise<Response> {
+export async function handleShareCipher(c: BodyContext<typeof ShareCipherBody>, id: string): Promise<Response> {
   const { userId } = c.var;
-  const body = await parseBody(c.req.raw, ShareCipherBody);
-  if (body instanceof Response) return body;
+  const body = c.req.valid('json');
   const { cipher: cipherData, collectionIds } = body;
   const { organizationId } = cipherData;
 
@@ -1178,10 +1179,9 @@ export async function handleShareCipher(c: AppContext, id: string): Promise<Resp
 }
 
 // PUT/POST /api/ciphers/share
-export async function handleBulkShareCiphers(c: AppContext): Promise<Response> {
+export async function handleBulkShareCiphers(c: BodyContext<typeof BulkShareCiphersBody>): Promise<Response> {
   const { userId } = c.var;
-  const body = await parseBody(c.req.raw, BulkShareCiphersBody);
-  if (body instanceof Response) return body;
+  const body = c.req.valid('json');
   const { ciphers: requested, collectionIds } = body;
 
   // Upstream PutShareMany checks membership before ownership.
@@ -1217,15 +1217,16 @@ export async function handleBulkShareCiphers(c: AppContext): Promise<Response> {
   });
 }
 
+export const UpdateCipherCollectionsBody = z.object({ collectionIds: idList('The CollectionIds field is required.') });
+
 // PUT/POST /api/ciphers/:id/collections_v2 and /api/ciphers/:id/collections-admin
 export async function handleUpdateCipherCollections(
-  c: AppContext,
+  c: BodyContext<typeof UpdateCipherCollectionsBody>,
   id: string,
   mode: CollectionChangeMode,
 ): Promise<Response> {
   const { userId } = c.var;
-  const body = await parseBody(c.req.raw, z.object({ collectionIds: idList('The CollectionIds field is required.') }));
-  if (body instanceof Response) return body;
+  const body = c.req.valid('json');
 
   const change = await planCipherCollectionChange(c.env, c.env.DB, userId, id, body.collectionIds, mode);
   if (!change.ok) return errorResponse(change.message, change.status);
@@ -1355,17 +1356,18 @@ export async function handleRestoreCipher(c: AppContext, id: string): Promise<Re
   return cipherJsonResponse(c.req.raw, cipher);
 }
 
+export const PartialUpdateCipherBody = z.object({ folderId: z.unknown().optional(), favorite: z.boolean().optional() });
+
 // PUT /api/ciphers/:id/partial - Update only favorite/folderId
-export async function handlePartialUpdateCipher(c: AppContext, id: string): Promise<Response> {
+export async function handlePartialUpdateCipher(
+  c: BodyContext<typeof PartialUpdateCipherBody>,
+  id: string,
+): Promise<Response> {
   const { userId } = c.var;
   const cipher = await loadAccessibleCipher(c.env.DB, userId, id, 'edit');
   if (!cipher) return errorResponse('Cipher not found', 404);
 
-  const body = await parseBody(
-    c.req.raw,
-    z.object({ folderId: z.unknown().optional(), favorite: z.boolean().optional() }),
-  );
-  if (body instanceof Response) return body;
+  const body = c.req.valid('json');
 
   if (body.folderId !== undefined) {
     const folderId = normalizeOptionalId(body.folderId);
@@ -1387,11 +1389,12 @@ export async function handlePartialUpdateCipher(c: AppContext, id: string): Prom
   return cipherJsonResponse(c.req.raw, cipher);
 }
 
+export const BulkMoveCiphersBody = CipherIdsBody.extend({ folderId: z.unknown().optional() });
+
 // POST/PUT /api/ciphers/move - Bulk move to folder
-export async function handleBulkMoveCiphers(c: AppContext): Promise<Response> {
+export async function handleBulkMoveCiphers(c: BodyContext<typeof BulkMoveCiphersBody>): Promise<Response> {
   const { userId } = c.var;
-  const body = await parseBody(c.req.raw, CipherIdsBody.extend({ folderId: z.unknown().optional() }));
-  if (body instanceof Response) return body;
+  const body = c.req.valid('json');
 
   const folderId = normalizeOptionalId(body.folderId);
   if (folderId) {
@@ -1457,10 +1460,9 @@ export async function handleUnarchiveCipher(c: AppContext, id: string): Promise<
 }
 
 // PUT/POST /api/ciphers/archive
-export async function handleBulkArchiveCiphers(c: AppContext): Promise<Response> {
+export async function handleBulkArchiveCiphers(c: BodyContext<typeof CipherIdsBody>): Promise<Response> {
   const { userId } = c.var;
-  const body = await parseBody(c.req.raw, CipherIdsBody);
-  if (body instanceof Response) return body;
+  const body = c.req.valid('json');
   const { ids } = body;
   return finishBulkCipherState(c.req.raw, c.env, userId, ids, 'bulkArchiveCiphers', null, () =>
     buildCipherListResponse(c.req.raw, c.env.DB, userId, ids),
@@ -1468,10 +1470,9 @@ export async function handleBulkArchiveCiphers(c: AppContext): Promise<Response>
 }
 
 // PUT/POST /api/ciphers/unarchive
-export async function handleBulkUnarchiveCiphers(c: AppContext): Promise<Response> {
+export async function handleBulkUnarchiveCiphers(c: BodyContext<typeof CipherIdsBody>): Promise<Response> {
   const { userId } = c.var;
-  const body = await parseBody(c.req.raw, CipherIdsBody);
-  if (body instanceof Response) return body;
+  const body = c.req.valid('json');
   const { ids } = body;
   return finishBulkCipherState(c.req.raw, c.env, userId, ids, 'bulkUnarchiveCiphers', null, () =>
     buildCipherListResponse(c.req.raw, c.env.DB, userId, ids),
@@ -1479,10 +1480,9 @@ export async function handleBulkUnarchiveCiphers(c: AppContext): Promise<Respons
 }
 
 // POST /api/ciphers/delete - Bulk soft delete
-export async function handleBulkDeleteCiphers(c: AppContext): Promise<Response> {
+export async function handleBulkDeleteCiphers(c: BodyContext<typeof CipherIdsBody>): Promise<Response> {
   const { userId } = c.var;
-  const body = await parseBody(c.req.raw, CipherIdsBody);
-  if (body instanceof Response) return body;
+  const body = c.req.valid('json');
   return finishBulkCipherState(
     c.req.raw,
     c.env,
@@ -1495,10 +1495,9 @@ export async function handleBulkDeleteCiphers(c: AppContext): Promise<Response> 
 }
 
 // POST /api/ciphers/restore - Bulk restore
-export async function handleBulkRestoreCiphers(c: AppContext): Promise<Response> {
+export async function handleBulkRestoreCiphers(c: BodyContext<typeof CipherIdsBody>): Promise<Response> {
   const { userId } = c.var;
-  const body = await parseBody(c.req.raw, CipherIdsBody);
-  if (body instanceof Response) return body;
+  const body = c.req.valid('json');
   return finishBulkCipherState(
     c.req.raw,
     c.env,
@@ -1511,10 +1510,9 @@ export async function handleBulkRestoreCiphers(c: AppContext): Promise<Response>
 }
 
 // POST /api/ciphers/delete-permanent - Bulk permanent delete
-export async function handleBulkPermanentDeleteCiphers(c: AppContext): Promise<Response> {
+export async function handleBulkPermanentDeleteCiphers(c: BodyContext<typeof CipherIdsBody>): Promise<Response> {
   const { userId } = c.var;
-  const body = await parseBody(c.req.raw, CipherIdsBody);
-  if (body instanceof Response) return body;
+  const body = c.req.valid('json');
   const { ids } = body;
   if (!ids.length) {
     return new Response(null, { status: 204 });

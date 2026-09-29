@@ -1,10 +1,10 @@
 import type { AppContext } from '../router';
 import { z } from 'zod';
-import { Env, User, Invite } from '../types';
+import { User, Invite } from '../types';
 import { AuthService } from '../services/auth';
 import { twoFactorProviders } from '../services/two-factor-providers';
 import { userRepo } from '../services/storage-user-repo';
-import { errorResponse, jsonResponse, parseBody } from '../utils/response';
+import { errorResponse, jsonResponse, type BodyContext } from '../utils/response';
 import { deleteUserAccount, setUserStatus } from '../services/account-deletion';
 import {
   auditRequestMetadata,
@@ -20,32 +20,29 @@ function isAdmin(user: User): boolean {
 }
 
 const PASSWORD_REQUIRED = 'masterPasswordHash is required';
-const PasswordBody = z.object(
+export const PasswordBody = z.object(
   { masterPasswordHash: z.string({ error: PASSWORD_REQUIRED }).trim().min(1, { error: PASSWORD_REQUIRED }) },
   { error: PASSWORD_REQUIRED },
 );
 const DEFAULT_INVITE_HOURS = 24 * 7;
 const MAX_INVITE_HOURS = 24 * 30;
-const InviteBody = PasswordBody.extend({
+export const InviteBody = PasswordBody.extend({
   expiresInHours: z.coerce
     .number()
     .catch(DEFAULT_INVITE_HOURS)
     .transform((hours) => Math.max(1, Math.min(MAX_INVITE_HOURS, Math.floor(hours)))),
 });
-const StatusBody = PasswordBody.extend({
+export const StatusBody = PasswordBody.extend({
   status: z.enum(['active', 'banned'], { error: 'status must be active or banned' }),
 });
 
-// Every destructive admin action re-proves the master password; unparseable JSON reads as a missing one.
+// Every destructive admin action re-proves the master password.
 async function readConfirmedBody<S extends typeof PasswordBody>(
-  request: Request,
-  env: Env,
+  c: BodyContext<S>,
   actorUser: User,
-  schema: S,
 ): Promise<z.output<S> | Response> {
-  const body = await parseBody(request, schema, PASSWORD_REQUIRED);
-  if (body instanceof Response) return body;
-  const valid = await new AuthService(env).verifyPassword(
+  const body = c.req.valid('json');
+  const valid = await new AuthService(c.env).verifyPassword(
     body.masterPasswordHash,
     actorUser.masterPasswordHash,
     actorUser.email,
@@ -176,14 +173,17 @@ export async function handleAdminGetAuditLogSettings(c: AppContext): Promise<Res
   });
 }
 
+export const AdminUpdateAuditLogSettingsBody = z.unknown();
+
 // PUT /api/admin/logs/settings
-export async function handleAdminUpdateAuditLogSettings(c: AppContext): Promise<Response> {
+export async function handleAdminUpdateAuditLogSettings(
+  c: BodyContext<typeof AdminUpdateAuditLogSettingsBody>,
+): Promise<Response> {
   const { currentUser: actorUser } = c.var;
   if (!isAdmin(actorUser)) {
     return errorResponse('Forbidden', 403);
   }
-  const body = await parseBody(c.req.raw, z.unknown());
-  if (body instanceof Response) return body;
+  const body = c.req.valid('json');
   const settings = await saveAuditLogSettings(c.env.DB, normalizeAuditLogSettings(body));
   await writeAuditLog(
     c.env.DB,
@@ -222,13 +222,13 @@ export async function handleAdminClearAuditLogs(c: AppContext): Promise<Response
 }
 
 // POST /api/admin/invites
-export async function handleAdminCreateInvite(c: AppContext): Promise<Response> {
+export async function handleAdminCreateInvite(c: BodyContext<typeof InviteBody>): Promise<Response> {
   const { currentUser: actorUser } = c.var;
   if (!isAdmin(actorUser)) {
     return errorResponse('Forbidden', 403);
   }
 
-  const body = await readConfirmedBody(c.req.raw, c.env, actorUser, InviteBody);
+  const body = await readConfirmedBody(c, actorUser);
   if (body instanceof Response) return body;
   const { expiresInHours } = body;
   const now = new Date();
@@ -277,13 +277,13 @@ export async function handleAdminListInvites(c: AppContext): Promise<Response> {
 }
 
 // DELETE /api/admin/invites/:code
-export async function handleAdminDeleteInvite(c: AppContext, code: string): Promise<Response> {
+export async function handleAdminDeleteInvite(c: BodyContext<typeof PasswordBody>, code: string): Promise<Response> {
   const { currentUser: actorUser } = c.var;
   if (!isAdmin(actorUser)) {
     return errorResponse('Forbidden', 403);
   }
 
-  const confirmed = await readConfirmedBody(c.req.raw, c.env, actorUser, PasswordBody);
+  const confirmed = await readConfirmedBody(c, actorUser);
   if (confirmed instanceof Response) return confirmed;
 
   const deleted = await adminRepo(c.env.DB).deleteInvite(code);
@@ -306,13 +306,13 @@ export async function handleAdminDeleteInvite(c: AppContext, code: string): Prom
 }
 
 // DELETE /api/admin/invites
-export async function handleAdminDeleteAllInvites(c: AppContext): Promise<Response> {
+export async function handleAdminDeleteAllInvites(c: BodyContext<typeof PasswordBody>): Promise<Response> {
   const { currentUser: actorUser } = c.var;
   if (!isAdmin(actorUser)) {
     return errorResponse('Forbidden', 403);
   }
 
-  const confirmed = await readConfirmedBody(c.req.raw, c.env, actorUser, PasswordBody);
+  const confirmed = await readConfirmedBody(c, actorUser);
   if (confirmed instanceof Response) return confirmed;
 
   const url = new URL(c.req.raw.url);
@@ -350,13 +350,16 @@ export async function handleAdminDeleteAllInvites(c: AppContext): Promise<Respon
 }
 
 // PUT /api/admin/users/:id/status
-export async function handleAdminSetUserStatus(c: AppContext, targetUserId: string): Promise<Response> {
+export async function handleAdminSetUserStatus(
+  c: BodyContext<typeof StatusBody>,
+  targetUserId: string,
+): Promise<Response> {
   const { currentUser: actorUser } = c.var;
   if (!isAdmin(actorUser)) {
     return errorResponse('Forbidden', 403);
   }
 
-  const body = await readConfirmedBody(c.req.raw, c.env, actorUser, StatusBody);
+  const body = await readConfirmedBody(c, actorUser);
   if (body instanceof Response) return body;
   const nextStatus = body.status;
   if (targetUserId === actorUser.id && nextStatus !== 'active') {
@@ -391,7 +394,10 @@ export async function handleAdminSetUserStatus(c: AppContext, targetUserId: stri
 }
 
 // DELETE /api/admin/users/:id
-export async function handleAdminDeleteUser(c: AppContext, targetUserId: string): Promise<Response> {
+export async function handleAdminDeleteUser(
+  c: BodyContext<typeof PasswordBody>,
+  targetUserId: string,
+): Promise<Response> {
   const { currentUser: actorUser } = c.var;
   if (!isAdmin(actorUser)) {
     return errorResponse('Forbidden', 403);
@@ -400,7 +406,7 @@ export async function handleAdminDeleteUser(c: AppContext, targetUserId: string)
     return errorResponse('You cannot delete yourself', 400);
   }
 
-  const confirmed = await readConfirmedBody(c.req.raw, c.env, actorUser, PasswordBody);
+  const confirmed = await readConfirmedBody(c, actorUser);
   if (confirmed instanceof Response) return confirmed;
 
   const target = await userRepo(c.env.DB).getUserById(targetUserId);

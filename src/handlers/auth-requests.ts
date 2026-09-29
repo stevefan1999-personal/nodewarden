@@ -4,7 +4,7 @@ import { generateUUID } from '../utils/uuid';
 import { z } from 'zod';
 import { deviceTypeName, readAuthRequestDeviceInfo, readActingDeviceIdentifier } from '../utils/device';
 import { isSerializedEncString } from '../utils/account-passkeys';
-import { errorResponse, jsonResponse, parseBody } from '../utils/response';
+import { errorResponse, jsonResponse, type BodyContext } from '../utils/response';
 import { isAuthRequestExpired, authRequestRepo } from '../services/storage-auth-request-repo';
 import { notifyAuthRequestResponse, notifyUserAuthRequest } from '../durable/notifications-hub';
 import { RateLimitService, getClientIdentifier } from '../services/ratelimit';
@@ -24,14 +24,14 @@ const clippedText = (maxLength: number) =>
     .transform((text) => text.slice(0, maxLength))
     .catch('');
 
-const AuthRequestCreateSchema = z.looseObject({
+export const AuthRequestCreateSchema = z.looseObject({
   email: clippedText(320).transform((email) => email.toLowerCase()),
   publicKey: clippedText(8192),
   accessCode: clippedText(25),
   type: z.coerce.number().catch(AUTH_REQUEST_TYPE_AUTHENTICATE_AND_UNLOCK),
 });
 
-const AuthRequestUpdateSchema = z.object({
+export const AuthRequestUpdateSchema = z.object({
   requestApproved: z.coerce.boolean(),
   key: clippedText(20000),
   deviceIdentifier: clippedText(128),
@@ -121,9 +121,8 @@ async function enforceAuthRequestCreateRateLimit(
   return errorResponse('Too many authentication requests. Try again later.', 429);
 }
 
-export async function handleCreateAuthRequest(c: AppContext): Promise<Response> {
-  const body = await parseBody(c.req.raw, AuthRequestCreateSchema, 'Invalid request payload');
-  if (body instanceof Response) return body;
+export async function handleCreateAuthRequest(c: BodyContext<typeof AuthRequestCreateSchema>): Promise<Response> {
+  const body = c.req.valid('json');
   const { email, publicKey, accessCode, type } = body;
   const deviceInfo = readAuthRequestDeviceInfo(body, c.req.raw);
 
@@ -173,10 +172,12 @@ export async function handleCreateAuthRequest(c: AppContext): Promise<Response> 
   return jsonResponse(toAuthRequestResponse(c.req.raw, authRequest));
 }
 
-export async function handleCreateAdminAuthRequest(c: AppContext, userEmail: string): Promise<Response> {
+export async function handleCreateAdminAuthRequest(
+  c: BodyContext<typeof AuthRequestCreateSchema>,
+  userEmail: string,
+): Promise<Response> {
   const { userId } = c.var;
-  const body = await parseBody(c.req.raw, AuthRequestCreateSchema, 'Invalid request payload');
-  if (body instanceof Response) return body;
+  const body = c.req.valid('json');
   const { publicKey, accessCode, type: requestedType } = body;
   const email = body.email || userEmail.toLowerCase();
   const deviceInfo = readAuthRequestDeviceInfo(body, c.req.raw);
@@ -269,10 +270,12 @@ export async function handleListPendingAuthRequests(c: AppContext): Promise<Resp
   return jsonResponse(listResponse(rows));
 }
 
-export async function handleUpdateAuthRequest(c: AppContext, id: string): Promise<Response> {
+export async function handleUpdateAuthRequest(
+  c: BodyContext<typeof AuthRequestUpdateSchema>,
+  id: string,
+): Promise<Response> {
   const { userId } = c.var;
-  const body = await parseBody(c.req.raw, AuthRequestUpdateSchema, 'Invalid request payload');
-  if (body instanceof Response) return body;
+  const body = c.req.valid('json');
 
   const authRequest = await authRequestRepo(c.env.DB).getAuthRequestByIdForUser(id, userId);
   if (!authRequest || authRequest.userId !== userId || isAuthRequestExpired(authRequest)) {

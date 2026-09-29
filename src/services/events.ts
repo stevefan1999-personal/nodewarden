@@ -5,7 +5,7 @@ import { chunkRows, columnCount, getOrm } from '../db/client';
 import { events, organizationMemberships } from '../db/schema';
 import { SendAuthType, SendType, type Env, type Send } from '../types';
 import { bytesToBase64Url } from '../utils/passkey';
-import { bodyIssues, errorResponse, jsonResponse } from '../utils/response';
+import { errorResponse, jsonResponse, validationErrorResponse } from '../utils/response';
 import { DEFAULT_AUDIT_LOG_SETTINGS, getAuditLogSettings } from './audit-events';
 import { MembershipStatus } from './org-types';
 
@@ -273,7 +273,7 @@ const Cursor = z.tuple([z.iso.datetime({ precision: 3 }), z.string().regex(/^[a-
 export async function listEventsResponse(request: Request, db: D1Database, filter: EventFilter): Promise<Response> {
   const params = new URL(request.url).searchParams;
   const range = DateRange.safeParse({ start: params.get('start') ?? undefined, end: params.get('end') ?? undefined });
-  if (!range.success) return errorResponse(range.error.issues[0].message, 400, {}, bodyIssues(range.error));
+  if (!range.success) return validationErrorResponse(range.error);
   const today = new Date().setUTCHours(0, 0, 0, 0);
   const [start, end] =
     range.data.start === undefined || range.data.end === undefined

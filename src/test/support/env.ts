@@ -293,7 +293,8 @@ export interface WorkerRequest {
   method?: string;
   path: string;
   // JSON-encoded, except URLSearchParams, which is sent form-encoded as /identity expects, and
-  // FormData, which is sent multipart as official web uploads files.
+  // FormData, which is sent multipart as official web uploads files, and a Blob, sent as is under the JSON content
+  // type.
   body?: unknown;
   // Omit for an anonymous request.
   userId?: string;
@@ -318,16 +319,21 @@ export async function authedFetch(
   const request = new Request(new URL(path, TEST_ORIGIN), {
     method,
     headers: requestHeaders,
-    body: body === undefined || isForm ? body : JSON.stringify(body),
+    body: body === undefined || isForm || body instanceof Blob ? body : JSON.stringify(body),
   });
   return worker.fetch(request, env, executionContext);
 }
 
-// Handlers read the request, the bindings and the gate's principal from their Hono context; a test calling one
-// directly builds it here.
-export function contextFor(env: Env, request: Request, principal?: Principal): AppContext {
+// Handlers read the request, the bindings, the gate's principal and the route's validated body from their Hono
+// context; a test calling one directly builds it here.
+export function contextFor(
+  env: Env,
+  request: Request,
+  { principal, body }: { principal?: Principal; body?: object } = {},
+): AppContext {
   const context = new Context<AppEnv>(request, { env });
   if (principal) context.set('principal', principal);
+  if (body) context.req.addValidatedData('json', body);
   return context;
 }
 

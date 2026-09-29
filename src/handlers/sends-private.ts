@@ -2,7 +2,7 @@ import type { AppContext } from '../router';
 import { z } from 'zod';
 import { Env, Send, SendAuthType, SendType } from '../types';
 import { recordSendEvent, recordSendEvents } from '../services/events';
-import { errorResponse, jsonResponse, parseBody } from '../utils/response';
+import { errorResponse, jsonResponse, type BodyContext } from '../utils/response';
 import { buildDirectUploadUrl, parseDirectUploadPayload } from '../utils/direct-upload';
 import { generateUUID } from '../utils/uuid';
 import { parsePagination, encodeContinuationToken } from '../utils/pagination';
@@ -56,7 +56,7 @@ const emailsError = 'Invalid emails';
 
 // Every field an edit may carry; absent fields stay untouched. Official clients send the unused
 // content object as null.
-const SendEdit = z.object({
+export const SendEdit = z.object({
   type: sendType.optional(),
   name: sendName.optional(),
   key: sendKey.optional(),
@@ -91,13 +91,13 @@ const SendEdit = z.object({
 
 const newSendFields = { name: sendName, key: sendKey, deletionDate };
 
-const TextSendCreate = SendEdit.extend({
+export const TextSendCreate = SendEdit.extend({
   type: sendType.refine((type) => type === SendType.Text, { error: 'File sends should use /api/sends/file/v2' }),
   ...newSendFields,
   text: sendData,
 });
 
-const FileSendCreate = SendEdit.extend({
+export const FileSendCreate = SendEdit.extend({
   type: z.preprocess(toInteger, z.literal(SendType.File, { error: 'Send content is not a file' })),
   ...newSendFields,
   fileLength: z.preprocess(
@@ -107,7 +107,7 @@ const FileSendCreate = SendEdit.extend({
   file: sendData,
 });
 
-const SendIds = z.object({ ids: z.array(z.string(), { error: 'ids array is required' }) });
+export const SendIds = z.object({ ids: z.array(z.string(), { error: 'ids array is required' }) });
 
 async function processSendFileUpload(request: Request, env: Env, send: Send, fileId: string): Promise<Response> {
   const maxFileSize = getBlobStorageMaxBytes(env, LIMITS.send.maxFileSizeBytes);
@@ -268,10 +268,9 @@ async function sendFileUploadResponse(request: Request, env: Env, send: Send, fi
   });
 }
 
-export async function handleCreateSend(c: AppContext): Promise<Response> {
+export async function handleCreateSend(c: BodyContext<typeof TextSendCreate>): Promise<Response> {
   const { userId } = c.var;
-  const body = await parseBody(c.req.raw, TextSendCreate);
-  if (body instanceof Response) return body;
+  const body = c.req.valid('json');
 
   const send = await parseNewSend(body, userId, SendType.Text, body.text);
   if (send instanceof Response) return send;
@@ -279,11 +278,10 @@ export async function handleCreateSend(c: AppContext): Promise<Response> {
   return jsonResponse(sendToResponse(send));
 }
 
-export async function handleCreateFileSendV2(c: AppContext): Promise<Response> {
+export async function handleCreateFileSendV2(c: BodyContext<typeof FileSendCreate>): Promise<Response> {
   const { userId } = c.var;
   const maxFileSize = getBlobStorageMaxBytes(c.env, LIMITS.send.maxFileSizeBytes);
-  const body = await parseBody(c.req.raw, FileSendCreate);
-  if (body instanceof Response) return body;
+  const body = c.req.valid('json');
   if (body.fileLength > maxFileSize) return errorResponse('Send storage limit exceeded with this file', 400);
 
   const fileId = generateUUID();
@@ -345,15 +343,14 @@ export async function handlePublicUploadSendFile(c: AppContext, sendId: string, 
   return processSendFileUpload(c.req.raw, c.env, send, fileId);
 }
 
-export async function handleUpdateSend(c: AppContext, sendId: string): Promise<Response> {
+export async function handleUpdateSend(c: BodyContext<typeof SendEdit>, sendId: string): Promise<Response> {
   const { userId } = c.var;
   const send = await sendRepo(c.env.DB).getSendForUser(sendId, userId);
   if (!send || send.userId !== userId) {
     return errorResponse('Send not found', 404);
   }
 
-  const body = await parseBody(c.req.raw, SendEdit);
-  if (body instanceof Response) return body;
+  const body = c.req.valid('json');
   if (body.type !== undefined && body.type !== send.type) return errorResponse("Sends can't change type", 400);
   if (body.authType === SendAuthType.Email || body.emails)
     return errorResponse(SEND_EMAIL_AUTH_UNSUPPORTED_MESSAGE, 501);
@@ -400,10 +397,9 @@ export async function handleDeleteSend(c: AppContext, sendId: string): Promise<R
   return new Response(null, { status: 200 });
 }
 
-export async function handleBulkDeleteSends(c: AppContext): Promise<Response> {
+export async function handleBulkDeleteSends(c: BodyContext<typeof SendIds>): Promise<Response> {
   const { userId } = c.var;
-  const body = await parseBody(c.req.raw, SendIds);
-  if (body instanceof Response) return body;
+  const body = c.req.valid('json');
 
   const sends = await sendRepo(c.env.DB).getSendsByIds(body.ids, userId);
   for (const send of sends) {

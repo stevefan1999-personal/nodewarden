@@ -1,4 +1,3 @@
-import type { AppContext } from '../router';
 import { z } from 'zod';
 import { LIMITS } from '../config/limits';
 import { getOrm, type Orm } from '../db/client';
@@ -13,7 +12,7 @@ import type {
   PasswordHistory,
 } from '../types';
 import { readActingDeviceIdentifier } from '../utils/device';
-import { errorResponse, jsonResponse, parseBody } from '../utils/response';
+import { errorResponse, jsonResponse, type BodyContext } from '../utils/response';
 import { generateUUID } from '../utils/uuid';
 import {
   normalizeCipherLoginForStorage,
@@ -37,9 +36,9 @@ const optionalId = z
 // Shapes the cipher endpoints own; validateCipherEncryptedFieldsForCompatibility checks their fields.
 const clientObject = <T>() => orNull(z.custom<T>((value) => typeof value === 'object'));
 
-// Bitwarden's ImportCiphersRequestModel. parseBody folds PascalCase keys to camelCase; cipher entries
+// Bitwarden's ImportCiphersRequestModel. jsonBody folds PascalCase keys to camelCase; cipher entries
 // keep unknown keys so new client fields persist, and absent fields default as the create endpoint's.
-const CiphersImportBody = z.object({
+export const CiphersImportBody = z.object({
   ciphers: list(
     z.looseObject({
       id: optionalId,
@@ -130,14 +129,13 @@ async function runOrmBatch(
 }
 
 // POST /api/ciphers/import - Bitwarden client import endpoint
-export async function handleCiphersImport(c: AppContext): Promise<Response> {
+export async function handleCiphersImport(c: BodyContext<typeof CiphersImportBody>): Promise<Response> {
   const { userId } = c.var;
   const orm = getOrm(c.env.DB);
   const url = new URL(c.req.raw.url);
   const returnCipherMap = url.searchParams.get('returnCipherMap') === '1';
 
-  const body = await parseBody(c.req.raw, CiphersImportBody);
-  if (body instanceof Response) return body;
+  const body = c.req.valid('json');
   const { folders, ciphers, folderRelationships } = body;
 
   if (folders.length + ciphers.length > LIMITS.performance.importItemLimit) {

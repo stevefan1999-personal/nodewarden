@@ -65,7 +65,11 @@ test('machine-account creator and group policies gate management, and revocation
           b.id,
           detailPath + suffix,
           method,
-          method === 'GET' ? undefined : { name: ENCRYPTED_FIELD, ids: [] },
+          method === 'GET'
+            ? undefined
+            : suffix === '/access-tokens'
+              ? TOKEN_FIELDS
+              : { name: ENCRYPTED_FIELD, ids: [] },
         )
       ).status,
       404,
@@ -191,19 +195,11 @@ test('machine creation ignores legacy projectIds, rolls back creator grants atom
     { table: smServiceAccountMembers, event: 'INSERT' },
     'test machine rollback',
   );
+  const principal = await smUser(env, a);
+  const create = new Request('https://vault.example.test', { method: 'POST' });
   await assert.rejects(
     async () =>
-      handleCreateServiceAccount(
-        contextFor(
-          env,
-          new Request('https://vault.example.test', {
-            method: 'POST',
-            body: JSON.stringify({ name: ENCRYPTED_FIELD, projectIds: [ownProject.id] }),
-          }),
-          await smUser(env, a),
-        ),
-        orgId,
-      ),
+      handleCreateServiceAccount(contextFor(env, create, { principal, body: { name: ENCRYPTED_FIELD } }), orgId),
     /test machine rollback/,
   );
   assert.equal((await smRepo(env.DB).listServiceAccounts(orgId)).length, 0);

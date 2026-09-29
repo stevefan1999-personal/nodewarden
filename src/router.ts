@@ -1,5 +1,6 @@
 import { Hono, type Context } from 'hono';
 import { cors } from 'hono/cors';
+import { HTTPException } from 'hono/http-exception';
 import { isMachineAllowedRoute, secretsManagerRoutes } from './router-sm';
 import { isAdminPortalPath } from './web-vault-visibility';
 import { handleAdminPortal } from './admin/portal';
@@ -184,6 +185,8 @@ app.route('/', authenticatedRoutes);
 app.notFound(() => errorResponse('Not found', 404));
 
 app.onError((error) => {
+  // The body validators throw for JSON that does not parse.
+  if (error instanceof HTTPException) return errorResponse(error.message, error.status);
   console.error('Request error:', withoutQueryParams(error));
   return errorResponse('Internal server error', 500);
 });

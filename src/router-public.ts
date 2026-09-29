@@ -11,7 +11,7 @@ import {
 } from './handlers/sends';
 import { handleKnownDevice } from './handlers/devices';
 import { handleDigitalAssetLinkCheck, handleFillAssistForms, handleFillAssistManifest } from './handlers/fill-assist';
-import { handleToken, handlePrelogin, handleRevocation } from './handlers/identity';
+import { handleToken, handlePrelogin, handleRevocation, PreloginBody } from './handlers/identity';
 import { handleOidcSignin, handleSsoAuthorize, handleSsoPrevalidate } from './handlers/sso';
 import { handleScimRoute } from './handlers/scim';
 import { handleGetAccountPasskeyAssertionOptions } from './handlers/account-passkeys';
@@ -25,8 +25,22 @@ import {
   handleResendNewDeviceOtp,
   handleDeleteRecover,
   handleDeleteRecoverToken,
+  RegisterSendVerificationEmailBody,
+  GetPasswordHintBody,
+  DeleteRecoverBody,
+  ResendNewDeviceOtpBody,
+  RecoverTwoFactorBody,
+  TwoFactorEmailLoginBody,
+  DeleteRecoverTokenBody,
+  invalidRecoverToken,
+  twoFactorEmailRejected,
 } from './handlers/accounts';
-import { handleCreateAuthRequest, handleGetAuthRequestResponse } from './handlers/auth-requests';
+import { RegisterSchema } from './services/register-payload';
+import {
+  handleCreateAuthRequest,
+  handleGetAuthRequestResponse,
+  AuthRequestCreateSchema,
+} from './handlers/auth-requests';
 import { handlePublicDownloadAttachment } from './handlers/attachments';
 import { handlePublicUploadAttachment } from './handlers/attachments';
 import {
@@ -36,7 +50,7 @@ import {
 } from './handlers/notifications';
 import { handlePublicUploadSendFile } from './handlers/sends';
 import { isSafeWebsiteIconContentType } from './utils/content-type';
-import { jsonResponse, unsupportedResponse } from './utils/response';
+import { jsonResponse, unsupportedResponse, jsonBody } from './utils/response';
 import { createAuth } from './auth';
 import type { Env } from './types';
 import { isConfiguredWebVaultOrigin } from './utils/origins';
@@ -340,7 +354,13 @@ publicRoutes.get('/api/sends/:sendId/:fileId', (c) =>
   handleDownloadSendFile(c, c.req.param('sendId'), c.req.param('fileId')),
 );
 
-publicRoutes.on('POST', ['/api/auth-requests', '/auth-requests'], publicSensitive, handleCreateAuthRequest);
+publicRoutes.on(
+  'POST',
+  ['/api/auth-requests', '/auth-requests'],
+  publicSensitive,
+  jsonBody(AuthRequestCreateSchema),
+  handleCreateAuthRequest,
+);
 publicRoutes.on(
   'GET',
   ['/api/auth-requests/:id{[a-f0-9-]+}/response', '/auth-requests/:id{[a-f0-9-]+}/response'],
@@ -378,6 +398,7 @@ publicRoutes.on(
   'POST',
   ['/identity/accounts/prelogin', '/identity/accounts/prelogin/password'],
   publicSensitive,
+  jsonBody(PreloginBody),
   handlePrelogin,
 );
 publicRoutes.get(
@@ -389,30 +410,35 @@ publicRoutes.on(
   'POST',
   ['/identity/accounts/recover-2fa', '/api/accounts/recover-2fa'],
   publicSensitive,
+  jsonBody(RecoverTwoFactorBody),
   handleRecoverTwoFactor,
 );
 publicRoutes.on(
   'POST',
   ['/api/two-factor/send-email-login', '/two-factor/send-email-login'],
   publicSensitive,
+  jsonBody(TwoFactorEmailLoginBody, twoFactorEmailRejected),
   handleSendTwoFactorEmailLogin,
 );
 publicRoutes.on(
   'POST',
   ['/api/accounts/resend-new-device-otp', '/accounts/resend-new-device-otp'],
   publicSensitive,
+  jsonBody(ResendNewDeviceOtpBody),
   handleResendNewDeviceOtp,
 );
 publicRoutes.on(
   'POST',
   ['/api/accounts/delete-recover', '/accounts/delete-recover'],
   publicSensitive,
+  jsonBody(DeleteRecoverBody),
   handleDeleteRecover,
 );
 publicRoutes.on(
   'POST',
   ['/api/accounts/delete-recover-token', '/accounts/delete-recover-token'],
   publicSensitive,
+  jsonBody(DeleteRecoverTokenBody, invalidRecoverToken),
   handleDeleteRecoverToken,
 );
 
@@ -429,7 +455,13 @@ publicRoutes.on(
   () => unsupportedResponse('Email delivery is not supported by this server.'),
 );
 
-publicRoutes.post('/api/accounts/password-hint', publicSensitive, requireSameOriginWrite, handleGetPasswordHint);
+publicRoutes.post(
+  '/api/accounts/password-hint',
+  publicSensitive,
+  requireSameOriginWrite,
+  jsonBody(GetPasswordHintBody),
+  handleGetPasswordHint,
+);
 
 publicRoutes.on(
   'GET',
@@ -454,6 +486,7 @@ publicRoutes.on(
   ],
   register,
   requireSameOriginWrite,
+  jsonBody(RegisterSendVerificationEmailBody),
   handleRegisterSendVerificationEmail,
 );
 publicRoutes.on(
@@ -461,6 +494,7 @@ publicRoutes.on(
   ['/api/accounts/register/finish', '/accounts/register/finish', '/identity/accounts/register/finish'],
   register,
   requireSameOriginWrite,
+  jsonBody(RegisterSchema),
   handleRegisterFinish,
 );
 publicRoutes.on(
@@ -468,6 +502,7 @@ publicRoutes.on(
   ['/api/accounts/register', '/identity/accounts/register'],
   register,
   requireSameOriginWrite,
+  jsonBody(RegisterSchema),
   handleRegister,
 );
 

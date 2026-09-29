@@ -25,6 +25,14 @@ async function send(env: Env, user: User, method: string, path: string, body: un
   return authedFetch(env, { method, path, body, userId: user.id });
 }
 
+test('a body labelled as JSON that does not parse answers 400 in the Bitwarden error shape', async () => {
+  const env = await createTestEnv();
+  const user = await seedUser(env);
+  const response = await send(env, user, 'POST', '/api/folders', new Blob(['{']));
+  assert.equal(response.status, 400);
+  assert.equal(((await response.json()) as { message: string }).message, 'Malformed JSON in request body');
+});
+
 test('a created cipher keeps the fields a newer client adds, at the top level and inside login', async () => {
   const env = await createTestEnv();
   const user = await seedUser(env);

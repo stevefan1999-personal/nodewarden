@@ -1,7 +1,7 @@
 import type { AppContext } from '../router';
 import { z } from 'zod';
 import type { User } from '../types';
-import { errorResponse, jsonResponse, parseBody } from '../utils/response';
+import { errorResponse, jsonResponse, type BodyContext } from '../utils/response';
 import { organizationResponse } from '../utils/org-response';
 import { buildNodeWardenEnterpriseLicense, parseOrganizationLicense } from '../services/enterprise-license';
 import { createOwnedOrganization } from './organizations';
@@ -10,7 +10,7 @@ import { canDeleteOrganization, isActiveMember } from '../services/org-authz';
 import { jsonText } from '../services/org-types';
 
 // A JSON body is the license itself unless it nests one under license.
-const LicenseJsonRequest = z.looseObject({ key: z.string().nullish(), collectionName: z.string().nullish() });
+export const LicenseJsonRequest = z.looseObject({ key: z.string().nullish(), collectionName: z.string().nullish() });
 
 export function enterpriseLicenseFileResponse(user: User): Response {
   const license = buildNodeWardenEnterpriseLicense({
@@ -27,7 +27,9 @@ export function enterpriseLicenseFileResponse(user: User): Response {
   });
 }
 
-export async function handleCreateSelfHostedOrganizationLicense(c: AppContext): Promise<Response> {
+export async function handleCreateSelfHostedOrganizationLicense(
+  c: BodyContext<typeof LicenseJsonRequest>,
+): Promise<Response> {
   const { currentUser: user } = c.var;
   const contentType = String(c.req.raw.headers.get('Content-Type') || '');
   let form: { license: unknown; key: string; collectionName: string };
@@ -44,8 +46,7 @@ export async function handleCreateSelfHostedOrganizationLicense(c: AppContext): 
       collectionName: String(formData.get('collectionName') || formData.get('CollectionName') || 'Default Collection'),
     };
   } else {
-    const body = await parseBody(c.req.raw, LicenseJsonRequest);
-    if (body instanceof Response) return body;
+    const body = c.req.valid('json');
     form = {
       license: body.license || body,
       key: body.key || '',

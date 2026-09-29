@@ -2,7 +2,7 @@ import type { AppContext } from '../router';
 import { z } from 'zod';
 import { Env, Attachment, Cipher } from '../types';
 import { notifyUserCipherUpdate, notifyUserVaultSync } from '../durable/notifications-hub';
-import { errorResponse, jsonResponse, parseBody } from '../utils/response';
+import { errorResponse, jsonResponse, type BodyContext } from '../utils/response';
 import { buildDirectUploadUrl, parseDirectUploadPayload } from '../utils/direct-upload';
 import { generateUUID } from '../utils/uuid';
 import { contentDispositionAttachment, sanitizeDownloadContentType } from '../utils/content-type';
@@ -34,7 +34,7 @@ const requiredAttachmentField = z
   .string({ error: ATTACHMENT_FIELD_REQUIRED })
   .min(1, { error: ATTACHMENT_FIELD_REQUIRED });
 
-const CreateAttachmentBody = z.object({
+export const CreateAttachmentBody = z.object({
   fileName: requiredAttachmentField,
   key: requiredAttachmentField,
   // Android sends fileSize as a numeric string.
@@ -42,7 +42,7 @@ const CreateAttachmentBody = z.object({
 });
 
 // Only the sent fields change; a present fileName must not be blank, and a blank key clears it.
-const AttachmentMetadataBody = z
+export const AttachmentMetadataBody = z
   .object({
     fileName: z
       .unknown()
@@ -132,12 +132,14 @@ async function processAttachmentUpload(
 
 // POST /api/ciphers/{cipherId}/attachment/v2
 // Creates attachment metadata and returns upload URL
-export async function handleCreateAttachment(c: AppContext, cipherId: string): Promise<Response> {
+export async function handleCreateAttachment(
+  c: BodyContext<typeof CreateAttachmentBody>,
+  cipherId: string,
+): Promise<Response> {
   const { userId } = c.var;
   const cipher = await loadAccessibleCipher(c.env.DB, userId, cipherId, 'edit');
   if (!cipher) return errorResponse('Cipher not found', 404);
-  const body = await parseBody(c.req.raw, CreateAttachmentBody);
-  if (body instanceof Response) return body;
+  const body = c.req.valid('json');
 
   const fileSize = body.fileSize || 0;
   const attachmentId = generateUUID();
@@ -263,7 +265,7 @@ export async function handleGetAttachment(c: AppContext, cipherId: string, attac
 // PUT /api/ciphers/{cipherId}/attachment/{attachmentId}/metadata
 // 修正旧附件的加密元数据，供官方客户端按当前 Bitwarden 契约解密。
 export async function handleUpdateAttachmentMetadata(
-  c: AppContext,
+  c: BodyContext<typeof AttachmentMetadataBody>,
   cipherId: string,
   attachmentId: string,
 ): Promise<Response> {
@@ -275,8 +277,7 @@ export async function handleUpdateAttachmentMetadata(
   if (!attachment || attachment.cipherId !== cipherId) {
     return errorResponse('Attachment not found', 404);
   }
-  const body = await parseBody(c.req.raw, AttachmentMetadataBody);
-  if (body instanceof Response) return body;
+  const body = c.req.valid('json');
 
   if (body.fileName !== undefined) attachment.fileName = body.fileName;
   if (body.key !== undefined) attachment.key = body.key;

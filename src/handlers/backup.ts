@@ -1,7 +1,7 @@
 import type { AppContext } from '../router';
 import type { Env, User } from '../types';
 import { z } from 'zod';
-import { bodyIssues, errorResponse, jsonResponse, parseBody } from '../utils/response';
+import { errorResponse, jsonResponse, validationErrorResponse, type BodyContext } from '../utils/response';
 import {
   BackupScheduleSchema,
   loadBackupSchedule,
@@ -64,10 +64,19 @@ export async function runScheduledBackupIfDue(env: Env): Promise<void> {
 
 const optionalString = z.string().nullish();
 
-// Unparseable JSON and a non-object body both answer the endpoint's payload message.
-function parseBackupBody<Shape extends z.ZodRawShape>(request: Request, shape: Shape, message: string) {
-  return parseBody(request, z.object(shape, { error: message }), message);
-}
+// A body that is not an object answers the endpoint's payload message.
+export const BackupSettingsBody = z.object(
+  { schedule: z.record(z.string(), z.unknown()).nullish(), masterPasswordHash: optionalString },
+  { error: 'Backup settings payload is invalid' },
+);
+export const BackupRunBody = z.object(
+  { masterPasswordHash: optionalString },
+  { error: 'Backup run payload is invalid' },
+);
+export const BackupUploadBody = z.object(
+  { masterPasswordHash: optionalString },
+  { error: 'Backup archive upload payload is invalid' },
+);
 
 async function backupSettingsResponse(env: Env): Promise<Response> {
   return jsonResponse({
@@ -87,16 +96,11 @@ export async function handleGetAdminBackupSettings(c: AppContext): Promise<Respo
 }
 
 // A save may send any subset of the schedule; the rest keeps its stored value.
-export async function handleUpdateAdminBackupSettings(c: AppContext): Promise<Response> {
+export async function handleUpdateAdminBackupSettings(c: BodyContext<typeof BackupSettingsBody>): Promise<Response> {
   const { currentUser: actorUser } = c.var;
   if (!isAdmin(actorUser)) return errorResponse('Forbidden', 403);
 
-  const body = await parseBackupBody(
-    c.req.raw,
-    { schedule: z.record(z.string(), z.unknown()).nullish(), masterPasswordHash: optionalString },
-    'Backup settings payload is invalid',
-  );
-  if (body instanceof Response) return body;
+  const body = c.req.valid('json');
 
   const verificationError = await requireBackupUserVerification(actorUser, body.masterPasswordHash, c.env);
   if (verificationError) return verificationError;
@@ -105,7 +109,7 @@ export async function handleUpdateAdminBackupSettings(c: AppContext): Promise<Re
   const next = z
     .object({ schedule: BackupScheduleSchema })
     .safeParse({ schedule: { ...(await loadBackupSchedule(c.env.DB)), ...body.schedule } });
-  if (!next.success) return errorResponse(next.error.issues[0].message, 400, {}, bodyIssues(next.error));
+  if (!next.success) return validationErrorResponse(next.error);
 
   await saveBackupSchedule(c.env.DB, next.data.schedule);
   await writeAuditLog(
@@ -119,16 +123,11 @@ export async function handleUpdateAdminBackupSettings(c: AppContext): Promise<Re
   return backupSettingsResponse(c.env);
 }
 
-export async function handleRunAdminBackup(c: AppContext): Promise<Response> {
+export async function handleRunAdminBackup(c: BodyContext<typeof BackupRunBody>): Promise<Response> {
   const { currentUser: actorUser } = c.var;
   if (!isAdmin(actorUser)) return errorResponse('Forbidden', 403);
 
-  const body = await parseBackupBody(
-    c.req.raw,
-    { masterPasswordHash: optionalString },
-    'Backup run payload is invalid',
-  );
-  if (body instanceof Response) return body;
+  const body = c.req.valid('json');
 
   const verificationError = await requireBackupUserVerification(actorUser, body.masterPasswordHash, c.env);
   if (verificationError) return verificationError;
@@ -155,17 +154,18 @@ export async function handleListAdminBackupArchives(c: AppContext): Promise<Resp
 }
 
 const archiveShape = { key: optionalString, masterPasswordHash: optionalString };
+export const BackupRestoreBody = z.object(
+  { ...archiveShape, replaceExisting: z.boolean().nullish() },
+  { error: 'Backup restore payload is invalid' },
+);
+export const BackupDeleteBody = z.object(archiveShape, { error: 'Backup archive delete payload is invalid' });
+export const BackupDownloadBody = z.object(archiveShape, { error: 'Backup archive download payload is invalid' });
 
-export async function handleRestoreAdminBackupArchive(c: AppContext): Promise<Response> {
+export async function handleRestoreAdminBackupArchive(c: BodyContext<typeof BackupRestoreBody>): Promise<Response> {
   const { currentUser: actorUser } = c.var;
   if (!isAdmin(actorUser)) return errorResponse('Forbidden', 403);
 
-  const body = await parseBackupBody(
-    c.req.raw,
-    { ...archiveShape, replaceExisting: z.boolean().nullish() },
-    'Backup restore payload is invalid',
-  );
-  if (body instanceof Response) return body;
+  const body = c.req.valid('json');
 
   const verificationError = await requireBackupUserVerification(actorUser, body.masterPasswordHash, c.env);
   if (verificationError) return verificationError;
@@ -200,12 +200,11 @@ export async function handleRestoreAdminBackupArchive(c: AppContext): Promise<Re
   }
 }
 
-export async function handleDeleteAdminBackupArchive(c: AppContext): Promise<Response> {
+export async function handleDeleteAdminBackupArchive(c: BodyContext<typeof BackupDeleteBody>): Promise<Response> {
   const { currentUser: actorUser } = c.var;
   if (!isAdmin(actorUser)) return errorResponse('Forbidden', 403);
 
-  const body = await parseBackupBody(c.req.raw, archiveShape, 'Backup archive delete payload is invalid');
-  if (body instanceof Response) return body;
+  const body = c.req.valid('json');
 
   const verificationError = await requireBackupUserVerification(actorUser, body.masterPasswordHash, c.env);
   if (verificationError) return verificationError;
@@ -219,12 +218,11 @@ export async function handleDeleteAdminBackupArchive(c: AppContext): Promise<Res
 }
 
 // Archives move in and out only through presigned URLs, straight between the administrator and the bucket.
-export async function handleDownloadAdminBackupArchive(c: AppContext): Promise<Response> {
+export async function handleDownloadAdminBackupArchive(c: BodyContext<typeof BackupDownloadBody>): Promise<Response> {
   const { currentUser: actorUser } = c.var;
   if (!isAdmin(actorUser)) return errorResponse('Forbidden', 403);
 
-  const body = await parseBackupBody(c.req.raw, archiveShape, 'Backup archive download payload is invalid');
-  if (body instanceof Response) return body;
+  const body = c.req.valid('json');
 
   const verificationError = await requireBackupUserVerification(actorUser, body.masterPasswordHash, c.env);
   if (verificationError) return verificationError;
@@ -240,16 +238,11 @@ export async function handleDownloadAdminBackupArchive(c: AppContext): Promise<R
 }
 
 // A fresh key under uploads/, which a restore then names.
-export async function handleUploadAdminBackupArchive(c: AppContext): Promise<Response> {
+export async function handleUploadAdminBackupArchive(c: BodyContext<typeof BackupUploadBody>): Promise<Response> {
   const { currentUser: actorUser } = c.var;
   if (!isAdmin(actorUser)) return errorResponse('Forbidden', 403);
 
-  const body = await parseBackupBody(
-    c.req.raw,
-    { masterPasswordHash: optionalString },
-    'Backup archive upload payload is invalid',
-  );
-  if (body instanceof Response) return body;
+  const body = c.req.valid('json');
 
   const verificationError = await requireBackupUserVerification(actorUser, body.masterPasswordHash, c.env);
   if (verificationError) return verificationError;

@@ -4,9 +4,12 @@ import test from 'node:test';
 import { eq } from 'drizzle-orm';
 import { getOrm } from '../db/client';
 import { orgGroupMembers, orgGroups, smProjectGroups, smProjects } from '../db/schema';
-import { authedFetch, contextFor, createTestEnv } from './support/env';
+import { authedFetch, contextFor, createTestEnv, interceptStatement } from './support/env';
 import { ENCRYPTED_FIELD, postJson, seedMember, seedSmOrg, smUser } from './support/sm';
 import { orgRepo } from '../services/storage-org-repo';
+
+// smContext's membership lookup: an update runs it right after reading its row, before its guarded write.
+const MEMBERSHIP_LOOKUP = /^select .* from "organization_memberships"/;
 
 test('project routes enforce creator and group grants, bulk isolation, encrypted names and counts', async () => {
   const env = await createTestEnv();
@@ -68,11 +71,12 @@ test('project updates cannot resurrect a concurrently deleted row and reject nul
     400,
   );
   const orm = getOrm(env.DB);
-  const request = new Request(`https://example.test/api/projects/${p.id}`, { method: 'PUT' });
-  request.json = async <T>() => {
+  const principal = await smUser(env, owner);
+  interceptStatement(env, MEMBERSHIP_LOOKUP, async () => {
     await orm.delete(smProjects).where(eq(smProjects.id, p.id));
-    return { name: ENCRYPTED_FIELD } as T;
-  };
-  assert.equal((await handleProject(contextFor(env, request, await smUser(env, owner)), p.id)).status, 404);
+  });
+  const request = new Request(`https://example.test/api/projects/${p.id}`, { method: 'PUT' });
+  const context = contextFor(env, request, { principal, body: { name: ENCRYPTED_FIELD } });
+  assert.equal((await handleProject(context, p.id)).status, 404);
   assert.equal(await orm.select().from(smProjects).where(eq(smProjects.id, p.id)).get(), undefined);
 });

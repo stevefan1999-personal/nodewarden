@@ -15,7 +15,10 @@ import {
 import { handleUpdateSecret } from '../handlers/secrets-manager';
 import { orgRepo } from '../services/storage-org-repo';
 import { smRepo } from '../services/storage-secret-repo';
-import { authedFetch, contextFor, createTestEnv } from './support/env';
+
+// smContext's membership lookup: an update runs it right after reading its row, before its guarded write.
+const MEMBERSHIP_LOOKUP = /^select .* from "organization_memberships"/;
+import { authedFetch, contextFor, createTestEnv, interceptStatement } from './support/env';
 import { ENCRYPTED_FIELD, postJson, seedMember, seedSmOrg, smUser } from './support/sm';
 
 const FIELDS = { key: ENCRYPTED_FIELD, value: ENCRYPTED_FIELD, note: ENCRYPTED_FIELD };
@@ -235,17 +238,18 @@ test('a stale secret snapshot aborts new and removed policies together with its 
   const before = '2020-01-01T00:00:00.000Z';
   const orm = getOrm(env.DB);
   await orm.update(smServiceAccounts).set({ updatedAt: before }).where(eq(smServiceAccounts.id, machine.id));
-  const put = new Request('https://vault.example.test', { method: 'PUT' });
-  put.json = async <T>() => {
+  const principal = await smUser(env, owner);
+  interceptStatement(env, MEMBERSHIP_LOOKUP, async () => {
     await orm.update(smSecrets).set({ deletedAt: before }).where(eq(smSecrets.id, secret.id));
-    return {
-      ...FIELDS,
-      value: CHANGED,
-      projectIds: [],
-      accessPoliciesRequests: policies([policy(bMember.id, true)], [], [policy(machine.id)]),
-    } as T;
+  });
+  const put = new Request('https://vault.example.test', { method: 'PUT' });
+  const body = {
+    ...FIELDS,
+    value: CHANGED,
+    projectIds: [],
+    accessPoliciesRequests: policies([policy(bMember.id, true)], [], [policy(machine.id)]),
   };
-  assert.equal((await handleUpdateSecret(contextFor(env, put, await smUser(env, owner)), secret.id)).status, 404);
+  assert.equal((await handleUpdateSecret(contextFor(env, put, { principal, body }), secret.id)).status, 404);
   const persisted = (await smRepo(env.DB).getSecret(secret.id))!;
   assert.equal(persisted.deletedAt, before);
   assert.equal(persisted.value, ENCRYPTED_FIELD);

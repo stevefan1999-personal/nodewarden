@@ -10,7 +10,7 @@ import { AuthService } from '../services/auth';
 import { auditRequestMetadata, writeAuditEvent } from '../services/audit-events';
 import { registerMobilePushDevice, unregisterMobilePushDevice } from '../services/push-relay';
 import { z } from 'zod';
-import { errorResponse, jsonResponse, parseBody } from '../utils/response';
+import { errorResponse, jsonResponse, type BodyContext } from '../utils/response';
 import { DeviceInfoSchema, deviceText, readAuthRequestDeviceInfo, readKnownDeviceProbe } from '../utils/device';
 import { generateUUID } from '../utils/uuid';
 import { deviceRepo } from '../services/storage-device-repo';
@@ -78,7 +78,7 @@ function buildDeviceResponse(device: Device): DeviceResponse {
 }
 
 const storedKey = z.string().nullable().optional();
-const DeviceKeysSchema = z.object({
+export const DeviceKeysSchema = z.object({
   encryptedUserKey: storedKey,
   encryptedPublicKey: storedKey,
   encryptedPrivateKey: storedKey,
@@ -103,7 +103,7 @@ const DeviceFieldsSchema = z.looseObject({}).transform((body) => ({
 }));
 
 const DEVICE_REQUIRED = { error: 'Device identifier and type are required' };
-const RegisterDeviceSchema = DeviceFieldsSchema.pipe(
+export const RegisterDeviceSchema = DeviceFieldsSchema.pipe(
   DeviceKeysSchema.extend({
     deviceIdentifier: z.string(DEVICE_REQUIRED).trim().min(1, DEVICE_REQUIRED),
     deviceName: DeviceInfoSchema.shape.deviceName,
@@ -113,26 +113,27 @@ const RegisterDeviceSchema = DeviceFieldsSchema.pipe(
 );
 
 const NAME_REQUIRED = { error: 'Device name is required' };
-const DeviceNameSchema = z.object({ name: z.string(NAME_REQUIRED).trim().min(1, NAME_REQUIRED).pipe(deviceText) });
+export const DeviceNameSchema = z.object({
+  name: z.string(NAME_REQUIRED).trim().min(1, NAME_REQUIRED).pipe(deviceText),
+});
 
-const UpdateTrustSchema = z.object({
+export const UpdateTrustSchema = z.object({
   currentDevice: DeviceKeysSchema.nullish(),
   otherDevices: z.array(DeviceKeysSchema.extend({ deviceId: z.string().trim().catch('') })).optional(),
 });
 
 const PASSWORD_REQUIRED = { error: 'masterPasswordHash is required' };
-const MasterPasswordSchema = z.object({
+export const MasterPasswordSchema = z.object({
   masterPasswordHash: z.string(PASSWORD_REQUIRED).trim().min(1, PASSWORD_REQUIRED),
 });
 
 const PUSH_TOKEN_INVALID = { error: 'Invalid push token' };
-const PushTokenSchema = z.object({ pushToken: z.string(PUSH_TOKEN_INVALID).trim().min(1, PUSH_TOKEN_INVALID) });
+export const PushTokenSchema = z.object({ pushToken: z.string(PUSH_TOKEN_INVALID).trim().min(1, PUSH_TOKEN_INVALID) });
 
 // POST /api/devices
-export async function handleRegisterDevice(c: AppContext): Promise<Response> {
+export async function handleRegisterDevice(c: BodyContext<typeof RegisterDeviceSchema>): Promise<Response> {
   const { userId } = c.var;
-  const body = await parseBody(c.req.raw, RegisterDeviceSchema, 'Invalid request payload');
-  if (body instanceof Response) return body;
+  const body = c.req.valid('json');
   const { deviceIdentifier: identifier, deviceName: name, deviceType: type, pushToken, ...keys } = body;
 
   await deviceRepo(c.env.DB).upsertDevice(userId, identifier, name, type, undefined, keys);
@@ -394,13 +395,15 @@ export async function handleDeleteDevice(c: AppContext, deviceIdentifier: string
 }
 
 // PUT /api/devices/:deviceIdentifier/name
-export async function handleUpdateDeviceName(c: AppContext, deviceIdentifier: string): Promise<Response> {
+export async function handleUpdateDeviceName(
+  c: BodyContext<typeof DeviceNameSchema>,
+  deviceIdentifier: string,
+): Promise<Response> {
   const { userId } = c.var;
   const normalized = String(deviceIdentifier || '').trim();
   if (!normalized) return errorResponse('Invalid device identifier', 400);
 
-  const body = await parseBody(c.req.raw, DeviceNameSchema, NAME_REQUIRED.error);
-  if (body instanceof Response) return body;
+  const body = c.req.valid('json');
   const { name } = body;
 
   const updated = await deviceRepo(c.env.DB).updateDeviceName(userId, normalized, name);
@@ -421,13 +424,12 @@ export async function handleUpdateDeviceName(c: AppContext, deviceIdentifier: st
 }
 
 // DELETE /api/devices
-export async function handleDeleteAllDevices(c: AppContext): Promise<Response> {
+export async function handleDeleteAllDevices(c: BodyContext<typeof MasterPasswordSchema>): Promise<Response> {
   const { userId } = c.var;
   const user = await userRepo(c.env.DB).getUserById(userId);
   if (!user) return errorResponse('User not found', 404);
 
-  const body = await parseBody(c.req.raw, MasterPasswordSchema, PASSWORD_REQUIRED.error);
-  if (body instanceof Response) return body;
+  const body = c.req.valid('json');
   const { masterPasswordHash } = body;
   const auth = new AuthService(c.env);
   const passwordValid = await auth.verifyPassword(masterPasswordHash, user.masterPasswordHash, user.email);
@@ -460,13 +462,15 @@ export async function handleDeleteAllDevices(c: AppContext): Promise<Response> {
 }
 
 // PUT/POST /api/devices/identifier/:deviceIdentifier/keys
-export async function handleUpdateDeviceKeys(c: AppContext, deviceIdentifier: string): Promise<Response> {
+export async function handleUpdateDeviceKeys(
+  c: BodyContext<typeof DeviceKeysSchema>,
+  deviceIdentifier: string,
+): Promise<Response> {
   const { userId } = c.var;
   const normalized = normalizeIdentifier(deviceIdentifier);
   if (!normalized) return errorResponse('Invalid device identifier', 400);
 
-  const keys = await parseBody(c.req.raw, DeviceKeysSchema);
-  if (keys instanceof Response) return keys;
+  const keys = c.req.valid('json');
   const device = await deviceRepo(c.env.DB).getDevice(userId, normalized);
   if (!device) {
     return errorResponse('Device not found', 404);
@@ -482,10 +486,9 @@ export async function handleUpdateDeviceKeys(c: AppContext, deviceIdentifier: st
 }
 
 // POST /api/devices/update-trust
-export async function handleUpdateDeviceTrust(c: AppContext): Promise<Response> {
+export async function handleUpdateDeviceTrust(c: BodyContext<typeof UpdateTrustSchema>): Promise<Response> {
   const { userId } = c.var;
-  const body = await parseBody(c.req.raw, UpdateTrustSchema);
-  if (body instanceof Response) return body;
+  const body = c.req.valid('json');
   const currentDeviceIdentifier =
     normalizeIdentifier(c.req.raw.headers.get('Device-Identifier')) ||
     normalizeIdentifier(c.req.raw.headers.get('X-Device-Identifier'));
@@ -505,11 +508,12 @@ export async function handleUpdateDeviceTrust(c: AppContext): Promise<Response> 
   return jsonResponse({ success: true, updated: updatedCount });
 }
 
+export const UntrustDevicesBody = z.object({ devices: z.array(z.coerce.string().trim()).default([]) });
+
 // POST /api/devices/untrust
-export async function handleUntrustDevices(c: AppContext): Promise<Response> {
+export async function handleUntrustDevices(c: BodyContext<typeof UntrustDevicesBody>): Promise<Response> {
   const { userId } = c.var;
-  const body = await parseBody(c.req.raw, z.object({ devices: z.array(z.coerce.string().trim()).default([]) }));
-  if (body instanceof Response) return body;
+  const body = c.req.valid('json');
   const { devices } = body;
   const removed = await deviceRepo(c.env.DB).clearDeviceKeys(userId, devices);
   for (const deviceIdentifier of devices) {
@@ -593,13 +597,15 @@ export async function handleDeactivateDevice(c: AppContext, deviceIdentifier: st
 
 // PUT /api/devices/identifier/{deviceIdentifier}/token
 // Bitwarden mobile reports APNs/FCM push token updates to this endpoint.
-export async function handleUpdateDeviceToken(c: AppContext, deviceIdentifier: string): Promise<Response> {
+export async function handleUpdateDeviceToken(
+  c: BodyContext<typeof PushTokenSchema>,
+  deviceIdentifier: string,
+): Promise<Response> {
   const { userId } = c.var;
   const normalized = normalizeIdentifier(deviceIdentifier);
   if (!normalized) return errorResponse('Invalid device identifier', 400);
 
-  const body = await parseBody(c.req.raw, PushTokenSchema, PUSH_TOKEN_INVALID.error);
-  if (body instanceof Response) return body;
+  const body = c.req.valid('json');
   const { pushToken } = body;
 
   const device = await deviceRepo(c.env.DB).getDevice(userId, normalized);

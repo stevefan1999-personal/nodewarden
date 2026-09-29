@@ -3,7 +3,7 @@ import { inArray } from 'drizzle-orm';
 import { z } from 'zod';
 import { getOrm, statementChunks } from '../db/client';
 import { ciphers } from '../db/schema';
-import { errorResponse, parseBody } from '../utils/response';
+import { errorResponse, type BodyContext } from '../utils/response';
 import { canAccessEventLogs, canViewCipher, hasFullCollectionAccess, isActiveMember } from '../services/org-authz';
 import { orgRepo } from '../services/storage-org-repo';
 import { EventType, listEventsResponse, storeEvents, type EventInput } from '../services/events';
@@ -29,7 +29,7 @@ const optionalGuid = z
   .guid(INVALID_EVENTS)
   .nullish()
   .transform((id) => id ?? null);
-const ClientEvents = z
+export const ClientEvents = z
   .array(
     z.object(
       {
@@ -48,109 +48,107 @@ const ClientEvents = z
   .min(1, INVALID_EVENTS)
   .max(MAX_COLLECTED_EVENTS, INVALID_EVENTS);
 
+// POST /events/collect
+export async function handleCollectEvents(c: BodyContext<typeof ClientEvents>): Promise<Response> {
+  const { currentUser: user } = c.var;
+  const input = c.req.valid('json');
+  const memberships = (await orgRepo(c.env.DB).listMembershipsByUser(user.id)).filter(isActiveMember);
+  // Charge before any lookup, counting the organization copies an export fans out to.
+  const exportCopies =
+    input.filter((event) => event.type === EventType.UserClientExportedVault).length * memberships.length;
+  const batches = Math.ceil((input.length + exportCopies) / CLIENT_EVENT_UPLOAD_BATCH);
+  if (batches > EVENT_BATCHES_PER_MINUTE) return errorResponse('Invalid events.', 400);
+  const budget = await new RateLimitService(c.env).consumeBudget(
+    `${user.id}:events`,
+    EVENT_BATCHES_PER_MINUTE,
+    batches,
+  );
+  if (!budget.allowed)
+    return errorResponse('Too many requests', 429, { 'Retry-After': String(budget.retryAfterSeconds || 60) });
+  const memberByOrg = new Map(memberships.map((member) => [member.orgId, member]));
+  const ids = [
+    ...new Set(
+      input.filter((event) => CLIENT_CIPHER_TYPES.has(event.type) && event.cipherId).map((event) => event.cipherId!),
+    ),
+  ];
+  const readCiphers = (chunk: string[]) =>
+    getOrm(c.env.DB)
+      .select({ id: ciphers.id, organizationId: ciphers.organizationId })
+      .from(ciphers)
+      .where(inArray(ciphers.id, chunk));
+  const cipherRows = (await Promise.all(statementChunks(ids, readCiphers).map(readCiphers))).flat();
+  const collections = await orgRepo(c.env.DB).listCipherCollectionIdsByCipherIds(cipherRows.map((cipher) => cipher.id));
+  const accessByOrg = new Map(
+    await Promise.all(
+      [...new Set(cipherRows.map((cipher) => cipher.organizationId))]
+        .filter((orgId): orgId is string => {
+          const member = orgId ? memberByOrg.get(orgId) : undefined;
+          return !!member && !hasFullCollectionAccess(member);
+        })
+        .map(
+          async (orgId) =>
+            [
+              orgId,
+              new Map(
+                (await orgRepo(c.env.DB).listUserCollectionAccess(user.id, orgId)).map((access) => [
+                  access.collectionId,
+                  access,
+                ]),
+              ),
+            ] as const,
+        ),
+    ),
+  );
+  const accessible = new Map(
+    cipherRows
+      .filter((cipher) => {
+        const member = cipher.organizationId ? memberByOrg.get(cipher.organizationId) : undefined;
+        return (
+          member && canViewCipher(member, collections.get(cipher.id) ?? [], accessByOrg.get(member.orgId) ?? new Map())
+        );
+      })
+      .map((cipher) => [cipher.id, cipher.organizationId!]),
+  );
+
+  const records: EventInput[] = [];
+  for (const event of input) {
+    if (event.type === EventType.UserClientExportedVault) {
+      // Upstream LogUserEventAsync keeps the client date only on the personal row; organization copies
+      // get receipt time, so a member cannot backdate an export out of the range their admins review.
+      records.push(
+        { type: event.type, organizationId: null, userId: user.id, date: event.date },
+        ...memberships.map((member) => ({ type: event.type, organizationId: member.orgId, userId: user.id })),
+      );
+    } else if (CLIENT_CIPHER_TYPES.has(event.type) && event.cipherId) {
+      const orgId = accessible.get(event.cipherId);
+      if (!orgId || (event.organizationId !== null && event.organizationId !== orgId)) continue;
+      records.push({
+        type: event.type,
+        organizationId: orgId,
+        resourceType: 'cipher',
+        resourceId: event.cipherId,
+        date: event.date,
+      });
+    } else if (CLIENT_ORGANIZATION_TYPES.has(event.type) && event.organizationId) {
+      const member = memberByOrg.get(event.organizationId);
+      if (!member) continue;
+      records.push({
+        type: event.type,
+        organizationId: member.orgId,
+        date: event.date,
+        ...(event.type === EventType.OrganizationClientExportedVault
+          ? {}
+          : { resourceType: 'organizationUser' as const, resourceId: member.id, userId: user.id }),
+      });
+    }
+  }
+  // Unrecognized actions and inaccessible resources have the same acknowledged outcome.
+  await storeEvents(c.env, c.req.raw, { userId: user.id }, records);
+  return new Response(null, { status: 200 });
+}
+
 export async function handleEventRoute(c: AppContext, path: string, method: string): Promise<Response | null> {
   const { currentUser: user } = c.var;
-  if (path === '/events/collect') {
-    if (method !== 'POST') return errorResponse('Method not allowed', 405);
-    const input = await parseBody(c.req.raw, ClientEvents, INVALID_EVENTS.error);
-    if (input instanceof Response) return input;
-    const memberships = (await orgRepo(c.env.DB).listMembershipsByUser(user.id)).filter(isActiveMember);
-    // Charge before any lookup, counting the organization copies an export fans out to.
-    const exportCopies =
-      input.filter((event) => event.type === EventType.UserClientExportedVault).length * memberships.length;
-    const batches = Math.ceil((input.length + exportCopies) / CLIENT_EVENT_UPLOAD_BATCH);
-    if (batches > EVENT_BATCHES_PER_MINUTE) return errorResponse('Invalid events.', 400);
-    const budget = await new RateLimitService(c.env).consumeBudget(
-      `${user.id}:events`,
-      EVENT_BATCHES_PER_MINUTE,
-      batches,
-    );
-    if (!budget.allowed)
-      return errorResponse('Too many requests', 429, { 'Retry-After': String(budget.retryAfterSeconds || 60) });
-    const memberByOrg = new Map(memberships.map((member) => [member.orgId, member]));
-    const ids = [
-      ...new Set(
-        input.filter((event) => CLIENT_CIPHER_TYPES.has(event.type) && event.cipherId).map((event) => event.cipherId!),
-      ),
-    ];
-    const readCiphers = (chunk: string[]) =>
-      getOrm(c.env.DB)
-        .select({ id: ciphers.id, organizationId: ciphers.organizationId })
-        .from(ciphers)
-        .where(inArray(ciphers.id, chunk));
-    const cipherRows = (await Promise.all(statementChunks(ids, readCiphers).map(readCiphers))).flat();
-    const collections = await orgRepo(c.env.DB).listCipherCollectionIdsByCipherIds(
-      cipherRows.map((cipher) => cipher.id),
-    );
-    const accessByOrg = new Map(
-      await Promise.all(
-        [...new Set(cipherRows.map((cipher) => cipher.organizationId))]
-          .filter((orgId): orgId is string => {
-            const member = orgId ? memberByOrg.get(orgId) : undefined;
-            return !!member && !hasFullCollectionAccess(member);
-          })
-          .map(
-            async (orgId) =>
-              [
-                orgId,
-                new Map(
-                  (await orgRepo(c.env.DB).listUserCollectionAccess(user.id, orgId)).map((access) => [
-                    access.collectionId,
-                    access,
-                  ]),
-                ),
-              ] as const,
-          ),
-      ),
-    );
-    const accessible = new Map(
-      cipherRows
-        .filter((cipher) => {
-          const member = cipher.organizationId ? memberByOrg.get(cipher.organizationId) : undefined;
-          return (
-            member &&
-            canViewCipher(member, collections.get(cipher.id) ?? [], accessByOrg.get(member.orgId) ?? new Map())
-          );
-        })
-        .map((cipher) => [cipher.id, cipher.organizationId!]),
-    );
-
-    const records: EventInput[] = [];
-    for (const event of input) {
-      if (event.type === EventType.UserClientExportedVault) {
-        // Upstream LogUserEventAsync keeps the client date only on the personal row; organization copies
-        // get receipt time, so a member cannot backdate an export out of the range their admins review.
-        records.push(
-          { type: event.type, organizationId: null, userId: user.id, date: event.date },
-          ...memberships.map((member) => ({ type: event.type, organizationId: member.orgId, userId: user.id })),
-        );
-      } else if (CLIENT_CIPHER_TYPES.has(event.type) && event.cipherId) {
-        const orgId = accessible.get(event.cipherId);
-        if (!orgId || (event.organizationId !== null && event.organizationId !== orgId)) continue;
-        records.push({
-          type: event.type,
-          organizationId: orgId,
-          resourceType: 'cipher',
-          resourceId: event.cipherId,
-          date: event.date,
-        });
-      } else if (CLIENT_ORGANIZATION_TYPES.has(event.type) && event.organizationId) {
-        const member = memberByOrg.get(event.organizationId);
-        if (!member) continue;
-        records.push({
-          type: event.type,
-          organizationId: member.orgId,
-          date: event.date,
-          ...(event.type === EventType.OrganizationClientExportedVault
-            ? {}
-            : { resourceType: 'organizationUser' as const, resourceId: member.id, userId: user.id }),
-        });
-      }
-    }
-    // Unrecognized actions and inaccessible resources have the same acknowledged outcome.
-    await storeEvents(c.env, c.req.raw, { userId: user.id }, records);
-    return new Response(null, { status: 200 });
-  }
   if (path === '/api/events')
     return method === 'GET'
       ? listEventsResponse(c.req.raw, c.env.DB, { personalUserId: user.id })

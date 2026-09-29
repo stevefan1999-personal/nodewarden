@@ -11,9 +11,13 @@ import {
   handleAdminGetAuditLogSettings,
   handleAdminUpdateAuditLogSettings,
   handleAdminClearAuditLogs,
+  AdminUpdateAuditLogSettingsBody,
+  InviteBody,
+  PasswordBody,
+  StatusBody,
 } from './handlers/admin';
 import { adminBackupRoutes } from './router-admin-backup';
-import { errorResponse } from './utils/response';
+import { errorResponse, jsonBody } from './utils/response';
 import type { AppEnv } from './router';
 
 const adminUser = '/api/admin/users/:userId{[a-f0-9-]+}';
@@ -45,13 +49,22 @@ adminRoutes.get('/api/admin/users', handleAdminListUsers);
 adminRoutes.get('/api/admin/logs', handleAdminListAuditLogs);
 adminRoutes.delete('/api/admin/logs', handleAdminClearAuditLogs);
 adminRoutes.get('/api/admin/logs/settings', handleAdminGetAuditLogSettings);
-adminRoutes.on(['PUT', 'POST'], '/api/admin/logs/settings', handleAdminUpdateAuditLogSettings);
+adminRoutes.on(
+  ['PUT', 'POST'],
+  '/api/admin/logs/settings',
+  jsonBody(AdminUpdateAuditLogSettingsBody),
+  handleAdminUpdateAuditLogSettings,
+);
 
 adminRoutes.route('/', adminBackupRoutes);
 
 adminRoutes.get('/api/admin/invites', handleAdminListInvites);
-adminRoutes.post('/api/admin/invites', handleAdminCreateInvite);
-adminRoutes.delete('/api/admin/invites', handleAdminDeleteAllInvites);
-adminRoutes.delete('/api/admin/invites/:inviteCode', (c) => handleAdminDeleteInvite(c, c.req.param('inviteCode')));
-adminRoutes.on(['PUT', 'POST'], `${adminUser}/status`, (c) => handleAdminSetUserStatus(c, c.req.param('userId')));
-adminRoutes.delete(adminUser, (c) => handleAdminDeleteUser(c, c.req.param('userId')));
+adminRoutes.post('/api/admin/invites', jsonBody(InviteBody), handleAdminCreateInvite);
+adminRoutes.delete('/api/admin/invites', jsonBody(PasswordBody), handleAdminDeleteAllInvites);
+adminRoutes.delete('/api/admin/invites/:inviteCode', jsonBody(PasswordBody), (c) =>
+  handleAdminDeleteInvite(c, c.req.param('inviteCode')),
+);
+adminRoutes.on(['PUT', 'POST'], `${adminUser}/status`, jsonBody(StatusBody), (c) =>
+  handleAdminSetUserStatus(c, c.req.param('userId')),
+);
+adminRoutes.delete(adminUser, jsonBody(PasswordBody), (c) => handleAdminDeleteUser(c, c.req.param('userId')));

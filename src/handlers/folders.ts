@@ -7,7 +7,7 @@ import {
   notifyUserFolderUpdate,
   notifyUserVaultSync,
 } from '../durable/notifications-hub';
-import { errorResponse, jsonResponse, parseBody } from '../utils/response';
+import { errorResponse, jsonResponse, type BodyContext } from '../utils/response';
 import { readActingDeviceIdentifier } from '../utils/device';
 import { generateUUID } from '../utils/uuid';
 import { parsePagination, encodeContinuationToken } from '../utils/pagination';
@@ -63,16 +63,14 @@ export async function handleGetFolder(c: AppContext, id: string): Promise<Respon
   return jsonResponse(folderToResponse(folder));
 }
 
+export const CreateFolderBody = z.object({
+  name: z.string({ error: 'Name is required' }).min(1, { error: 'Name is required' }),
+});
+
 // POST /api/folders
-export async function handleCreateFolder(c: AppContext): Promise<Response> {
+export async function handleCreateFolder(c: BodyContext<typeof CreateFolderBody>): Promise<Response> {
   const { userId } = c.var;
-  const body = await parseBody(
-    c.req.raw,
-    z.object({
-      name: z.string({ error: 'Name is required' }).min(1, { error: 'Name is required' }),
-    }),
-  );
-  if (body instanceof Response) return body;
+  const body = c.req.valid('json');
 
   const now = new Date().toISOString();
   const folder: Folder = {
@@ -96,8 +94,10 @@ export async function handleCreateFolder(c: AppContext): Promise<Response> {
   return jsonResponse(folderToResponse(folder), 200);
 }
 
+export const UpdateFolderBody = z.object({ name: z.string().nullish() });
+
 // PUT /api/folders/:id
-export async function handleUpdateFolder(c: AppContext, id: string): Promise<Response> {
+export async function handleUpdateFolder(c: BodyContext<typeof UpdateFolderBody>, id: string): Promise<Response> {
   const { userId } = c.var;
   const folder = await folderRepo(c.env.DB).getFolderForUser(id, userId);
 
@@ -105,8 +105,7 @@ export async function handleUpdateFolder(c: AppContext, id: string): Promise<Res
     return errorResponse('Folder not found', 404);
   }
 
-  const body = await parseBody(c.req.raw, z.object({ name: z.string().nullish() }));
-  if (body instanceof Response) return body;
+  const body = c.req.valid('json');
 
   if (body.name) {
     folder.name = body.name;
@@ -152,11 +151,12 @@ export async function handleDeleteFolder(c: AppContext, id: string): Promise<Res
   return new Response(null, { status: 204 });
 }
 
+export const BulkDeleteFoldersBody = z.object({ ids: nonEmptyIdList('Folder ids are required') });
+
 // POST /api/folders/delete
-export async function handleBulkDeleteFolders(c: AppContext): Promise<Response> {
+export async function handleBulkDeleteFolders(c: BodyContext<typeof BulkDeleteFoldersBody>): Promise<Response> {
   const { userId } = c.var;
-  const body = await parseBody(c.req.raw, z.object({ ids: nonEmptyIdList('Folder ids are required') }));
-  if (body instanceof Response) return body;
+  const body = c.req.valid('json');
   const { ids } = body;
 
   const folders = (

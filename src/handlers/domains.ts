@@ -7,7 +7,7 @@ import {
   normalizeEquivalentDomains,
   normalizeExcludedGlobalTypes,
 } from '../services/domain-rules';
-import { errorResponse, jsonResponse, normalizeJsonKeys } from '../utils/response';
+import { errorResponse, jsonResponse, type BodyContext } from '../utils/response';
 import { domainRulesRepo } from '../services/storage-domain-rules-repo';
 
 // CONTRACT:
@@ -17,7 +17,7 @@ import { domainRulesRepo } from '../services/storage-domain-rules-repo';
 // src/services/storage-domain-rules-repo.ts.
 // A field that is present, even as null, replaces the stored rules; an absent one keeps them. The
 // normalizers drop malformed entries, so a body that is not a JSON object changes nothing.
-const DomainsBody = z.record(z.string(), z.unknown()).catch({});
+export const DomainsBody = z.record(z.string(), z.unknown()).catch({});
 
 export async function handleGetDomains(c: AppContext): Promise<Response> {
   const { userId } = c.var;
@@ -31,9 +31,9 @@ export async function handleGetDomains(c: AppContext): Promise<Response> {
   );
 }
 
-export async function handleUpdateDomains(c: AppContext): Promise<Response> {
+export async function handleUpdateDomains(c: BodyContext<typeof DomainsBody>): Promise<Response> {
   const { userId } = c.var;
-  const payload = DomainsBody.parse(normalizeJsonKeys(await c.req.raw.json().catch(() => null)));
+  const payload = c.req.valid('json');
   const current = await domainRulesRepo(c.env.DB).getUserDomainSettings(userId);
   const customEquivalentDomains =
     payload.customEquivalentDomains !== undefined

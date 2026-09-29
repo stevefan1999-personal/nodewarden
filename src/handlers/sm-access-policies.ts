@@ -15,7 +15,7 @@ import {
   secretAccess,
   serviceAccountAccess,
 } from '../services/sm-authz';
-import { errorResponse, jsonResponse, parseBody } from '../utils/response';
+import { errorResponse, jsonResponse, type BodyContext } from '../utils/response';
 import { listResponse, PolicyRequests, smContext } from './secrets-manager';
 import { EventType, recordEvents, type EventInput } from '../services/events';
 
@@ -103,7 +103,7 @@ export async function peoplePolicyResponse(
 }
 
 export async function handlePeoplePolicies(
-  c: AppContext,
+  c: BodyContext<typeof PolicyRequests>,
   kind: 'project' | 'serviceAccount',
   id: string,
 ): Promise<Response> {
@@ -117,8 +117,7 @@ export async function handlePeoplePolicies(
       : serviceAccountAccess(context.actor, context.grants, id);
   if (access !== 'write') return errorResponse('Not found', 404);
   if (c.req.raw.method === 'PUT') {
-    const body = await parseBody(c.req.raw, PolicyRequests, 'Access policies must be an object.');
-    if (body instanceof Response) return body;
+    const body = c.req.valid('json');
     const users = parsePolicyRequests(body.userAccessPolicyRequests ?? [], 'granteeId', kind === 'serviceAccount');
     const groups = parsePolicyRequests(body.groupAccessPolicyRequests ?? [], 'granteeId', kind === 'serviceAccount');
     if (!users.ok) return errorResponse(users.message, 400);
@@ -206,7 +205,7 @@ export function policyConflict(error: unknown): Response | null {
 }
 
 export async function handleMachinePolicies(
-  c: AppContext,
+  c: BodyContext<typeof PolicyRequests>,
   kind: 'project' | 'serviceAccount',
   id: string,
 ): Promise<Response> {
@@ -224,8 +223,7 @@ export async function handleMachinePolicies(
       ? await smRepo(c.env.DB).readProjectMachinePolicies(row.orgId, id)
       : await smRepo(c.env.DB).readGrantedProjects(row.orgId, id);
   if (c.req.raw.method === 'PUT') {
-    const body = await parseBody(c.req.raw, PolicyRequests, 'Access policies must be arrays.');
-    if (body instanceof Response) return body;
+    const body = c.req.valid('json');
     const parsed = parsePolicyRequests(
       body[kind === 'project' ? 'serviceAccountAccessPolicyRequests' : 'projectGrantedPolicyRequests'],
       kind === 'project' ? 'granteeId' : 'grantedId',

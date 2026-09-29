@@ -15,7 +15,7 @@ import {
 } from '../services/sm-authz';
 import type { Env } from '../types';
 import { smRepo, type SmSecret, type SmProject, type SmServiceAccount } from '../services/storage-secret-repo';
-import { errorResponse, jsonResponse, parseBody } from '../utils/response';
+import { errorResponse, jsonResponse, type BodyContext } from '../utils/response';
 import { generateUUID } from '../utils/uuid';
 import { hashApiKey, randomStringAlphanum } from '../utils/api-key';
 import { EventType, listEventsResponse, recordEvents } from '../services/events';
@@ -29,30 +29,37 @@ const encrypted = (max: number, error: string) =>
 const guids = (error: string) =>
   z.array(z.guid({ error }), { error }).transform((ids) => ids.map((id) => id.toLowerCase()));
 const NAME_ERROR = 'Name must be an encrypted string of at most 1000 characters.';
-const NameBody = z.object({ name: encrypted(1000, NAME_ERROR) }, { error: NAME_ERROR });
+export const NameBody = z.object({ name: encrypted(1000, NAME_ERROR) }, { error: NAME_ERROR });
 const IDS_ERROR = 'Ids must be an array of GUIDs.';
-const IdsBody = z.object({ ids: guids(IDS_ERROR) }, { error: IDS_ERROR });
+export const IdsBody = z.object({ ids: guids(IDS_ERROR) }, { error: IDS_ERROR });
+export const GuidsBody = guids('Request body must be an array of GUIDs');
+export const SecretIdsBody = guids('Request body must be an array of secret GUIDs');
 
 // The grant lists stay unknown here because parsePolicyRequests owns their messages.
 export const PolicyRequests = z.record(z.string(), z.unknown(), { error: 'Access policies must be an object.' });
 
 const SECRET_ERROR = 'Key, value and note must be encrypted strings within their size limits.';
-const SecretBody = z.object(
-  {
-    key: encrypted(1000, SECRET_ERROR),
-    value: encrypted(35000, SECRET_ERROR),
-    note: encrypted(10000, SECRET_ERROR),
-    projectIds: guids('ProjectIds must be an array of GUIDs.')
-      .nullish()
-      .transform((ids) => ids ?? []),
-    accessPoliciesRequests: PolicyRequests.nullish(),
-  },
-  { error: SECRET_ERROR },
-);
+export const SecretBody = z
+  .object(
+    {
+      key: encrypted(1000, SECRET_ERROR),
+      value: encrypted(35000, SECRET_ERROR),
+      note: encrypted(10000, SECRET_ERROR),
+      projectIds: guids('ProjectIds must be an array of GUIDs.')
+        .nullish()
+        .transform((ids) => ids ?? []),
+      accessPoliciesRequests: PolicyRequests.nullish(),
+    },
+    { error: SECRET_ERROR },
+  )
+  .refine((input) => input.projectIds.length <= 1, {
+    error: 'Only one project assignment is supported.',
+    path: ['ProjectIds'],
+  });
 
 const TOKEN_ERROR = 'Name, encryptedPayload and key must be encrypted strings within their size limits.';
 const EXPIRE_ERROR = 'ExpireAt must be in the future.';
-const AccessTokenBody = z.object(
+export const AccessTokenBody = z.object(
   {
     name: encrypted(200, TOKEN_ERROR),
     encryptedPayload: encrypted(4000, TOKEN_ERROR),
@@ -139,23 +146,11 @@ export async function handleProjectSecrets(c: AppContext, id: string): Promise<R
   return project ? handleListSecrets(c, project.orgId, id) : errorResponse('Not found', 404);
 }
 
-async function secretInput(request: Request) {
-  const input = await parseBody(request, SecretBody, SECRET_ERROR);
-  if (input instanceof Response || input.projectIds.length <= 1) return input;
-  return errorResponse(
-    'Only one project assignment is supported.',
-    400,
-    {},
-    { ProjectIds: ['Only one project assignment is supported.'] },
-  );
-}
-
-export async function handleCreateSecret(c: AppContext, orgId: string): Promise<Response> {
+export async function handleCreateSecret(c: BodyContext<typeof SecretBody>, orgId: string): Promise<Response> {
   const { principal } = c.var;
   const context = await smContext(c.env, principal, orgId);
   if (!context) return errorResponse('Not found', 404);
-  const input = await secretInput(c.req.raw);
-  if (input instanceof Response) return input;
+  const input = c.req.valid('json');
   if (!(await allProjectsInOrg(c.env.DB, orgId, input.projectIds))) return errorResponse('Resource not found.', 404);
   if (!canCreateSecret(context.actor, context.grants, input.projectIds[0])) return errorResponse('Not found', 404);
   const now = new Date().toISOString();
@@ -188,13 +183,12 @@ export async function handleGetSecret(c: AppContext, secretId: string): Promise<
   return jsonResponse(secretResponse(secret, await projectNames(c.env.DB, secret.orgId), access));
 }
 
-export async function handleUpdateSecret(c: AppContext, secretId: string): Promise<Response> {
+export async function handleUpdateSecret(c: BodyContext<typeof SecretBody>, secretId: string): Promise<Response> {
   const { principal } = c.var;
   const existing = await smRepo(c.env.DB).getSecret(secretId);
   const context = existing && !existing.deletedAt && (await smContext(c.env, principal, existing.orgId));
   if (!existing || !context) return errorResponse('Not found', 404);
-  const input = await secretInput(c.req.raw);
-  if (input instanceof Response) return input;
+  const input = c.req.valid('json');
   if (!(await allProjectsInOrg(c.env.DB, existing.orgId, input.projectIds)))
     return errorResponse('Resource not found.', 404);
   if (!canUpdateSecret(context.actor, context.grants, existing, input.projectIds))
@@ -223,10 +217,9 @@ export async function handleUpdateSecret(c: AppContext, secretId: string): Promi
   return jsonResponse(secretResponse(secret, await projectNames(c.env.DB, secret.orgId)));
 }
 
-export async function handleDeleteSecrets(c: AppContext): Promise<Response> {
+export async function handleDeleteSecrets(c: BodyContext<typeof SecretIdsBody>): Promise<Response> {
   const { principal } = c.var;
-  const ids = await readIds(c.req.raw, 'Request body must be an array of secret GUIDs');
-  if (ids instanceof Response) return ids;
+  const ids = c.req.valid('json');
   if (!ids.length || new Set(ids).size !== ids.length) return errorResponse('Not found', 404);
   const secrets = await smRepo(c.env.DB).getSecretsByIds(ids);
   const orgId = secrets[0]?.orgId;
@@ -255,10 +248,9 @@ export async function handleDeleteSecrets(c: AppContext): Promise<Response> {
   return jsonResponse(listResponse(data));
 }
 
-export async function handleSecretsByIds(c: AppContext): Promise<Response> {
+export async function handleSecretsByIds(c: BodyContext<typeof IdsBody>): Promise<Response> {
   const { principal } = c.var;
-  const body = await parseBody(c.req.raw, IdsBody, IDS_ERROR);
-  if (body instanceof Response) return body;
+  const body = c.req.valid('json');
   const { ids } = body;
   if (!ids.length || new Set(ids).size !== ids.length) return errorResponse('Not found', 404);
   const secrets = await smRepo(c.env.DB).getSecretsByIds(ids);
@@ -305,10 +297,6 @@ function projectResponse(project: SmProject, level: SmAccess) {
   };
 }
 
-function readIds(request: Request, message: string) {
-  return parseBody(request, guids(message), message);
-}
-
 export async function handleListProjects(c: AppContext, orgId: string): Promise<Response> {
   const { principal } = c.var;
   const context = await smContext(c.env, principal, orgId);
@@ -320,12 +308,11 @@ export async function handleListProjects(c: AppContext, orgId: string): Promise<
   return jsonResponse(listResponse(projects));
 }
 
-export async function handleCreateProject(c: AppContext, orgId: string): Promise<Response> {
+export async function handleCreateProject(c: BodyContext<typeof NameBody>, orgId: string): Promise<Response> {
   const { principal } = c.var;
   const context = await smContext(c.env, principal, orgId);
   if (!context) return errorResponse('Not found', 404);
-  const body = await parseBody(c.req.raw, NameBody, NAME_ERROR);
-  if (body instanceof Response) return body;
+  const body = c.req.valid('json');
   const now = new Date().toISOString();
   const project = { id: generateUUID(), orgId, name: body.name, createdAt: now, updatedAt: now };
   await smRepo(c.env.DB).createProject(project, context.actor);
@@ -335,7 +322,7 @@ export async function handleCreateProject(c: AppContext, orgId: string): Promise
   return jsonResponse(projectResponse(project, 'write'));
 }
 
-export async function handleProject(c: AppContext, id: string, counts = false): Promise<Response> {
+export async function handleProject(c: BodyContext<typeof NameBody>, id: string, counts = false): Promise<Response> {
   const { principal } = c.var;
   const project = await smRepo(c.env.DB).getProject(id);
   const context = project && (await smContext(c.env, principal, project.orgId));
@@ -347,8 +334,7 @@ export async function handleProject(c: AppContext, id: string, counts = false): 
       : jsonResponse(await smRepo(c.env.DB).projectCounts(project, access));
   if (access === 'none' || (c.req.raw.method === 'PUT' && access !== 'write')) return errorResponse('Not found', 404);
   if (c.req.raw.method === 'PUT') {
-    const body = await parseBody(c.req.raw, NameBody, NAME_ERROR);
-    if (body instanceof Response) return body;
+    const body = c.req.valid('json');
     project.name = body.name;
     project.updatedAt = new Date().toISOString();
     if (!(await smRepo(c.env.DB).updateProject(project))) return errorResponse('Not found', 404);
@@ -364,10 +350,9 @@ export async function handleProject(c: AppContext, id: string, counts = false): 
   return jsonResponse(projectResponse(project, access));
 }
 
-export async function handleDeleteProjects(c: AppContext): Promise<Response> {
+export async function handleDeleteProjects(c: BodyContext<typeof GuidsBody>): Promise<Response> {
   const { principal } = c.var;
-  const ids = await readIds(c.req.raw, 'Request body must be an array of GUIDs');
-  if (ids instanceof Response) return ids;
+  const ids = c.req.valid('json');
   if (!ids.length || new Set(ids).size !== ids.length) return errorResponse('Not found', 404);
   const projects = await smRepo(c.env.DB).getProjectsByIds(ids);
   const orgId = projects[0]?.orgId;
@@ -424,12 +409,11 @@ export async function handleListServiceAccounts(c: AppContext, orgId: string): P
   );
 }
 
-export async function handleCreateServiceAccount(c: AppContext, orgId: string): Promise<Response> {
+export async function handleCreateServiceAccount(c: BodyContext<typeof NameBody>, orgId: string): Promise<Response> {
   const { principal } = c.var;
   const context = await smContext(c.env, principal, orgId);
   if (!context || context.actor.kind === 'serviceAccount') return errorResponse('Not found', 404);
-  const body = await parseBody(c.req.raw, NameBody, NAME_ERROR);
-  if (body instanceof Response) return body;
+  const body = c.req.valid('json');
   const now = new Date().toISOString();
   const account = { id: generateUUID(), orgId, name: body.name, createdAt: now, updatedAt: now };
   await smRepo(c.env.DB).createServiceAccount(account, context.actor.membershipId);
@@ -447,7 +431,11 @@ export async function handleCreateServiceAccount(c: AppContext, orgId: string): 
   return jsonResponse(serviceAccountResponse(account));
 }
 
-export async function handleServiceAccount(c: AppContext, id: string, counts = false): Promise<Response> {
+export async function handleServiceAccount(
+  c: BodyContext<typeof NameBody>,
+  id: string,
+  counts = false,
+): Promise<Response> {
   const { principal } = c.var;
   const account = await smRepo(c.env.DB).getServiceAccount(id);
   const context = account && (await smContext(c.env, principal, account.orgId));
@@ -456,8 +444,7 @@ export async function handleServiceAccount(c: AppContext, id: string, counts = f
   if (counts) return jsonResponse(await smRepo(c.env.DB).serviceAccountCounts(account, access));
   if (access === 'none') return errorResponse('Not found', 404);
   if (c.req.raw.method === 'PUT') {
-    const body = await parseBody(c.req.raw, NameBody, NAME_ERROR);
-    if (body instanceof Response) return body;
+    const body = c.req.valid('json');
     account.name = body.name;
     account.updatedAt = new Date().toISOString();
     if (!(await smRepo(c.env.DB).updateServiceAccount(account))) return errorResponse('Not found', 404);
@@ -465,10 +452,9 @@ export async function handleServiceAccount(c: AppContext, id: string, counts = f
   return jsonResponse(serviceAccountResponse(account));
 }
 
-export async function handleDeleteServiceAccounts(c: AppContext): Promise<Response> {
+export async function handleDeleteServiceAccounts(c: BodyContext<typeof GuidsBody>): Promise<Response> {
   const { principal } = c.var;
-  const ids = await readIds(c.req.raw, 'Request body must be an array of GUIDs');
-  if (ids instanceof Response) return ids;
+  const ids = c.req.valid('json');
   if (!ids.length || new Set(ids).size !== ids.length) return errorResponse('Not found', 404);
   const accounts = await smRepo(c.env.DB).getServiceAccountsByIds(ids);
   const orgId = accounts[0]?.orgId;
@@ -498,14 +484,13 @@ export async function handleDeleteServiceAccounts(c: AppContext): Promise<Respon
   return jsonResponse(listResponse(data));
 }
 
-export async function handleRevokeAccessTokens(c: AppContext, id: string): Promise<Response> {
+export async function handleRevokeAccessTokens(c: BodyContext<typeof IdsBody>, id: string): Promise<Response> {
   const { principal } = c.var;
   const account = await smRepo(c.env.DB).getServiceAccount(id);
   const context = account && (await smContext(c.env, principal, account.orgId));
   if (!context || serviceAccountAccess(context.actor, context.grants, id) !== 'write')
     return errorResponse('Not found', 404);
-  const body = await parseBody(c.req.raw, IdsBody, IDS_ERROR);
-  if (body instanceof Response) return body;
+  const body = c.req.valid('json');
   await smRepo(c.env.DB).revokeAccessTokens(id, body.ids);
   return new Response(null, { status: 200 });
 }
@@ -528,14 +513,16 @@ export async function handleSmCounts(c: AppContext, orgId: string): Promise<Resp
   });
 }
 
-export async function handleCreateAccessToken(c: AppContext, serviceAccountId: string): Promise<Response> {
+export async function handleCreateAccessToken(
+  c: BodyContext<typeof AccessTokenBody>,
+  serviceAccountId: string,
+): Promise<Response> {
   const { principal } = c.var;
   const account = await smRepo(c.env.DB).getServiceAccount(serviceAccountId);
   const context = account && (await smContext(c.env, principal, account.orgId));
   if (!account || !context || serviceAccountAccess(context.actor, context.grants, account.id) !== 'write')
     return errorResponse('Not found', 404);
-  const body = await parseBody(c.req.raw, AccessTokenBody, TOKEN_ERROR);
-  if (body instanceof Response) return body;
+  const body = c.req.valid('json');
   const clientSecret = randomStringAlphanum(LIMITS.auth.clientSecretLength);
   const token = {
     id: generateUUID(),
@@ -663,7 +650,7 @@ export async function handleSecretsSync(c: AppContext, orgId: string): Promise<R
 }
 
 export async function handleSecretsTrash(
-  c: AppContext,
+  c: BodyContext<typeof GuidsBody>,
   orgId: string,
   action?: 'empty' | 'restore',
 ): Promise<Response> {
@@ -679,8 +666,7 @@ export async function handleSecretsTrash(
         context,
       ),
     );
-  const ids = await readIds(c.req.raw, 'Request body must be an array of GUIDs');
-  if (ids instanceof Response) return ids;
+  const ids = c.req.valid('json');
   if (!ids.length || new Set(ids).size !== ids.length) return errorResponse('Not found', 404);
   const secrets = await smRepo(c.env.DB).getSecretsByIds(ids);
   if (secrets.length !== ids.length || secrets.some((secret) => secret.orgId !== orgId || !secret.deletedAt))

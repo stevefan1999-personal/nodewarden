@@ -1,4 +1,7 @@
+import { zValidator } from '@hono/zod-validator';
+import type { Context, MiddlewareHandler } from 'hono';
 import { z } from 'zod';
+import type { AppEnv } from '../router';
 import { isAdminPortalPath } from '../web-vault-visibility';
 import type { Env } from '../types';
 import {
@@ -195,32 +198,37 @@ export async function readFormOrJson(request: Request): Promise<unknown> {
     : normalizeJsonKeys(await request.json());
 }
 
-// Zod request bodies. parseBody reads the body through readFormOrJson, so the schema sees camelCase keys
-// even when official clients send PascalCase, and resolves to the schema output or to a 400 Response callers
-// return as is: `message` (default 'Invalid JSON') for an unreadable body, otherwise the first issue's
-// message with validationErrors from bodyIssues, every issue message grouped under its dotted path ('' for
-// the body itself) as in upstream ErrorResponseModel.
-export function bodyIssues(error: z.ZodError): Record<string, string[]> {
-  return Object.fromEntries(
+// Input a schema refused, in the Bitwarden error shape: the first issue's message, with validationErrors grouping
+// every issue message under its dotted path ('' for the body itself) as in upstream ErrorResponseModel.
+export function validationErrorResponse(error: {
+  issues: readonly { path: readonly PropertyKey[]; message: string }[];
+}): Response {
+  const validationErrors = Object.fromEntries(
     error.issues.reduce((byPath, { path, message }) => {
       const field = path.join('.');
       return byPath.set(field, [...(byPath.get(field) ?? []), message]);
     }, new Map<string, string[]>()),
   );
+  return errorResponse(error.issues[0].message, 400, {}, validationErrors);
 }
 
-export async function parseBody<S extends z.ZodType>(
-  request: Request,
+// Request bodies validate at the route through @hono/zod-validator, and a handler typed BodyContext<typeof Schema>
+// reads the result with c.req.valid('json'). Only a body labelled as JSON is read (official clients always label
+// theirs; anything else validates as {}). The schema sees camelCase keys even when a client sends PascalCase, a scalar
+// reads as an empty object and an array passes through for the routes that take a bare list. A failure answers
+// `refused`, by default validationErrorResponse; JSON that does not parse reaches app.onError as an HTTPException.
+export function jsonBody<S extends z.ZodType>(
   schema: S,
-  message = 'Invalid JSON',
-): Promise<z.output<S> | Response> {
-  // Scalars read as an empty object; arrays pass through for the routes that take a bare list.
-  const body = await readFormOrJson(request)
-    .then((payload) => (payload && typeof payload === 'object' ? payload : {}))
-    .catch(() => errorResponse(message, 400));
-  if (body instanceof Response) return body;
-  const result = schema.safeParse(body);
-  return result.success
-    ? result.data
-    : errorResponse(result.error.issues[0].message, 400, {}, bodyIssues(result.error));
+  refused: (error: Parameters<typeof validationErrorResponse>[0]) => Response = validationErrorResponse,
+): MiddlewareHandler<AppEnv, string, BodyInput<S>> {
+  return zValidator(
+    'json',
+    z.preprocess((payload) => (payload && typeof payload === 'object' ? normalizeJsonKeys(payload) : {}), schema),
+    (result) => {
+      if (!result.success) return refused(result.error);
+    },
+  );
 }
+
+type BodyInput<S extends z.ZodType> = { out: { json: z.output<S> } };
+export type BodyContext<S extends z.ZodType> = Context<AppEnv, string, BodyInput<S>>;

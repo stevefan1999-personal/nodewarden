@@ -20,7 +20,13 @@ import { Env, TokenResponse, User } from '../types';
 import { AuthService } from '../services/auth';
 import { twoFactorProviders, twoFactorClearStatements } from '../services/two-factor-providers';
 import { RateLimitService, getClientIdentifier } from '../services/ratelimit';
-import { deviceErrorResponse, identityErrorResponse, jsonResponse, parseBody, readFormOrJson } from '../utils/response';
+import {
+  deviceErrorResponse,
+  identityErrorResponse,
+  jsonResponse,
+  readFormOrJson,
+  type BodyContext,
+} from '../utils/response';
 import { getRefreshTokenSlidingTtlMs, LIMITS } from '../config/limits';
 import { parse, serialize } from 'hono/utils/cookie';
 import { sha256 } from 'hono/utils/crypto';
@@ -1186,10 +1192,11 @@ export async function handleToken(c: AppContext): Promise<Response> {
   return identityErrorResponse('Unsupported grant type', 'unsupported_grant_type', 400);
 }
 
+export const PreloginBody = z.object({ email: requiredText('Email is required').toLowerCase() });
+
 // POST /identity/accounts/prelogin
-export async function handlePrelogin(c: AppContext): Promise<Response> {
-  const body = await parseBody(c.req.raw, z.object({ email: requiredText('Email is required').toLowerCase() }));
-  if (body instanceof Response) return body;
+export async function handlePrelogin(c: BodyContext<typeof PreloginBody>): Promise<Response> {
+  const body = c.req.valid('json');
   const { email } = body;
 
   const user = await userRepo(c.env.DB).getUser(email);

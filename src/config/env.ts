@@ -19,7 +19,7 @@ export function normalizeOrigin(value: unknown): string | null {
   }
 }
 
-// Every field falls back instead of failing: a malformed optional variable degrades its feature, never the Worker.
+// Optional features degrade on malformed variables; hosted security settings fail closed.
 const text = z.string().trim().catch('');
 const optionalText = z.coerce.string().optional();
 // These switches have only ever accepted a literal "1"; "true" and friends keep them off.
@@ -41,6 +41,11 @@ const originList = z
   ]);
 
 export const EnvConfig = z.object({
+  NODEWARDEN_DEPLOYMENT: z.enum(['standalone', 'dispatch']).default('standalone').nullable().catch(null),
+  TENANT_OWNER_EMAIL: z.string().trim().toLowerCase().max(256).regex(EMAIL_PATTERN).nullable().optional().catch(null),
+  PLATFORM_INTERNAL_SECRET: z.string().trim().min(LIMITS.auth.jwtSecretMinLength).optional().catch(undefined),
+  PLATFORM_SUBSCRIPTION_STATUS: z.enum(['active', 'suspended']).default('active').nullable().catch(null),
+  PLATFORM_REQUIRE_GATEWAY: z.enum(['0', '1']).default('0').nullable().catch(null),
   JWT_SECRET: text.transform((secret) =>
     secret.length >= LIMITS.auth.jwtSecretMinLength
       ? { kind: 'safe' as const, secret }

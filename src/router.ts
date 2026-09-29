@@ -13,6 +13,9 @@ import { LIMITS } from './config/limits';
 import { authenticatedRoutes } from './router-authenticated';
 import { jwtSecretUnsafeReason, publicRoutes, tooManyRequests } from './router-public';
 import { withoutQueryParams } from './db/client';
+import { readEnvConfig } from './config/env';
+import { constantTimeEquals } from './utils/api-key';
+import { runMaintenance } from './services/maintenance';
 
 // Per-request state the gates below derive for the route handlers. `userId` and `currentUser`
 // are only set for user principals; the guard before the authenticated routes keeps machine
@@ -131,6 +134,16 @@ app.use(async (c, next) => {
     if (!servable) return errorResponse(c, 'Server configuration error: JWT_SECRET is not set or too weak', 500);
   }
   await next();
+});
+
+app.post('/api/internal/maintenance', async (c) => {
+  const secret = readEnvConfig(c.env).PLATFORM_INTERNAL_SECRET;
+  const authorization = c.req.header('Authorization') || '';
+  if (!secret || !authorization.startsWith('Bearer ') || !constantTimeEquals(authorization.slice(7), secret)) {
+    return errorResponse(c, 'Unauthorized', 401);
+  }
+  await runMaintenance(c.env);
+  return c.body(null, 204);
 });
 
 app.route('/', publicRoutes);

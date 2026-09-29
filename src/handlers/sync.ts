@@ -4,6 +4,7 @@ import { errorResponse } from '../utils/response';
 import { cipherToResponse, isCipherResponseSyncCompatible, shouldPreserveRepairableCipherUris } from './ciphers';
 import { sendToResponse } from './sends';
 import { LIMITS } from '../config/limits';
+import { readEnvConfig } from '../config/env';
 import { buildUserDecryptionCompat, buildUserDecryptionOptions } from '../utils/user-decryption';
 import { buildDomainsResponse } from '../services/domain-rules';
 import { buildWebAuthnPrfOption } from '../utils/account-passkeys';
@@ -59,7 +60,9 @@ export async function handleSync(c: AppContext): Promise<Response> {
     ).toString(),
     { method: 'GET' },
   );
-  const cachedResponse = await caches.default.match(cacheRequest);
+  // Namespaced Workers cannot access caches.default, including its getter.
+  const cache = readEnvConfig(c.env).NODEWARDEN_DEPLOYMENT === 'standalone' ? caches.default : undefined;
+  const cachedResponse = await cache?.match(cacheRequest);
   if (cachedResponse) {
     return new Response(cachedResponse.body, cachedResponse);
   }
@@ -193,6 +196,6 @@ export async function handleSync(c: AppContext): Promise<Response> {
       'Cache-Control': `private, max-age=${Math.max(1, Math.floor(LIMITS.cache.syncResponseTtlMs / 1000))}`,
     },
   });
-  await caches.default.put(cacheRequest, response.clone());
+  await cache?.put(cacheRequest, response.clone());
   return response;
 }

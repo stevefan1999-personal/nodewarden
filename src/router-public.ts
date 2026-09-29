@@ -19,6 +19,7 @@ import {
   handleRegister,
   handleRegisterFinish,
   handleRegisterSendVerificationEmail,
+  handleRegisterVerificationEmailClicked,
   handleGetPasswordHint,
   handleRecoverTwoFactor,
   handleSendTwoFactorEmailLogin,
@@ -26,6 +27,7 @@ import {
   handleDeleteRecover,
   handleDeleteRecoverToken,
   RegisterSendVerificationEmailBody,
+  RegisterVerificationEmailClickedBody,
   GetPasswordHintBody,
   DeleteRecoverBody,
   ResendNewDeviceOtpBody,
@@ -448,11 +450,13 @@ publicRoutes.on(
     '/api/accounts/register/verification-email-clicked',
     '/accounts/register/verification-email-clicked',
     '/identity/accounts/register/verification-email-clicked',
-    '/api/accounts/verify-email-token',
-    '/accounts/verify-email-token',
   ],
   publicSensitive,
-  (c) => unsupportedResponse(c, 'Email delivery is not supported by this server.'),
+  jsonBody(RegisterVerificationEmailClickedBody),
+  handleRegisterVerificationEmailClicked,
+);
+publicRoutes.on('POST', ['/api/accounts/verify-email-token', '/accounts/verify-email-token'], publicSensitive, (c) =>
+  unsupportedResponse(c, 'Email delivery is not supported by this server.'),
 );
 
 publicRoutes.post(

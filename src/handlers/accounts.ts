@@ -32,6 +32,7 @@ import { auditRequestMetadata, writeAuditEvent, auditEventStatement } from '../s
 import { z } from 'zod';
 import { errorResponse, unsupportedResponse, validationErrorResponse, type BodyContext } from '../utils/response';
 import { LIMITS } from '../config/limits';
+import { readEnvConfig } from '../config/env';
 import { isStoredApiKeyHash, randomStringAlphanum } from '../utils/api-key';
 import { Secret } from 'otpauth';
 import { findMatchingTotpCounter, isTotpEnabled, normalizeTotpSecret } from '../utils/totp';
@@ -250,6 +251,17 @@ export async function handleRegister(c: BodyContext<typeof RegisterSchema>): Pro
   const parsed = c.req.valid('json');
   const { email, name, masterPasswordHash, key, privateKey, publicKey, inviteCode, masterPasswordHint } = parsed;
 
+  const userCount = await userRepo(c.env.DB).getUserCount();
+  const { NODEWARDEN_DEPLOYMENT, TENANT_OWNER_EMAIL } = readEnvConfig(c.env);
+  if (userCount === 0 && (TENANT_OWNER_EMAIL !== undefined || NODEWARDEN_DEPLOYMENT === 'dispatch')) {
+    if (TENANT_OWNER_EMAIL !== email) {
+      return errorResponse(c, 'Registration is reserved for the instance owner', 403);
+    }
+    if (!parsed.emailVerificationToken) {
+      return errorResponse(c, 'Email verification token is invalid or expired', 400);
+    }
+  }
+
   if (parsed.emailVerificationToken) {
     const claims = await verifyRegisterVerifyToken(parsed.emailVerificationToken, c.env.JWT_SECRET);
     if (!claims || claims.email !== email) {
@@ -301,7 +313,6 @@ export async function handleRegister(c: BodyContext<typeof RegisterSchema>): Pro
     updatedAt: now,
   };
 
-  const userCount = await userRepo(c.env.DB).getUserCount();
   if (userCount === 0) {
     user.role = 'admin';
     const created = await userRepo(c.env.DB).createFirstUser(user);
@@ -404,6 +415,23 @@ export const RegisterSendVerificationEmailBody = z.object({
   name: trimmed,
 });
 
+export const RegisterVerificationEmailClickedBody = z.object({
+  email: emailAddress('Invalid email address'),
+  emailVerificationToken: trimmed,
+});
+
+export async function handleRegisterVerificationEmailClicked(
+  c: BodyContext<typeof RegisterVerificationEmailClickedBody>,
+): Promise<Response> {
+  const { email, emailVerificationToken } = c.req.valid('json');
+  const claims = await verifyRegisterVerifyToken(emailVerificationToken, c.env.JWT_SECRET);
+  if (!claims || claims.email !== email) {
+    return errorResponse(c, 'Email verification token is invalid or expired', 400);
+  }
+  // Official web acknowledges the link before sending client-generated keys to /finish.
+  return c.body(null, 204);
+}
+
 export async function handleRegisterSendVerificationEmail(
   c: BodyContext<typeof RegisterSendVerificationEmailBody>,
 ): Promise<Response> {
@@ -412,6 +440,14 @@ export async function handleRegisterSendVerificationEmail(
   const name = body.name || null;
 
   const userCount = await userRepo(c.env.DB).getUserCount();
+  const { NODEWARDEN_DEPLOYMENT, TENANT_OWNER_EMAIL } = readEnvConfig(c.env);
+  if (
+    userCount === 0 &&
+    (TENANT_OWNER_EMAIL !== undefined || NODEWARDEN_DEPLOYMENT === 'dispatch') &&
+    TENANT_OWNER_EMAIL !== email
+  ) {
+    return errorResponse(c, 'Registration is reserved for the instance owner', 403);
+  }
   if (userCount > 0 && !isOpenRegistrationEnabled(c.env)) {
     return errorResponse(c, 'Registration is invite-only', 403);
   }
@@ -435,7 +471,7 @@ export async function handleRegisterSendVerificationEmail(
 export async function handleRegisterFinish(c: BodyContext<typeof RegisterSchema>): Promise<Response> {
   // Official self-host web still continues to the password form when
   // send-verification-email returns an empty body. The emailed link carries a
-  // token when present; do not require it here or signup breaks.
+  // token when present. Hosted owner bootstrap requires that token in handleRegister.
   return handleRegister(c);
 }
 

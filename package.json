@@ -20,6 +20,7 @@
     "test:e2e:official": "playwright test e2e/official-web.spec.ts e2e/official-org-create.spec.ts e2e/official-org-reporting.spec.ts",
     "build:official-web": "node scripts/build-official-web.mjs",
     "build:assets": "node scripts/build-worker-assets.mjs",
+    "build:tenant": "node scripts/build-tenant-artifact.mjs",
     "deploy": "wrangler d1 migrations apply DB --remote && wrangler deploy",
     "deploy:kv": "node scripts/ensure-kv.cjs && wrangler d1 migrations apply DB --remote -c wrangler.kv.toml && wrangler deploy -c wrangler.kv.toml",
     "test:e2e:sm-clients": "node scripts/sm-client-e2e.mjs",

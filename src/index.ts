@@ -1,7 +1,4 @@
-import { pruneEvents } from './services/events';
-import { purgeExpiredEmailOtps } from './services/email-otp';
-import { smRepo } from './services/storage-secret-repo';
-import { purgeExpiredSends, purgeOldTrash } from './services/retention';
+import { runMaintenance } from './services/maintenance';
 import { syncVaultAdminRoles } from './services/vault-admin-role';
 import { ensurePushInstallationCredentials } from './services/push-relay';
 import { Env } from './types';
@@ -9,10 +6,16 @@ import { NotificationsHub } from './durable/notifications-hub';
 import { BackupTransferRunner } from './durable/backup-transfer-runner';
 import { app } from './router';
 import { applyCors, applySecurityHeaders } from './utils/response';
-import { runScheduledBackupIfDue } from './handlers/backup';
-import { approveExpiredEmergencyAccess, remindPendingEmergencyAccess } from './handlers/emergency-access';
 import { isBackendRequestPath } from './web-vault-visibility';
 import { withoutQueryParams } from './db/client';
+import { readEnvConfig } from './config/env';
+import { constantTimeEquals } from './utils/api-key';
+import { z } from 'zod';
+
+const GatewayOrigin = z
+  .url()
+  .regex(/^https?:\/\/[^/?#\\@\s]+\/?$/i)
+  .transform((origin) => new URL(origin));
 
 let dbInitialized = false;
 let dbInitError: string | null = null;
@@ -48,6 +51,7 @@ async function ensureDatabaseInitialized(env: Env): Promise<void> {
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+    const settings = readEnvConfig(env);
     // Trailing slashes are trimmed so routes match either form.
     const url = new URL(request.url);
     const normalizedPathname = url.pathname.length <= 1 ? url.pathname : url.pathname.replace(/\/+$/, '');
@@ -55,6 +59,61 @@ export default {
     if (normalizedPathname !== url.pathname) {
       url.pathname = normalizedPathname;
       normalizedRequest = new Request(url.toString(), request);
+    }
+    const isMaintenance = normalizedRequest.method === 'POST' && url.pathname === '/api/internal/maintenance';
+
+    if (settings.NODEWARDEN_DEPLOYMENT === null) {
+      return applyCors(
+        normalizedRequest,
+        Response.json({ error: 'Invalid deployment configuration' }, { status: 503 }),
+        env,
+      );
+    }
+    if (settings.PLATFORM_REQUIRE_GATEWAY !== '0' && !isMaintenance) {
+      if (
+        settings.PLATFORM_REQUIRE_GATEWAY === null ||
+        !settings.PLATFORM_INTERNAL_SECRET ||
+        !constantTimeEquals(
+          normalizedRequest.headers.get('X-CloudWarden-Gateway-Secret') || '',
+          settings.PLATFORM_INTERNAL_SECRET,
+        )
+      ) {
+        return applyCors(normalizedRequest, Response.json({ error: 'Forbidden' }, { status: 403 }), env);
+      }
+      const forwardedOrigin = normalizedRequest.headers.get('X-CloudWarden-Original-Origin');
+      if (forwardedOrigin !== null) {
+        const parsed = GatewayOrigin.safeParse(forwardedOrigin);
+        if (!parsed.success || !settings.WEB_VAULT_ORIGINS.includes(parsed.data.origin)) {
+          return applyCors(normalizedRequest, Response.json({ error: 'Forbidden' }, { status: 403 }), env);
+        }
+        url.protocol = parsed.data.protocol;
+        url.hostname = parsed.data.hostname;
+        url.port = parsed.data.port;
+      }
+    }
+    if (
+      normalizedRequest.headers.has('X-CloudWarden-Gateway-Secret') ||
+      normalizedRequest.headers.has('X-CloudWarden-Original-Origin')
+    ) {
+      // Keep the vault's bearer token and body; platform capabilities never reach handlers or assets.
+      normalizedRequest = new Request(url.toString(), normalizedRequest);
+      normalizedRequest.headers.delete('X-CloudWarden-Gateway-Secret');
+      normalizedRequest.headers.delete('X-CloudWarden-Original-Origin');
+    }
+    if (settings.PLATFORM_SUBSCRIPTION_STATUS !== 'active' && !isMaintenance) {
+      return applyCors(
+        normalizedRequest,
+        Response.json(
+          {
+            error:
+              settings.PLATFORM_SUBSCRIPTION_STATUS === 'suspended'
+                ? 'Subscription suspended'
+                : 'Invalid subscription configuration',
+          },
+          { status: settings.PLATFORM_SUBSCRIPTION_STATUS === 'suspended' ? 402 : 503 },
+        ),
+        env,
+      );
     }
 
     if (
@@ -105,26 +164,7 @@ export default {
     void controller;
     await ensureDatabaseInitialized(env);
     if (dbInitError) throw new Error(`Scheduled jobs skipped: database initialization failed: ${dbInitError}`);
-    // Every job runs even when another fails. Each failure is logged, then fails the invocation, so it shows
-    // in the Worker's cron history instead of reading as success.
-    const jobs = {
-      'event cleanup': () => pruneEvents(env.DB),
-      'email code cleanup': () => purgeExpiredEmailOtps(env.DB),
-      'scheduled backup': () => runScheduledBackupIfDue(env),
-      'Secrets Manager trash purge': () => smRepo(env.DB).purgeSecretsTrash(),
-      'emergency access timeouts': () => approveExpiredEmergencyAccess(env),
-      'emergency access reminders': () => remindPendingEmergencyAccess(env),
-      'expired Send purge': () => purgeExpiredSends(env),
-      'trash purge': () => purgeOldTrash(env),
-    };
-    const outcomes = await Promise.allSettled(Object.values(jobs).map((job) => job()));
-    const failed = Object.keys(jobs).filter((name, index) => {
-      const outcome = outcomes[index];
-      if (outcome.status === 'rejected')
-        console.error(`Scheduled job failed: ${name}`, withoutQueryParams(outcome.reason));
-      return outcome.status === 'rejected';
-    });
-    if (failed.length) throw new Error(`Scheduled jobs failed: ${failed.join(', ')}`);
+    await runMaintenance(env);
   },
 };
 

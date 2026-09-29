@@ -13,8 +13,7 @@ export interface Env {
   ASSETS?: {
     fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response>;
   };
-  // Set to "1" to return 404 for the Web Vault while keeping client APIs available.
-  // Comma-separated official Bitwarden web origins (Cloudflare Pages) allowed for CORS and signup.
+  // Comma-separated public vault origins allowed for CORS and signup.
   WEB_VAULT_ORIGINS?: string;
   // Set to "1" to allow official-client signups after the first admin without invite codes.
   ALLOW_OPEN_REGISTRATION?: string;
@@ -33,6 +32,12 @@ export interface Env {
   EMAIL_FROM?: string;
   EMAIL_FROM_NAME?: string;
   JWT_SECRET: string;
+  NODEWARDEN_DEPLOYMENT?: string;
+  // Reserve the first account for this verified email, including standalone hosted deployments.
+  TENANT_OWNER_EMAIL?: string;
+  PLATFORM_INTERNAL_SECRET?: string;
+  PLATFORM_SUBSCRIPTION_STATUS?: string;
+  PLATFORM_REQUIRE_GATEWAY?: string;
   WEBAUTHN_ALLOWED_ORIGINS?: string;
   SSO_ENABLED?: string;
   SSO_AUTHORITY?: string;

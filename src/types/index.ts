@@ -1,5 +1,6 @@
 import type { attachments, folders } from '../db/schema';
 import type { BackupTransferRunner } from '../durable/backup-transfer-runner';
+import type { NotificationsHub } from '../durable/notifications-hub';
 import type { parseStoredSendData } from '../handlers/sends-shared';
 import type { policyResponse, profileOrganizationResponse } from '../utils/org-response';
 import type { buildAccountKeys } from '../utils/user-decryption';
@@ -7,7 +8,7 @@ import type { buildAccountKeys } from '../utils/user-decryption';
 // Environment bindings
 export interface Env {
   DB: D1Database;
-  NOTIFICATIONS_HUB: DurableObjectNamespace;
+  NOTIFICATIONS_HUB: DurableObjectNamespace<NotificationsHub>;
   BACKUP_TRANSFER_RUNNER: DurableObjectNamespace<BackupTransferRunner>;
   ASSETS?: {
     fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response>;

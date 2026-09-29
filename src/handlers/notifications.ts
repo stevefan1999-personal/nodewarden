@@ -3,7 +3,6 @@ import { AuthService } from '../services/auth';
 import { isAuthRequestExpired, authRequestRepo } from '../services/storage-auth-request-repo';
 import type { Env, JWTPayload } from '../types';
 import { errorResponse } from '../utils/response';
-import { generateUUID } from '../utils/uuid';
 import { createWebSocketConnectionToken, verifyWebSocketConnectionToken } from '../utils/websocket-connection-token';
 
 const WEBSOCKET_CONNECTION_TOKEN_TTL_MS = 60 * 1000;
@@ -26,20 +25,16 @@ export async function handleNotificationsNegotiate(c: AppContext): Promise<Respo
   const connectionToken = await createWebSocketConnectionToken(payload.sub, expiresAt, c.env.JWT_SECRET);
   const id = c.env.NOTIFICATIONS_HUB.idFromName(payload.sub);
   const stub = c.env.NOTIFICATIONS_HUB.get(id);
-  const response = await stub.fetch('https://notifications/internal/ws-token', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      token: connectionToken,
-      userId: payload.sub,
-      deviceIdentifier: payload.did || null,
-      expiresAt,
-    }),
+  const registered = await stub.registerConnectionToken({
+    token: connectionToken,
+    userId: payload.sub,
+    deviceIdentifier: payload.did || null,
+    expiresAt,
   });
-  if (!response.ok) throw new Error('Failed to issue websocket connection token');
+  if (!registered) throw new Error('Failed to issue websocket connection token');
   return c.json(
     {
-      connectionId: generateUUID(),
+      connectionId: crypto.randomUUID(),
       connectionToken,
       negotiateVersion: 1,
       availableTransports: [
@@ -72,17 +67,7 @@ export async function handleNotificationsHub(c: AppContext): Promise<Response> {
     // Verify the signed routing claim before selecting a Durable Object. Otherwise an
     // attacker could activate arbitrary object names with forged token prefixes.
     const tokenHub = c.env.NOTIFICATIONS_HUB.get(c.env.NOTIFICATIONS_HUB.idFromName(claims.userId));
-    const response = await tokenHub.fetch('https://notifications/internal/ws-token/consume', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token }),
-    });
-    if (!response.ok) return errorResponse(c, 'Unauthorized', 401);
-
-    const connection = (await response.json().catch(() => null)) as {
-      userId?: string;
-      deviceIdentifier?: string | null;
-    } | null;
+    const connection = await tokenHub.consumeConnectionToken(token);
     if (connection?.userId !== claims.userId) return errorResponse(c, 'Unauthorized', 401);
 
     payload = {

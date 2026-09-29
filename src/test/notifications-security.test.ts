@@ -4,114 +4,51 @@ import test from 'node:test';
 import { handleNotificationsHub, handleNotificationsNegotiate } from '../handlers/notifications';
 import type { Env } from '../types';
 import { createJWT } from '../utils/jwt';
-import { contextFor } from './support/env';
+import { contextFor, createTestEnv, seedUser } from './support/env';
+
+const { NotificationsHub } = await import('../durable/notifications-hub');
 
 const secret = 'notification-security-test-secret-32-bytes';
 const userId = 'd75020e1-2de4-46e8-b8f1-475d127b51f2';
 const securityStamp = 'security-stamp';
 
-function createTestEnv() {
+async function createNotificationEnv() {
+  const env = await createTestEnv({ JWT_SECRET: secret });
+  await seedUser(env, { id: userId, email: 'user@example.test', securityStamp });
   const connectionTokens = new Map<string, { userId: string; deviceIdentifier: string | null; expiresAt: number }>();
   const forwardedHubUrls: string[] = [];
   const durableObjectNames: string[] = [];
-  const userRow = {
-    id: userId,
-    email: 'user@example.test',
-    name: 'Test User',
-    master_password_hint: null,
-    master_password_hash: 'hash',
-    key: 'key',
-    private_key: null,
-    public_key: null,
-    kdf_type: 0,
-    kdf_iterations: 600000,
-    kdf_memory: null,
-    kdf_parallelism: null,
-    security_stamp: securityStamp,
-    role: 'user',
-    status: 'active',
-    verify_devices: 0,
-    totp_secret: null,
-    totp_recovery_code: null,
-    yubikey_key1: null,
-    yubikey_key2: null,
-    yubikey_key3: null,
-    yubikey_key4: null,
-    yubikey_key5: null,
-    yubikey_nfc: 0,
-    api_key: null,
-    created_at: new Date().toISOString(),
-    updated_at: new Date().toISOString(),
-  };
-
-  const db = {
-    prepare(sql: string) {
-      const statement = {
-        bound: [] as unknown[],
-        bind(...values: unknown[]) {
-          statement.bound = values;
-          return statement;
-        },
-        // Drizzle's D1 session reads SELECT results with raw(), as positional
-        // column arrays. first() remains for any direct D1 lookup.
-        async first() {
-          return userRow;
-        },
-        async raw() {
-          const selected = sql.match(/select\s+([\s\S]+?)\s+from\s+/i)?.[1];
-          if (!selected || statement.bound[0] !== userRow.id) return [];
-          const columns = selected.split(',').map((part) => {
-            const names = [...part.matchAll(/"([^"]+)"/g)].map((match) => match[1]);
-            return names.at(-1) ?? '';
-          });
-          return [columns.map((column) => (column in userRow ? userRow[column as keyof typeof userRow] : null))];
-        },
-      };
-      return statement;
+  let alarm: number | null = null;
+  let pendingTransaction: Promise<unknown> = Promise.resolve();
+  const storage = {
+    get: async (key: string) => connectionTokens.get(key),
+    put: async (key: string, value: Parameters<typeof connectionTokens.set>[1]) =>
+      void connectionTokens.set(key, value),
+    async delete(keys: string | string[]) {
+      for (const key of [keys].flat()) connectionTokens.delete(key);
     },
-  } as unknown as D1Database;
-
-  const stub = {
-    async fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
-      const request = new Request(input, init);
-      const url = new URL(request.url);
-      if (url.pathname === '/internal/ws-token') {
-        const body = (await request.json()) as {
-          token: string;
-          userId: string;
-          deviceIdentifier: string | null;
-          expiresAt: number;
-        };
-        connectionTokens.set(body.token, body);
-        return new Response(null, { status: 204 });
-      }
-      if (url.pathname === '/internal/ws-token/consume') {
-        const { token } = (await request.json()) as { token: string };
-        const connection = connectionTokens.get(token);
-        connectionTokens.delete(token);
-        if (!connection || connection.expiresAt <= Date.now()) return new Response(null, { status: 401 });
-        return Response.json(connection);
-      }
-      forwardedHubUrls.push(request.url);
-      return new Response(null, { status: 204 });
+    getAlarm: async () => alarm,
+    setAlarm: async (timestamp: number) => void (alarm = timestamp),
+    list: async () => connectionTokens,
+    transaction<T>(callback: (transaction: DurableObjectTransaction) => Promise<T>): Promise<T> {
+      const result = pendingTransaction.then(() => callback(storage as unknown as DurableObjectTransaction));
+      pendingTransaction = result.catch(() => {});
+      return result;
     },
   };
-
-  const env = {
-    DB: db,
-    JWT_SECRET: secret,
-    NOTIFICATIONS_HUB: {
-      idFromName(name: string) {
-        durableObjectNames.push(name);
-        return name;
-      },
-      get() {
-        return stub;
-      },
+  const hub = new NotificationsHub({ storage, setWebSocketAutoResponse() {} } as unknown as DurableObjectState, env);
+  hub.fetch = async (request: Request) => {
+    forwardedHubUrls.push(request.url);
+    return new Response(null, { status: 204 });
+  };
+  env.NOTIFICATIONS_HUB = {
+    idFromName(name: string) {
+      durableObjectNames.push(name);
+      return name;
     },
-  } as unknown as Env;
-
-  return { env, connectionTokens, durableObjectNames, forwardedHubUrls };
+    get: () => hub,
+  } as unknown as Env['NOTIFICATIONS_HUB'];
+  return { env, hub, storage, connectionTokens, durableObjectNames, forwardedHubUrls };
 }
 
 async function validAccessToken(): Promise<string> {
@@ -127,7 +64,7 @@ async function validAccessToken(): Promise<string> {
 }
 
 test('query access_token cannot authenticate a websocket', async () => {
-  const { env, forwardedHubUrls } = createTestEnv();
+  const { env, forwardedHubUrls } = await createNotificationEnv();
   const token = await validAccessToken();
   const response = await handleNotificationsHub(
     contextFor(
@@ -143,7 +80,7 @@ test('query access_token cannot authenticate a websocket', async () => {
 });
 
 test('Authorization bearer token still authenticates notifications', async () => {
-  const { env, forwardedHubUrls } = createTestEnv();
+  const { env, forwardedHubUrls } = await createNotificationEnv();
   const token = await validAccessToken();
   const response = await handleNotificationsHub(
     contextFor(
@@ -159,7 +96,7 @@ test('Authorization bearer token still authenticates notifications', async () =>
 });
 
 test('negotiate issues a short-lived one-time websocket connection token', async () => {
-  const { env, connectionTokens, forwardedHubUrls } = createTestEnv();
+  const { env, connectionTokens, forwardedHubUrls } = await createNotificationEnv();
   const accessToken = await validAccessToken();
   const negotiate = await handleNotificationsNegotiate(
     contextFor(
@@ -171,7 +108,7 @@ test('negotiate issues a short-lived one-time websocket connection token', async
     ),
   );
   const body = (await negotiate.json()) as { connectionToken: string };
-  const stored = connectionTokens.get(body.connectionToken);
+  const stored = connectionTokens.get(`ws-token:${body.connectionToken}`);
 
   assert.equal(negotiate.status, 200);
   assert.ok(stored);
@@ -188,7 +125,7 @@ test('negotiate issues a short-lived one-time websocket connection token', async
 });
 
 test('a non-upgrade request does not consume a websocket connection token', async () => {
-  const { env, connectionTokens } = createTestEnv();
+  const { env, connectionTokens } = await createNotificationEnv();
   const accessToken = await validAccessToken();
   const negotiate = await handleNotificationsNegotiate(
     contextFor(
@@ -203,7 +140,7 @@ test('a non-upgrade request does not consume a websocket connection token', asyn
   const url = `https://vault.example.test/notifications/hub?id=${encodeURIComponent(connectionToken)}`;
 
   assert.equal((await handleNotificationsHub(contextFor(env, new Request(url)))).status, 426);
-  assert.ok(connectionTokens.has(connectionToken));
+  assert.ok(connectionTokens.has(`ws-token:${connectionToken}`));
   assert.equal(
     (await handleNotificationsHub(contextFor(env, new Request(url, { headers: { Upgrade: 'websocket' } })))).status,
     204,
@@ -211,7 +148,7 @@ test('a non-upgrade request does not consume a websocket connection token', asyn
 });
 
 test('a forged ticket cannot select or activate a Durable Object', async () => {
-  const { env, durableObjectNames } = createTestEnv();
+  const { env, durableObjectNames } = await createNotificationEnv();
   const response = await handleNotificationsHub(
     contextFor(
       env,
@@ -223,4 +160,42 @@ test('a forged ticket cannot select or activate a Durable Object', async () => {
 
   assert.equal(response.status, 401);
   assert.deepEqual(durableObjectNames, []);
+});
+
+test('connection ticket RPC validates expiry, consumes atomically, and prunes abandoned tickets', async (t) => {
+  let now = Date.now();
+  t.mock.method(Date, 'now', () => now);
+  const { hub, storage, connectionTokens } = await createNotificationEnv();
+  const ticket = { token: 'ticket', userId, deviceIdentifier: ' device-1 ', expiresAt: now + 5_000 };
+  for (const invalid of [
+    { token: ' ' },
+    { userId: ' ' },
+    { expiresAt: NaN },
+    { expiresAt: Infinity },
+    { expiresAt: now },
+    { expiresAt: now + 60_001 },
+  ]) {
+    assert.equal(await hub.registerConnectionToken({ ...ticket, ...invalid }), false);
+  }
+  assert.equal(connectionTokens.size, 0);
+  assert.equal(await storage.getAlarm(), null);
+
+  assert.equal(await hub.registerConnectionToken(ticket), true);
+  await hub.registerConnectionToken({ ...ticket, token: 'later', expiresAt: now + 10_000 });
+  assert.equal(await storage.getAlarm(), ticket.expiresAt);
+  await hub.registerConnectionToken({ ...ticket, token: 'earlier', expiresAt: now + 1_000 });
+  assert.equal(await storage.getAlarm(), now + 1_000);
+  assert.deepEqual(await Promise.all([hub.consumeConnectionToken(' ticket '), hub.consumeConnectionToken('ticket')]), [
+    { userId, deviceIdentifier: 'device-1', expiresAt: ticket.expiresAt },
+    null,
+  ]);
+
+  now += 1_000;
+  await hub.alarm();
+  assert.equal(connectionTokens.has('ws-token:earlier'), false);
+  assert.equal(await storage.getAlarm(), now + 9_000);
+  now += 9_000;
+  assert.equal(await hub.consumeConnectionToken('later'), null);
+  assert.equal(await hub.consumeConnectionToken(' '), null);
+  assert.equal(connectionTokens.size, 0);
 });

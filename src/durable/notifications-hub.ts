@@ -39,11 +39,29 @@ interface WsAttachment {
   deviceIdentifier: string | null;
 }
 
-interface WebSocketConnectionToken {
-  userId: string;
-  deviceIdentifier: string | null;
-  expiresAt: number;
-}
+const optionalIdentifier = z
+  .string()
+  .trim()
+  .nullish()
+  .transform((value) => value || null);
+const ConnectionTicket = z.object({
+  token: z.string().trim().min(1),
+  userId: z.string().trim().min(1),
+  deviceIdentifier: optionalIdentifier,
+  expiresAt: z.number(),
+});
+type WebSocketConnectionToken = Omit<z.output<typeof ConnectionTicket>, 'token'>;
+const Notification = z.object({
+  updateType: z.number(),
+  payload: z.record(z.string(), z.unknown()),
+  contextId: optionalIdentifier,
+  targetDeviceIdentifier: optionalIdentifier,
+});
+const AuthRequestNotification = z.object({
+  userId: z.string().trim().min(1),
+  authRequestId: z.string().trim().min(1),
+  contextId: optionalIdentifier,
+});
 
 function buildSignalRJsonInvocation(
   updateType: number,
@@ -114,104 +132,34 @@ export class NotificationsHub extends DurableObject<Env> {
     );
   }
 
+  async registerConnectionToken(input: z.input<typeof ConnectionTicket>): Promise<boolean> {
+    const parsed = ConnectionTicket.safeParse(input);
+    if (!parsed.success) return false;
+    const { token, ...connection } = parsed.data;
+    const now = Date.now();
+    if (connection.expiresAt <= now || connection.expiresAt > now + WEBSOCKET_CONNECTION_TOKEN_TTL_MS) return false;
+    await this.ctx.storage.put(`${WEBSOCKET_CONNECTION_TOKEN_PREFIX}${token}`, connection);
+    const currentAlarm = await this.ctx.storage.getAlarm();
+    if (currentAlarm === null || connection.expiresAt < currentAlarm)
+      await this.ctx.storage.setAlarm(connection.expiresAt);
+    return true;
+  }
+
+  async consumeConnectionToken(token: string): Promise<WebSocketConnectionToken | null> {
+    const parsed = ConnectionTicket.shape.token.safeParse(token);
+    if (!parsed.success) return null;
+    // Delete inside a transaction so a connection ticket cannot win two concurrent upgrades.
+    const connection = await this.ctx.storage.transaction(async (txn) => {
+      const key = `${WEBSOCKET_CONNECTION_TOKEN_PREFIX}${parsed.data}`;
+      const stored = await txn.get<WebSocketConnectionToken>(key);
+      if (stored) await txn.delete(key);
+      return stored || null;
+    });
+    return connection && connection.expiresAt > Date.now() ? connection : null;
+  }
+
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
-
-    if (url.pathname === '/internal/ws-token' && request.method === 'POST') {
-      const body = (await request.json().catch(() => null)) as {
-        token?: string;
-        userId?: string;
-        deviceIdentifier?: string | null;
-        expiresAt?: number;
-      } | null;
-      const token = String(body?.token || '').trim();
-      const userId = String(body?.userId || '').trim();
-      const expiresAt = Number(body?.expiresAt || 0);
-      if (!token || !userId || expiresAt <= Date.now() || expiresAt > Date.now() + WEBSOCKET_CONNECTION_TOKEN_TTL_MS) {
-        return new Response('Invalid websocket connection token', { status: 400 });
-      }
-      await this.ctx.storage.put(`${WEBSOCKET_CONNECTION_TOKEN_PREFIX}${token}`, {
-        userId,
-        deviceIdentifier: String(body?.deviceIdentifier || '').trim() || null,
-        expiresAt,
-      } satisfies WebSocketConnectionToken);
-      const currentAlarm = await this.ctx.storage.getAlarm();
-      if (currentAlarm === null || expiresAt < currentAlarm) {
-        await this.ctx.storage.setAlarm(expiresAt);
-      }
-      return new Response(null, { status: 204 });
-    }
-
-    if (url.pathname === '/internal/ws-token/consume' && request.method === 'POST') {
-      const body = (await request.json().catch(() => null)) as { token?: string } | null;
-      const token = String(body?.token || '').trim();
-      if (!token) return new Response('Invalid websocket connection token', { status: 400 });
-
-      // Delete inside a transaction so a connection ticket cannot win two concurrent upgrades.
-      const connection = await this.ctx.storage.transaction(async (txn) => {
-        const key = `${WEBSOCKET_CONNECTION_TOKEN_PREFIX}${token}`;
-        const stored = await txn.get<WebSocketConnectionToken>(key);
-        if (stored) await txn.delete(key);
-        return stored || null;
-      });
-      if (!connection || connection.expiresAt <= Date.now()) {
-        return new Response('Unauthorized', { status: 401 });
-      }
-      return new Response(JSON.stringify(connection), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      });
-    }
-
-    if (url.pathname === '/internal/notify' && request.method === 'POST') {
-      const body = (await request.json().catch(() => null)) as {
-        revisionDate?: string;
-        userId?: string;
-        contextId?: string | null;
-        updateType?: number;
-        targetDeviceIdentifier?: string | null;
-        payload?: Record<string, unknown> | null;
-      } | null;
-      const revisionDate = String(body?.revisionDate || '').trim() || new Date().toISOString();
-      const userId = String(request.headers.get('X-NodeWarden-UserId') || body?.userId || '').trim();
-      const contextId = String(body?.contextId || '').trim() || null;
-      const rawUpdateType = body?.updateType;
-      const parsedUpdateType = typeof rawUpdateType === 'number' ? rawUpdateType : Number(rawUpdateType);
-      const updateType = Number.isFinite(parsedUpdateType) ? parsedUpdateType : SIGNALR_UPDATE_TYPE_SYNC_VAULT;
-      const targetDeviceIdentifier = String(body?.targetDeviceIdentifier || '').trim() || null;
-      const payload =
-        body?.payload && typeof body.payload === 'object'
-          ? body.payload
-          : {
-              UserId: userId,
-              Date: revisionDate,
-            };
-      this.broadcastMessage(updateType, payload, contextId, targetDeviceIdentifier);
-      return new Response(null, { status: 204 });
-    }
-
-    if (url.pathname === '/internal/auth-request-response' && request.method === 'POST') {
-      const body = (await request.json().catch(() => null)) as {
-        userId?: string;
-        authRequestId?: string;
-        contextId?: string | null;
-      } | null;
-      const userId = String(body?.userId || '').trim();
-      const authRequestId = String(body?.authRequestId || '').trim();
-      if (!userId || !authRequestId) return new Response('Invalid auth request notification', { status: 400 });
-
-      this.broadcastAuthRequestResponse(userId, authRequestId, String(body?.contextId || '').trim() || null);
-      return new Response(null, { status: 204 });
-    }
-
-    if (url.pathname === '/internal/online' && request.method === 'GET') {
-      return new Response(JSON.stringify({ deviceIdentifiers: this.getOnlineDeviceIdentifiers() }), {
-        status: 200,
-        headers: {
-          'Content-Type': 'application/json',
-        },
-      });
-    }
 
     if (url.pathname !== '/notifications/hub' && url.pathname !== '/notifications/anonymous-hub') {
       return new Response('Not found', { status: 404 });
@@ -329,7 +277,7 @@ export class NotificationsHub extends DurableObject<Env> {
     void error;
   }
 
-  private getOnlineDeviceIdentifiers(): string[] {
+  getOnlineDeviceIdentifiers(): string[] {
     const out = new Set<string>();
     for (const ws of this.ctx.getWebSockets()) {
       const attachment = ws.deserializeAttachment() as WsAttachment | null;
@@ -339,12 +287,8 @@ export class NotificationsHub extends DurableObject<Env> {
     return Array.from(out);
   }
 
-  private broadcastMessage(
-    updateType: number,
-    payload: Record<string, unknown>,
-    contextId: string | null,
-    targetDeviceIdentifier: string | null,
-  ): void {
+  notify(input: z.input<typeof Notification>): void {
+    const { updateType, payload, contextId, targetDeviceIdentifier } = Notification.parse(input);
     const sockets = targetDeviceIdentifier
       ? this.ctx.getWebSockets(`device:${targetDeviceIdentifier}`)
       : this.ctx.getWebSockets();
@@ -370,7 +314,8 @@ export class NotificationsHub extends DurableObject<Env> {
     }
   }
 
-  private broadcastAuthRequestResponse(userId: string, authRequestId: string, contextId: string | null): void {
+  notifyAuthRequestResponse(input: z.input<typeof AuthRequestNotification>): void {
+    const { userId, authRequestId, contextId } = AuthRequestNotification.parse(input);
     for (const ws of this.ctx.getWebSockets()) {
       const attachment = ws.deserializeAttachment() as WsAttachment | null;
       if (
@@ -480,12 +425,7 @@ export async function getOnlineUserDevices(env: Env, userId: string): Promise<st
   try {
     const id = env.NOTIFICATIONS_HUB.idFromName(userId);
     const stub = env.NOTIFICATIONS_HUB.get(id);
-    const response = await stub.fetch('https://notifications/internal/online');
-    if (!response.ok) return [];
-    const body = (await response.json().catch(() => null)) as { deviceIdentifiers?: string[] } | null;
-    return Array.isArray(body?.deviceIdentifiers)
-      ? body.deviceIdentifiers.filter((value) => !!String(value || '').trim())
-      : [];
+    return await stub.getOnlineDeviceIdentifiers();
   } catch {
     return [];
   }
@@ -500,17 +440,7 @@ export async function notifyAuthRequestResponse(
   try {
     const id = env.NOTIFICATIONS_HUB.idFromName(authRequestId);
     const stub = env.NOTIFICATIONS_HUB.get(id);
-    await stub.fetch('https://notifications/internal/auth-request-response', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        userId,
-        authRequestId,
-        contextId: contextId || null,
-      }),
-    });
+    await stub.notifyAuthRequestResponse({ userId, authRequestId, contextId });
   } catch (error) {
     console.error('Failed to broadcast auth request response notification:', withoutQueryParams(error));
   }
@@ -542,22 +472,14 @@ async function notifyUserUpdate(
   try {
     const id = env.NOTIFICATIONS_HUB.idFromName(userId);
     const stub = env.NOTIFICATIONS_HUB.get(id);
-    await stub.fetch('https://notifications/internal/notify', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-NodeWarden-UserId': userId,
+    await stub.notify({
+      contextId,
+      updateType,
+      targetDeviceIdentifier,
+      payload: payloadOverride || {
+        UserId: userId,
+        Date: revisionDate,
       },
-      body: JSON.stringify({
-        revisionDate,
-        contextId: contextId || null,
-        updateType,
-        targetDeviceIdentifier: targetDeviceIdentifier || null,
-        payload: payloadOverride || {
-          UserId: userId,
-          Date: revisionDate,
-        },
-      }),
     });
     await notifyMobilePush(env, {
       userId,

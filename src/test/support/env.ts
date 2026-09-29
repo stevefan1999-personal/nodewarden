@@ -75,6 +75,7 @@ class FixedLengthStream extends TransformStream<Uint8Array, Uint8Array> {
 
 Object.assign(globalThis, {
   FixedLengthStream,
+  WebSocketRequestResponsePair: class {},
   caches: { default: namedCache('default') },
   async fetch(input: RequestInfo | URL): Promise<Response> {
     throw new Error(`Outbound fetch blocked in tests: ${new Request(input).url}`);
@@ -98,8 +99,15 @@ const executionContext = { waitUntil, passThroughOnException: () => {} } as unkn
 // Realtime notifications go to the NotificationsHub Durable Object; tests only need them accepted.
 const acceptingDurableObjectNamespace = {
   idFromName: (name: string) => name,
-  get: () => ({ fetch: async () => new Response(null, { status: 204 }) }),
-} as unknown as DurableObjectNamespace;
+  get: () => ({
+    fetch: async () => new Response(null, { status: 204 }),
+    registerConnectionToken: async () => true,
+    consumeConnectionToken: async () => null,
+    notify: async () => {},
+    notifyAuthRequestResponse: async () => {},
+    getOnlineDeviceIdentifiers: async () => [],
+  }),
+} as unknown as Env['NOTIFICATIONS_HUB'];
 
 // src/index.ts registers the push installation and syncs administrator roles once per isolate. Spend that on a
 // throwaway deployment, so it never runs against a test's database.

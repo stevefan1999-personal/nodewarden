@@ -16,7 +16,7 @@ Bitwarden-compatible password manager on Cloudflare Workers.
 - Data: D1 via Drizzle v1 (`src/db/`, repositories `src/services/storage-*-repo.ts`: classes over one D1 binding and its orm, reached as `userRepo(env.DB)`, `migrations/`)
 - Auth engine: Better Auth (`src/auth.ts`) behind Bitwarden `/identity` and `/api` adapters
 - Blobs: R2 or KV (`src/services/blob-store.ts`)
-- Push: `NotificationsHub` Durable Object
+- Push: `NotificationsHub` Durable Object; internal operations use typed RPC, and WebSocket upgrades use `fetch`
 - Backups: `BackupTransferRunner` Durable Object
 - Admin portal: `admin/`, a SvelteKit app rendered on the server only and embedded by `src/admin/portal.ts`; its pages reach the Worker's services only through `platform.portal`, so both share one module graph
 - Web vault: `official-web/` (Bitwarden OSS self-host Angular), served as the Worker's static assets together with our connector pages (`public/`), assembled by `scripts/build-worker-assets.mjs`. One origin for the vault, API and connectors gives passkeys a single relying-party ID. `run_worker_first` runs the Worker only for backend paths, `/admin` and our own pages.
@@ -27,7 +27,7 @@ Bitwarden-compatible password manager on Cloudflare Workers.
 
 ## Data
 
-Schema lives in `src/db/schema.ts` and `src/db/relations.ts` (relations v2). `npm run db:generate` emits nested `migrations/<id>/migration.sql`, starting from the `init` migration of the fork. Wrangler applies pending migrations before every `deploy` and `dev` (`migrations_pattern` in both wrangler configs) and records them in `d1_migrations`, so the Worker runs no DDL. Its once-per-isolate setup only registers the push installation and syncs administrator roles; a database without the schema fails that setup and every request answers 500. Tests build each SQLite database from the same migration files.
+Schema lives in `src/db/schema.ts`. `npm run db:generate` emits nested `migrations/<id>/migration.sql`, starting from the `init` migration of the fork. Wrangler applies pending migrations before every `deploy` and `dev` (`migrations_pattern` in both wrangler configs) and records them in `d1_migrations`, so the Worker runs no DDL. Its once-per-isolate setup only registers the push installation and syncs administrator roles; a database without the schema fails that setup and every request answers 500. Tests build each SQLite database from the same migration files.
 
 Every query is a drizzle builder through `getOrm(db)`; hand-written SQL exists only as the typed helpers in `src/db/sql.ts`, and the `nodewarden/no-raw-sql` lint rule enforces it. Use `db.batch()` for multi-statement work. `db.transaction()` is broken on D1. D1 caps one statement at 100 bound parameters: `statementChunks` sizes id-list chunks by rendering the statement, and multi-row inserts chunk by column count.
 

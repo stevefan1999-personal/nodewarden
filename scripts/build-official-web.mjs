@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, rmSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -54,14 +54,4 @@ cpSync(buildDir, dest, { recursive: true, filter: (path) => !path.endsWith('.map
 for (const license of ['LICENSE.txt', 'LICENSE_GPL.txt', 'LICENSE_BITWARDEN.txt']) {
   cpSync(join(source, license), join(dest, license));
 }
-writeFileSync(join(dest, '_redirects'), '/* /index.html 200\n');
-writeFileSync(
-  join(dest, '_headers'),
-  `/*
-  X-Content-Type-Options: nosniff
-  Referrer-Policy: strict-origin-when-cross-origin
-/index.html
-  Cache-Control: no-cache
-`,
-);
 console.log(`Built NodeWarden official web from ${release} with name-based organization creation.`);

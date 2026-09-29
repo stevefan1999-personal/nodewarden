@@ -11,17 +11,6 @@ import * as schema from '../src/db/schema';
 const SEED_GENERATOR_VERSION = '2';
 const LOCAL_STATE_ROOT = join(process.cwd(), '.wrangler/state');
 
-function walkSqliteFiles(dir: string): string[] {
-  if (!existsSync(dir)) return [];
-  const found: string[] = [];
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    const path = join(dir, entry.name);
-    if (entry.isDirectory()) found.push(...walkSqliteFiles(path));
-    else if (entry.name.endsWith('.sqlite')) found.push(path);
-  }
-  return found;
-}
-
 const args = process.argv.slice(2);
 if (args.includes('--remote')) {
   throw new Error('refusing to seed remote D1 (drizzle-seed exceeds the 100-param cap)');
@@ -32,7 +21,11 @@ let target: string;
 if (pathArg) {
   target = resolve(pathArg);
 } else {
-  const localFiles = walkSqliteFiles(LOCAL_STATE_ROOT);
+  const localFiles = existsSync(LOCAL_STATE_ROOT)
+    ? readdirSync(LOCAL_STATE_ROOT, { recursive: true, withFileTypes: true })
+        .filter((entry) => !entry.isDirectory() && entry.name.endsWith('.sqlite'))
+        .map((entry) => join(entry.parentPath, entry.name))
+    : [];
   if (localFiles.length === 0) {
     throw new Error('no local D1 sqlite under .wrangler/state; pass a file path');
   }

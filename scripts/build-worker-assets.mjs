@@ -12,8 +12,8 @@ if (!existsSync(join(officialWeb, 'index.html'))) {
   throw new Error('official-web/dist is missing: run npm run build:official-web first');
 }
 rmSync(out, { recursive: true, force: true });
-// The official build's _redirects and _headers were written for Pages: assets.not_found_handling now
-// provides the single-page fallback, and the headers below replace theirs rather than doubling them.
+// Ignore Pages files from older or upstream builds: assets.not_found_handling provides the single-page
+// fallback, and the headers below configure files served directly by Cloudflare.
 // dereference: the official build may be a symlink to one shared across checkouts.
 cpSync(officialWeb, out, {
   recursive: true,

@@ -16,7 +16,6 @@ import {
 import type { Env } from '../types';
 import { smRepo, type SmSecret, type SmProject, type SmServiceAccount } from '../services/storage-secret-repo';
 import { errorResponse, type BodyContext } from '../utils/response';
-import { generateUUID } from '../utils/uuid';
 import { hashApiKey, randomStringAlphanum } from '../utils/api-key';
 import { EventType, listEventsResponse, recordEvents } from '../services/events';
 import { canAccessEventLogs, isActiveMember } from '../services/org-authz';
@@ -154,7 +153,7 @@ export async function handleCreateSecret(c: BodyContext<typeof SecretBody>, orgI
   if (!(await allProjectsInOrg(c.env.DB, orgId, input.projectIds))) return errorResponse(c, 'Resource not found.', 404);
   if (!canCreateSecret(context.actor, context.grants, input.projectIds[0])) return errorResponse(c, 'Not found', 404);
   const now = new Date().toISOString();
-  const secret = { ...input, id: generateUUID(), orgId, createdAt: now, updatedAt: now, deletedAt: null };
+  const secret = { ...input, id: crypto.randomUUID(), orgId, createdAt: now, updatedAt: now, deletedAt: null };
   const policies = await prepareSecretPolicies(c, context, orgId, secret.id, input.accessPoliciesRequests, true);
   if (policies instanceof Response) return policies;
   try {
@@ -314,7 +313,7 @@ export async function handleCreateProject(c: BodyContext<typeof NameBody>, orgId
   if (!context) return errorResponse(c, 'Not found', 404);
   const body = c.req.valid('json');
   const now = new Date().toISOString();
-  const project = { id: generateUUID(), orgId, name: body.name, createdAt: now, updatedAt: now };
+  const project = { id: crypto.randomUUID(), orgId, name: body.name, createdAt: now, updatedAt: now };
   await smRepo(c.env.DB).createProject(project, context.actor);
   await recordEvents(c.env, c.req.raw, eventActor(principal), [
     { organizationId: orgId, type: EventType.ProjectCreated, resourceType: 'project', resourceId: project.id },
@@ -416,7 +415,7 @@ export async function handleCreateServiceAccount(c: BodyContext<typeof NameBody>
   if (!context || context.actor.kind === 'serviceAccount') return errorResponse(c, 'Not found', 404);
   const body = c.req.valid('json');
   const now = new Date().toISOString();
-  const account = { id: generateUUID(), orgId, name: body.name, createdAt: now, updatedAt: now };
+  const account = { id: crypto.randomUUID(), orgId, name: body.name, createdAt: now, updatedAt: now };
   await smRepo(c.env.DB).createServiceAccount(account, context.actor.membershipId);
   await recordEvents(c.env, c.req.raw, eventActor(principal), [
     { organizationId: orgId, type: EventType.ServiceAccountCreated, grantedServiceAccountId: account.id },
@@ -526,7 +525,7 @@ export async function handleCreateAccessToken(
   const body = c.req.valid('json');
   const clientSecret = randomStringAlphanum(LIMITS.auth.clientSecretLength);
   const token = {
-    id: generateUUID(),
+    id: crypto.randomUUID(),
     serviceAccountId,
     name: body.name,
     encryptedPayload: body.encryptedPayload,

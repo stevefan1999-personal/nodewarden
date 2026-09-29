@@ -1,3 +1,4 @@
+import { hashPassword } from '../services/auth-password';
 import assert from 'node:assert/strict';
 import { subtle } from 'node:crypto';
 import test from 'node:test';
@@ -7,7 +8,6 @@ import { eq } from 'drizzle-orm';
 
 import { getOrm } from '../db/client';
 import { webauthnCredentials } from '../db/schema';
-import { AuthService } from '../services/auth';
 import type { Env, User } from '../types';
 import {
   authedFetch,
@@ -58,7 +58,7 @@ async function officialEnrollment(
   const user =
     context?.user ??
     (await seedUser(env, {
-      masterPasswordHash: await new AuthService(env).hashPasswordServer(CLIENT_MASTER_PASSWORD_HASH),
+      masterPasswordHash: await hashPassword(CLIENT_MASTER_PASSWORD_HASH),
     }));
   const userVerificationToken: string =
     context?.userVerificationToken ??

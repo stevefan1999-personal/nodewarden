@@ -9,7 +9,6 @@ import {
 } from '../durable/notifications-hub';
 import { errorResponse, type BodyContext } from '../utils/response';
 import { readActingDeviceIdentifier } from '../utils/device';
-import { generateUUID } from '../utils/uuid';
 import { parsePagination, encodeContinuationToken } from '../utils/pagination';
 import { writeDataAudit } from '../services/audit-events';
 import { nonEmptyIdList } from './ciphers';
@@ -74,7 +73,7 @@ export async function handleCreateFolder(c: BodyContext<typeof CreateFolderBody>
 
   const now = new Date().toISOString();
   const folder: Folder = {
-    id: generateUUID(),
+    id: crypto.randomUUID(),
     userId: userId,
     name: body.name,
     createdAt: now,

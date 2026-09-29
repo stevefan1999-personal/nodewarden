@@ -1,3 +1,5 @@
+import { verifyPassword } from '../services/auth-password';
+import { buildWebAuthnPrfOption } from '../utils/account-passkeys';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { AppContext } from '../router';
 import { EventType, recordUserEvent } from '../services/events';
@@ -29,7 +31,7 @@ import { findMatchingTotpCounter, isTotpEnabled } from '../utils/totp';
 import { signHs256Jwt, createRefreshToken, createSsoEmail2faSessionToken } from '../utils/jwt';
 import { readAuthRequestDeviceInfo, deviceTypeName, type AuthRequestDeviceInfo } from '../utils/device';
 import { createRecoveryCode, recoveryCodeEquals } from '../utils/recovery-code';
-import { generateUUID, isUUID } from '../utils/uuid';
+import { isUUID } from '../utils/uuid';
 import { issueSendAccessToken } from './sends';
 import { registerMobilePushDevice } from '../services/push-relay';
 import { buildAccountKeys, buildUserDecryptionOptions } from '../utils/user-decryption';
@@ -37,7 +39,6 @@ import { auditRequestMetadata, writeAuditEvent } from '../services/audit-events'
 import {
   assertAccountPasskeyCredential,
   assertTwoFactorPasskeyCredential,
-  buildAccountPasskeyTokenUserDecryptionOption,
   buildTwoFactorPasskeyAssertionOptions,
 } from './account-passkeys';
 import { isAuthRequestLoginApproved, authRequestRepo } from '../services/storage-auth-request-repo';
@@ -161,7 +162,7 @@ async function persistLoginDevice(
     deviceIdentifier,
     deviceInfo.deviceName,
     deviceInfo.deviceType,
-    String(existingDevice?.sessionStamp || '').trim() || generateUUID(),
+    String(existingDevice?.sessionStamp || '').trim() || crypto.randomUUID(),
   );
   const persisted = await deviceRepo(env.DB).getDevice(user.id, deviceIdentifier);
   if (!persisted?.sessionStamp) throw new Error('Failed to persist device session');
@@ -188,7 +189,7 @@ async function persistLoginDevice(
   const pushToken = body.devicePushToken || body.device_push_token;
   const device = pushToken ? await deviceRepo(env.DB).getDevice(user.id, deviceSession.identifier) : null;
   if (pushToken && device) {
-    const pushUuid = device.pushUuid || generateUUID();
+    const pushUuid = device.pushUuid || crypto.randomUUID();
     await deviceRepo(env.DB).updateDevicePushToken(user.id, deviceSession.identifier, pushUuid, pushToken);
     const registered = await registerMobilePushDevice(env, {
       userId: user.id,
@@ -608,7 +609,7 @@ export async function handleToken(c: AppContext): Promise<Response> {
         authRequestLoginKey = authRequest!.key;
       }
     } else {
-      valid = viaSsoShim || (await auth.verifyPassword(passwordHash, user.masterPasswordHash, user.email));
+      valid = viaSsoShim || (await verifyPassword(passwordHash, user.masterPasswordHash, user.email));
     }
     if (!valid) {
       await recordLoginFailure(
@@ -831,7 +832,7 @@ export async function handleToken(c: AppContext): Promise<Response> {
 
     // Claim the verified SSO proof once, after every factor check and before creating credentials.
     const recovery = recoveredTwoFactor
-      ? { recoveryCode: createRecoveryCode(), securityStamp: generateUUID() }
+      ? { recoveryCode: createRecoveryCode(), securityStamp: crypto.randomUUID() }
       : undefined;
     if (ssoContinuation) {
       if (!(await consumeSsoContinuation(c.env.DB, ssoContinuation, user, recovery)))
@@ -933,7 +934,7 @@ export async function handleToken(c: AppContext): Promise<Response> {
     return completeLogin(
       c,
       { user, body, deviceInfo, deviceSession, grantType },
-      { prfOption: buildAccountPasskeyTokenUserDecryptionOption(credential) },
+      { prfOption: buildWebAuthnPrfOption(credential) },
       { action: 'auth.passkey.login.success', targetType: 'accountPasskey', targetId: credential.id },
     );
   } else if (body.grant_type === 'client_credentials') {

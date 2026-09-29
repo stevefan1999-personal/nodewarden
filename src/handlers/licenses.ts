@@ -76,17 +76,6 @@ export async function handleUpdateSelfHostedOrganizationLicense(c: AppContext, o
   return c.json(organizationResponse(org));
 }
 
-export async function handleSyncSelfHostedOrganizationLicense(c: AppContext, orgId: string): Promise<Response> {
-  const { currentUser: user } = c.var;
-  const member = await orgRepo(c.env.DB).getMembershipByUserAndOrg(user.id, orgId);
-  if (!isActiveMember(member) || !canDeleteOrganization(member)) {
-    return errorResponse(c, 'Organization not found', 404);
-  }
-  const org = await orgRepo(c.env.DB).getOrganization(orgId);
-  if (!org) return errorResponse(c, 'Organization not found', 404);
-  return c.json(organizationResponse(org));
-}
-
 export async function handleAccountLicenseUpload(): Promise<Response> {
   return new Response(null, { status: 200 });
 }

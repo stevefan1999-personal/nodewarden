@@ -2,7 +2,6 @@ import { jsonBody } from './utils/response';
 import { Hono } from 'hono';
 import {
   handleGetAuthorizedDevices,
-  handleGetDevice,
   handleGetDevices,
   handleGetDeviceByIdentifier,
   handleUpdateDeviceKeys,
@@ -50,7 +49,7 @@ deviceRoutes.on('DELETE', devices('/authorized/:deviceId'), (c) =>
 deviceRoutes.on('POST', devices('/authorized/:deviceId/permanent'), (c) =>
   handleTrustDevicePermanently(c, c.req.param('deviceId')),
 );
-deviceRoutes.on('GET', devices('/:deviceId'), (c) => handleGetDevice(c, c.req.param('deviceId')));
+deviceRoutes.on('GET', devices('/:deviceId'), (c) => handleGetDeviceByIdentifier(c, c.req.param('deviceId')));
 deviceRoutes.on('DELETE', devices('/:deviceId'), (c) => handleDeleteDevice(c, c.req.param('deviceId')));
 deviceRoutes.on('PUT', devices('/:deviceId/name'), jsonBody(DeviceNameSchema), (c) =>
   handleUpdateDeviceName(c, c.req.param('deviceId')),

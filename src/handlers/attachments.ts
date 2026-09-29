@@ -1,10 +1,10 @@
+import { formatSize } from './sends-shared';
 import type { AppContext } from '../router';
 import { z } from 'zod';
 import { Env, Attachment, Cipher } from '../types';
 import { notifyUserCipherUpdate, notifyUserVaultSync } from '../durable/notifications-hub';
 import { errorResponse, type BodyContext } from '../utils/response';
 import { buildDirectUploadUrl, parseDirectUploadPayload } from '../utils/direct-upload';
-import { generateUUID } from '../utils/uuid';
 import { contentDispositionAttachment, sanitizeDownloadContentType } from '../utils/content-type';
 import {
   createAttachmentUploadToken,
@@ -72,14 +72,6 @@ async function afterAttachmentChange(
   return revisionInfo;
 }
 
-// Format file size to human readable
-function formatSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} Bytes`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(2)} KB`;
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
-  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
-}
-
 async function processAttachmentUpload(
   c: AppContext,
   cipher: Cipher,
@@ -141,7 +133,7 @@ export async function handleCreateAttachment(
   const body = c.req.valid('json');
 
   const fileSize = body.fileSize || 0;
-  const attachmentId = generateUUID();
+  const attachmentId = crypto.randomUUID();
 
   // Create attachment metadata
   const attachment: Attachment = {

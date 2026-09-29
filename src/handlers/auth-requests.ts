@@ -1,6 +1,5 @@
 import type { AppContext } from '../router';
 import type { AuthRequestRecord } from '../types';
-import { generateUUID } from '../utils/uuid';
 import { z } from 'zod';
 import { deviceTypeName, readAuthRequestDeviceInfo, readActingDeviceIdentifier } from '../utils/device';
 import { isSerializedEncString } from '../utils/account-passkeys';
@@ -143,7 +142,7 @@ export async function handleCreateAuthRequest(c: BodyContext<typeof AuthRequestC
   await authRequestRepo(c.env.DB).pruneExpiredAuthRequests();
   const now = new Date().toISOString();
   const authRequest: AuthRequestRecord = {
-    id: generateUUID(),
+    id: crypto.randomUUID(),
     userId: user.id,
     organizationId: null,
     type,
@@ -193,7 +192,7 @@ export async function handleCreateAdminAuthRequest(c: BodyContext<typeof AuthReq
   await authRequestRepo(c.env.DB).pruneExpiredAuthRequests();
   const now = new Date().toISOString();
   const authRequest: AuthRequestRecord = {
-    id: generateUUID(),
+    id: crypto.randomUUID(),
     userId: user.id,
     organizationId: null,
     type: AUTH_REQUEST_TYPE_ADMIN_APPROVAL,

@@ -2,7 +2,6 @@ import { smRepo } from './storage-secret-repo';
 import { getRefreshTokenSlidingTtlMs, LIMITS } from '../config/limits';
 import { Device, Env, JWTPayload, User } from '../types';
 import { createJWT, createRefreshToken, verifyJWT } from '../utils/jwt';
-import { hashPassword, verifyPassword } from './auth-password';
 import { deviceRepo } from './storage-device-repo';
 import { sessionRepo } from './storage-session-repo';
 import { userRepo } from './storage-user-repo';
@@ -146,16 +145,6 @@ export class AuthService {
     const device = await deviceRepo(this.env.DB).getDevice(userId, deviceId);
     this.writeCachedDevice(userId, deviceId, device);
     return device;
-  }
-
-  // Second-layer hash of the client hash (random salt, see auth-password.ts), so database contents alone
-  // cannot be used to authenticate (pass-the-hash defense).
-  async hashPasswordServer(clientHash: string): Promise<string> {
-    return hashPassword(clientHash);
-  }
-
-  async verifyPassword(inputHash: string, storedHash: string, email: string): Promise<boolean> {
-    return verifyPassword(inputHash, storedHash, email);
   }
 
   // Generate access token
@@ -339,12 +328,5 @@ export class AuthService {
     }
     const accessToken = await this.generateAccessToken(user, device);
     return { ok: true, accessToken, user, device, expiresAt };
-  }
-
-  async refreshAccessToken(
-    refreshToken: string,
-  ): Promise<{ accessToken: string; user: User; device: { identifier: string; sessionStamp: string } | null } | null> {
-    const result = await this.refreshAccessTokenDetailed(refreshToken);
-    return result.ok ? result : null;
   }
 }

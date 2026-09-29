@@ -1,3 +1,4 @@
+import { hashPassword } from '../services/auth-password';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { and, eq } from 'drizzle-orm';
@@ -10,7 +11,6 @@ import {
   EmergencyAccessStatus,
   EmergencyAccessType,
 } from '../services/storage-emergency-repo';
-import { AuthService } from '../services/auth';
 import type { Env, User } from '../types';
 import { authedFetch, createTestEnv, seedUser } from './support/env';
 import { userRepo } from '../services/storage-user-repo';
@@ -172,7 +172,7 @@ test('an incomplete, mismatched or unauthorized takeover is rejected and leaves 
 // The account password change shares the nested parse with the takeover, so it must keep working.
 test('the account password change still accepts the nested body', async () => {
   const env = await createTestEnv();
-  const masterPasswordHash = await new AuthService(env).hashPasswordServer(CURRENT_MASTER_PASSWORD_HASH);
+  const masterPasswordHash = await hashPassword(CURRENT_MASTER_PASSWORD_HASH);
   const user = await seedUser(env, { masterPasswordHash });
   const body = { masterPasswordHash: CURRENT_MASTER_PASSWORD_HASH, ...nestedPasswordBody(user) };
 

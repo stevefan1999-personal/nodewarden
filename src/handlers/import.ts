@@ -13,7 +13,6 @@ import type {
 } from '../types';
 import { readActingDeviceIdentifier } from '../utils/device';
 import { errorResponse, type BodyContext } from '../utils/response';
-import { generateUUID } from '../utils/uuid';
 import {
   normalizeCipherLoginForStorage,
   normalizeCipherSshKeyForCompatibility,
@@ -150,7 +149,7 @@ export async function handleCiphersImport(c: BodyContext<typeof CiphersImportBod
   const folderRows: Folder[] = [];
 
   for (let i = 0; i < folders.length; i++) {
-    const folderId = generateUUID();
+    const folderId = crypto.randomUUID();
     folderIdMap.set(i, folderId);
 
     const folder: Folder = {
@@ -200,7 +199,7 @@ export async function handleCiphersImport(c: BodyContext<typeof CiphersImportBod
       (imported.folderId && existingFolderIds.has(imported.folderId) ? imported.folderId : null);
     const cipher: Cipher = {
       ...imported,
-      id: generateUUID(),
+      id: crypto.randomUUID(),
       userId: userId,
       folderId: folderId,
       login: normalizeCipherLoginForStorage(imported.login),

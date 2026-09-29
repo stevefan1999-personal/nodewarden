@@ -4,11 +4,8 @@ import { signHs256Jwt } from '../utils/jwt';
 import { readEnvConfig } from '../config/env';
 import type { Env } from '../types';
 import { errorResponse } from '../utils/response';
-import { generateUUID } from '../utils/uuid';
 import { orgRepo } from '../services/storage-org-repo';
 import { PolicyType } from '../services/org-types';
-
-export const FAKE_SSO_IDENTIFIER = '00000000-01DC-01DC-01DC-000000000000';
 
 export function isSsoEnabled(env: Env): boolean {
   const config = readEnvConfig(env);
@@ -35,7 +32,7 @@ export async function handleSsoPrevalidate(c: AppContext): Promise<Response> {
 export async function handleSsoAuthorize(c: AppContext): Promise<Response> {
   if (!isSsoEnabled(c.env)) return errorResponse(c, 'SSO is not enabled', 404);
   const url = new URL(c.req.raw.url);
-  const state = url.searchParams.get('state') || generateUUID();
+  const state = url.searchParams.get('state') || crypto.randomUUID();
   const codeChallenge = url.searchParams.get('code_challenge');
   const clientId = url.searchParams.get('client_id') || 'web';
   const rawRedirect = url.searchParams.get('redirect_uri') || '';
@@ -64,11 +61,6 @@ export async function handleSsoAuthorize(c: AppContext): Promise<Response> {
     createdAt: now,
     updatedAt: now,
   });
-  if (c.env.CACHE_KV) {
-    await c.env.CACHE_KV.put(`sso:state:${state}`, JSON.stringify({ redirectUri, clientId, codeChallenge }), {
-      expirationTtl: 600,
-    });
-  }
 
   const config = readEnvConfig(c.env);
   const { authorization_endpoint: authorizationEndpoint } = await discoverOidcConfig(config.SSO_AUTHORITY);

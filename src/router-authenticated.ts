@@ -28,7 +28,6 @@ import {
   handlePutTwoFactorYubiKeyConfig,
   handleBootstrapTwoFactorYubiKeyConfig,
   handleGetDeviceVerificationSettings,
-  handlePutDeviceVerificationSettings,
   handleDisableTwoFactorProvider,
   handleGetApiKey,
   handleRotateApiKey,
@@ -295,7 +294,7 @@ authenticatedRoutes.on(
 authenticatedRoutes.on(
   ['PUT', 'POST'],
   '/api/two-factor/device-verification-settings',
-  handlePutDeviceVerificationSettings,
+  handleGetDeviceVerificationSettings,
 );
 authenticatedRoutes.all('/api/two-factor/device-verification-settings', methodNotAllowed);
 authenticatedRoutes.post('/api/two-factor/get-webauthn', jsonBody(PasskeyRequestSchema), handleGetTwoFactorWebAuthn);

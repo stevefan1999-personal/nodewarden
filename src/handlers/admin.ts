@@ -1,7 +1,7 @@
+import { verifyPassword } from '../services/auth-password';
 import type { AppContext } from '../router';
 import { z } from 'zod';
 import { User, Invite } from '../types';
-import { AuthService } from '../services/auth';
 import { twoFactorProviders } from '../services/two-factor-providers';
 import { userRepo } from '../services/storage-user-repo';
 import { errorResponse, type BodyContext } from '../utils/response';
@@ -42,11 +42,7 @@ async function readConfirmedBody<S extends typeof PasswordBody>(
   actorUser: User,
 ): Promise<z.output<S> | Response> {
   const body = c.req.valid('json');
-  const valid = await new AuthService(c.env).verifyPassword(
-    body.masterPasswordHash,
-    actorUser.masterPasswordHash,
-    actorUser.email,
-  );
+  const valid = await verifyPassword(body.masterPasswordHash, actorUser.masterPasswordHash, actorUser.email);
   return valid ? body : errorResponse(c, 'Invalid password', 400);
 }
 
@@ -90,7 +86,6 @@ function toInviteResponse(request: Request, invite: Invite): Record<string, unkn
 // GET /api/admin/users
 export async function handleAdminListUsers(c: AppContext): Promise<Response> {
   const { currentUser: actorUser } = c.var;
-  void c.req.raw;
   if (!isAdmin(actorUser)) {
     return errorResponse(c, 'Forbidden', 403);
   }
@@ -163,7 +158,6 @@ export async function handleAdminListAuditLogs(c: AppContext): Promise<Response>
 // GET /api/admin/logs/settings
 export async function handleAdminGetAuditLogSettings(c: AppContext): Promise<Response> {
   const { currentUser: actorUser } = c.var;
-  void c.req.raw;
   if (!isAdmin(actorUser)) {
     return errorResponse(c, 'Forbidden', 403);
   }

@@ -4,7 +4,6 @@ import { Env, Send, SendAuthType, SendType } from '../types';
 import { recordSendEvent, recordSendEvents } from '../services/events';
 import { errorResponse, type BodyContext } from '../utils/response';
 import { buildDirectUploadUrl, parseDirectUploadPayload } from '../utils/direct-upload';
-import { generateUUID } from '../utils/uuid';
 import { parsePagination, encodeContinuationToken } from '../utils/pagination';
 import { LIMITS } from '../config/limits';
 import {
@@ -188,7 +187,6 @@ export async function handleGetSends(c: AppContext): Promise<Response> {
 
 export async function handleGetSend(c: AppContext, sendId: string): Promise<Response> {
   const { userId } = c.var;
-  void c.req.raw;
   const send = await sendRepo(c.env.DB).getSendForUser(sendId, userId);
 
   if (!send || send.userId !== userId) {
@@ -212,7 +210,7 @@ async function parseNewSend(
 
   const now = new Date().toISOString();
   const send: Send = {
-    id: generateUUID(),
+    id: crypto.randomUUID(),
     userId,
     type,
     name: body.name,
@@ -285,7 +283,7 @@ export async function handleCreateFileSendV2(c: BodyContext<typeof FileSendCreat
   const body = c.req.valid('json');
   if (body.fileLength > maxFileSize) return errorResponse(c, 'Send storage limit exceeded with this file', 400);
 
-  const fileId = generateUUID();
+  const fileId = crypto.randomUUID();
   const send = await parseNewSend(c, body, userId, SendType.File, {
     ...body.file,
     id: fileId,

@@ -140,28 +140,20 @@ test('a pending profile save cannot resurrect a deleted account and account crea
   await drainWaitUntil();
 });
 
-test('an API-key request authorized against an old password cannot write after a password change', async (t) => {
+test('an API-key request authorized against an old password cannot write after a password change', async () => {
   const env = await createTestEnv();
   const user = await seedUser(env, { masterPasswordHash: await hashPassword(PASSWORD), apiKey: 'existing-api-key' });
-  const verifyPassword = AuthService.prototype.verifyPassword;
   let interrupted = false;
-  t.mock.method(
-    AuthService.prototype,
-    'verifyPassword',
-    async function (this: AuthService, ...args: Parameters<AuthService['verifyPassword']>) {
-      if (!interrupted && args[0] === PASSWORD) {
-        interrupted = true;
-        const changed = await authedFetch(env, {
-          method: 'POST',
-          path: '/api/accounts/password',
-          userId: user.id,
-          body: { masterPasswordHash: PASSWORD, newMasterPasswordHash: NEXT_PASSWORD, key: NEXT_KEY },
-        });
-        assert.equal(changed.status, 200);
-      }
-      return verifyPassword.apply(this, args);
-    },
-  );
+  interceptStatement(env, /^update "users" set .*"api_key"/i, async () => {
+    interrupted = true;
+    const changed = await authedFetch(env, {
+      method: 'POST',
+      path: '/api/accounts/password',
+      userId: user.id,
+      body: { masterPasswordHash: PASSWORD, newMasterPasswordHash: NEXT_PASSWORD, key: NEXT_KEY },
+    });
+    assert.equal(changed.status, 200);
+  });
   const delayed = await authedFetch(env, {
     method: 'POST',
     path: '/api/accounts/rotate-api-key',

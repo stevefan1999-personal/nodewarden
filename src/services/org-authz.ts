@@ -217,15 +217,6 @@ export function canManagePolicies(member: MembershipRecord): boolean {
   );
 }
 
-export function canManageSso(member: MembershipRecord): boolean {
-  return (
-    isActiveMember(member) &&
-    (member.type === MembershipType.Owner ||
-      member.type === MembershipType.Admin ||
-      resolvePermissions(member).manageSso)
-  );
-}
-
 export function canManageScim(member: MembershipRecord): boolean {
   return (
     isActiveMember(member) &&

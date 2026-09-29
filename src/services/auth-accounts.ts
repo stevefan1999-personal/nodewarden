@@ -2,7 +2,6 @@ import { and, eq } from 'drizzle-orm';
 import { getOrm } from '../db/client';
 import { account, users } from '../db/schema';
 import { bound, excluded } from '../db/sql';
-import { generateUUID } from '../utils/uuid';
 
 // Copies the credential from the users row (at most one: id is its key) only while that row still holds
 // this hash, and this stamp when given, so a lost update never installs a stale secret in Better Auth.
@@ -19,7 +18,7 @@ export function credentialAccountStatement(
     .select(
       orm
         .select({
-          id: bound(generateUUID()).as('id'),
+          id: bound(crypto.randomUUID()).as('id'),
           accountId: users.id,
           providerId: bound('credential').as('provider_id'),
           userId: users.id,

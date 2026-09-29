@@ -2,7 +2,6 @@ import type { SQL } from 'drizzle-orm';
 import { getOrm, withoutQueryParams } from '../db/client';
 import { auditLogs } from '../db/schema';
 import { SINGLE_ROW, boundRow } from '../db/sql';
-import { generateUUID } from '../utils/uuid';
 import { adminRepo } from './storage-admin-repo';
 import { configRepo } from './storage-config-repo';
 
@@ -182,7 +181,7 @@ export function auditEventStatement(db: D1Database, event: AuditEventInput, guar
     orm
       .select(
         boundRow({
-          id: generateUUID(),
+          id: crypto.randomUUID(),
           actorUserId: event.actorUserId ?? null,
           action: event.action,
           category: event.category,

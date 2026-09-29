@@ -1,5 +1,4 @@
 import { signHs256Jwt, verifyHs256Jwt } from './jwt';
-import { generateUUID } from './uuid';
 
 const WEBSOCKET_NOTIFICATION_SCOPE = 'notifications.websocket';
 
@@ -19,7 +18,7 @@ export async function createWebSocketConnectionToken(
     {
       userId,
       expiresAt,
-      nonce: generateUUID(),
+      nonce: crypto.randomUUID(),
       scope: WEBSOCKET_NOTIFICATION_SCOPE,
     } satisfies WebSocketConnectionTokenClaims,
     secret,

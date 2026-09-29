@@ -120,11 +120,6 @@ export function revokeStatus(status: number): number {
   return status - REVOKE_STATUS_OFFSET;
 }
 
-export function restoreStatus(status: number): number {
-  if (status > MembershipStatus.Revoked) return status;
-  return status + REVOKE_STATUS_OFFSET;
-}
-
 export function clientMembershipType(type: number): number {
   return type === MembershipType.Manager ? MembershipType.Custom : type;
 }
@@ -132,8 +127,4 @@ export function clientMembershipType(type: number): number {
 // A stored row whose JSON does not parse holds no permissions.
 export function parsePermissions(raw: string | null | undefined): OrgPermissions | null {
   return jsonText.pipe(OrgPermissions).safeParse(raw).data ?? null;
-}
-
-export function isConfirmedVisible(status: number): boolean {
-  return status === MembershipStatus.Confirmed;
 }

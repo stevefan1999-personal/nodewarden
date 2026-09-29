@@ -2,7 +2,6 @@ import type { AppContext } from '../router';
 import { z } from 'zod';
 import { orgRepo } from '../services/storage-org-repo';
 import { MembershipStatus, MembershipType } from '../services/org-types';
-import { generateUUID } from '../utils/uuid';
 import { mailOrganizationInvites, verifyScimBearer } from './organizations';
 import { userRepo } from '../services/storage-user-repo';
 
@@ -126,7 +125,7 @@ export async function handleScimRoute(c: AppContext, path: string): Promise<Resp
       // Upstream PostUserCommand never binds the account: only the invitee's own accept may do that,
       // otherwise any org owner could mint a SCIM token and force an existing user into the org.
       const member = {
-        id: generateUUID(),
+        id: crypto.randomUUID(),
         userId: null,
         orgId,
         email,
@@ -208,7 +207,7 @@ export async function handleScimRoute(c: AppContext, path: string): Promise<Resp
     if (body instanceof Response) return body;
     const now = new Date().toISOString();
     const group = {
-      id: generateUUID(),
+      id: crypto.randomUUID(),
       orgId,
       name: body.displayName || 'Group',
       accessAll: false,

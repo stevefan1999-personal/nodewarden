@@ -57,7 +57,6 @@ import {
 import {
   enterpriseLicenseFileResponse,
   handleCreateSelfHostedOrganizationLicense,
-  handleSyncSelfHostedOrganizationLicense,
   handleUpdateSelfHostedOrganizationLicense,
   LicenseJsonRequest,
 } from './handlers/licenses';
@@ -85,7 +84,7 @@ organizationRoutes.on(
 );
 const license = '/organizations/licenses/self-hosted/:orgId{[a-f0-9-]+}';
 organizationRoutes.on('POST', [`/api${license}/sync`, `${license}/sync`], (c) =>
-  handleSyncSelfHostedOrganizationLicense(c, c.req.param('orgId')),
+  handleUpdateSelfHostedOrganizationLicense(c, c.req.param('orgId')),
 );
 organizationRoutes.on('POST', [`/api${license}`, license], (c) =>
   handleUpdateSelfHostedOrganizationLicense(c, c.req.param('orgId')),

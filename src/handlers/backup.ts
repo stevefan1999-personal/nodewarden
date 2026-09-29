@@ -1,3 +1,4 @@
+import { verifyPassword } from '../services/auth-password';
 import type { AppContext } from '../router';
 import type { Env, User } from '../types';
 import { z } from 'zod';
@@ -10,7 +11,6 @@ import {
 } from '../services/backup-config';
 import { deleteBackupArchive, isBackupArchiveKey, listBackupArchives } from '../services/backup-runs';
 import { backupTransfersConfigured, presignBackupTransfer } from '../services/backup-transfers';
-import { AuthService } from '../services/auth';
 import { auditRequestMetadata, writeAuditEvent } from '../services/audit-events';
 import { withoutQueryParams } from '../db/client';
 
@@ -27,8 +27,7 @@ async function requireBackupUserVerification(
   if (!normalized) {
     return errorResponse(c, 'masterPasswordHash is required', 400);
   }
-  const auth = new AuthService(c.env);
-  const valid = await auth.verifyPassword(normalized, actorUser.masterPasswordHash, actorUser.email);
+  const valid = await verifyPassword(normalized, actorUser.masterPasswordHash, actorUser.email);
   if (!valid) {
     return errorResponse(c, 'Invalid password', 400);
   }
@@ -90,7 +89,6 @@ async function backupSettingsResponse(c: AppContext): Promise<Response> {
 
 export async function handleGetAdminBackupSettings(c: AppContext): Promise<Response> {
   const { currentUser: actorUser } = c.var;
-  void c.req.raw;
   if (!isAdmin(actorUser)) return errorResponse(c, 'Forbidden', 403);
   return backupSettingsResponse(c);
 }
@@ -147,7 +145,6 @@ export async function handleRunAdminBackup(c: BodyContext<typeof BackupRunBody>)
 
 export async function handleListAdminBackupArchives(c: AppContext): Promise<Response> {
   const { currentUser: actorUser } = c.var;
-  void c.req.raw;
   if (!isAdmin(actorUser)) return errorResponse(c, 'Forbidden', 403);
   if (!c.env.BACKUPS) return errorResponse(c, 'Backup storage is not configured', 409);
   return c.json({ object: 'list', data: await listBackupArchives(c.env) });

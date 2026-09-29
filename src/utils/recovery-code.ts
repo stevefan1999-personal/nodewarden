@@ -1,8 +1,6 @@
 import { constantTimeEquals } from './api-key';
 
 const RECOVERY_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
-const RECOVERY_ALPHABET_LENGTH = RECOVERY_ALPHABET.length;
-const RECOVERY_MAX_UNBIASED_BYTE = Math.floor(256 / RECOVERY_ALPHABET_LENGTH) * RECOVERY_ALPHABET_LENGTH;
 
 function normalizeRecoveryCode(raw: string): string {
   return String(raw || '')
@@ -11,18 +9,12 @@ function normalizeRecoveryCode(raw: string): string {
 }
 
 export function createRecoveryCode(): string {
-  let compact = '';
-  while (compact.length < 32) {
-    const bytes = crypto.getRandomValues(new Uint8Array(32));
-    for (const b of bytes) {
-      if (b >= RECOVERY_MAX_UNBIASED_BYTE) continue;
-      compact += RECOVERY_ALPHABET[b % RECOVERY_ALPHABET_LENGTH];
-      if (compact.length >= 32) break;
-    }
-  }
-  // Shown in groups of four characters.
-  return compact
-    .slice(0, 32)
+  // The 32-character alphabet divides 256 exactly, so every random byte maps without bias.
+  return Array.from(
+    crypto.getRandomValues(new Uint8Array(32)),
+    (byte) => RECOVERY_ALPHABET[byte % RECOVERY_ALPHABET.length],
+  )
+    .join('')
     .replace(/(.{4})/g, '$1 ')
     .trim();
 }

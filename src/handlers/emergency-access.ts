@@ -1,9 +1,9 @@
+import { hashPassword } from '../services/auth-password';
 import type { AppContext } from '../router';
 import { z } from 'zod';
 import type { Env, User } from '../types';
 import { AuthService } from '../services/auth';
 import { errorResponse, type BodyContext } from '../utils/response';
-import { generateUUID } from '../utils/uuid';
 import { createEmergencyAccessInviteToken, verifyEmergencyAccessInviteToken } from '../utils/jwt';
 import { LIMITS } from '../config/limits';
 import { RateLimitService } from '../services/ratelimit';
@@ -179,7 +179,7 @@ export async function handleEmergencyAccessInvite(c: BodyContext<typeof Emergenc
   const grantee = await userRepo(c.env.DB).getUser(email);
   const now = new Date().toISOString();
   const record: EmergencyAccessRecord = {
-    id: generateUUID(),
+    id: crypto.randomUUID(),
     grantorId: user.id,
     granteeId: grantee?.id || null,
     email,
@@ -411,11 +411,10 @@ export async function handleEmergencyAccessPassword(
   const body = c.req.valid('json');
   const update = masterPasswordUpdate(c, body, grantor);
   if (update instanceof Response) return update;
-  const auth = new AuthService(c.env);
-  grantor.masterPasswordHash = await auth.hashPasswordServer(update.masterPasswordHash);
+  grantor.masterPasswordHash = await hashPassword(update.masterPasswordHash);
   grantor.key = update.key;
   const originalSecurityStamp = grantor.securityStamp;
-  grantor.securityStamp = generateUUID();
+  grantor.securityStamp = crypto.randomUUID();
   grantor.updatedAt = new Date().toISOString();
   if (
     !(await userRepo(c.env.DB).saveUser(grantor, ['masterPasswordHash', 'key', 'securityStamp'], originalSecurityStamp))

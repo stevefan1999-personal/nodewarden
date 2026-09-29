@@ -141,7 +141,3 @@ export function normalizeEquivalentDomain(value: unknown): string {
 
   return labels.length >= 2 ? labels.slice(-2).join('.') : '';
 }
-
-export function isValidEquivalentDomain(value: unknown): boolean {
-  return !!normalizeEquivalentDomain(value);
-}

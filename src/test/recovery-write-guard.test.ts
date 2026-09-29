@@ -48,48 +48,45 @@ for (const login of [false, true]) {
       totpRecoveryCode: RECOVERY,
     });
     const portal = await signInToAdminPortal(env, 'portal@x.io');
-    const verify = AuthService.prototype.verifyPassword;
+    const repo = userRepo(env.DB);
+    const getUser = repo.getUser.bind(repo);
     let interrupted = false;
     let current: User;
-    t.mock.method(
-      AuthService.prototype,
-      'verifyPassword',
-      async function (this: AuthService, ...args: Parameters<AuthService['verifyPassword']>) {
-        const valid = await verify.apply(this, args);
-        if (!interrupted && args[0] === PASSWORD) {
-          interrupted = true;
-          const reset = await portalFetch(env, {
-            method: 'POST',
-            path: `/admin/users/${user.id}/remove-2fa`,
-            cookie: portal.cookie,
-            form: { csrf: portal.csrf, confirmation: user.email },
-          });
-          assert.equal(reset.status, 303);
-          current = (await userRepo(env.DB).getUserById(user.id))!;
-          current.totpRecoveryCode = await ensureTwoFactorRecoveryCode(env.DB, user.id, current.securityStamp);
-          current.totpSecret = TOTP;
-          await userRepo(env.DB).saveUser(current, ['totpSecret']);
-          await getOrm(env.DB).insert(webauthnCredentials).values({
-            id: 'current-key',
-            userId: user.id,
-            purpose: 'twoFactor',
-            name: 'current',
-            publicKey: 'cHVibGlj',
-            credentialId: 'current-key',
-            createdAt: current.createdAt,
-            updatedAt: current.updatedAt,
-          });
-          await deviceRepo(env.DB).saveTrustedTwoFactorDeviceToken(
-            'current-remember',
-            user.id,
-            'current-device',
-            Date.now() + 60000,
-          );
-          await sessionRepo(env.DB).saveRefreshToken('current-session', user.id);
-        }
-        return valid;
-      },
-    );
+    t.mock.method(repo, 'getUser', async (email: string) => {
+      const snapshot = await getUser(email);
+      if (!interrupted && email === user.email) {
+        interrupted = true;
+        const reset = await portalFetch(env, {
+          method: 'POST',
+          path: `/admin/users/${user.id}/remove-2fa`,
+          cookie: portal.cookie,
+          form: { csrf: portal.csrf, confirmation: user.email },
+        });
+        assert.equal(reset.status, 303);
+        current = (await userRepo(env.DB).getUserById(user.id))!;
+        current.totpRecoveryCode = await ensureTwoFactorRecoveryCode(env.DB, user.id, current.securityStamp);
+        current.totpSecret = TOTP;
+        await userRepo(env.DB).saveUser(current, ['totpSecret']);
+        await getOrm(env.DB).insert(webauthnCredentials).values({
+          id: 'current-key',
+          userId: user.id,
+          purpose: 'twoFactor',
+          name: 'current',
+          publicKey: 'cHVibGlj',
+          credentialId: 'current-key',
+          createdAt: current.createdAt,
+          updatedAt: current.updatedAt,
+        });
+        await deviceRepo(env.DB).saveTrustedTwoFactorDeviceToken(
+          'current-remember',
+          user.id,
+          'current-device',
+          Date.now() + 60000,
+        );
+        await sessionRepo(env.DB).saveRefreshToken('current-session', user.id);
+      }
+      return snapshot;
+    });
     const response = await recoveryRequest(env, user, login);
     assert.equal(response.status, 400);
     assert.equal(interrupted, true);
@@ -115,22 +112,21 @@ test('the same recovery code can complete only one of two concurrent login/endpo
     totpSecret: TOTP,
     totpRecoveryCode: RECOVERY,
   });
-  const verify = AuthService.prototype.verifyPassword;
+  const repo = userRepo(env.DB);
+  const getUser = repo.getUser.bind(repo);
   let arrivals = 0;
   let release!: () => void;
   const ready = new Promise<void>((resolve) => {
     release = resolve;
   });
-  t.mock.method(
-    AuthService.prototype,
-    'verifyPassword',
-    async function (this: AuthService, ...args: Parameters<AuthService['verifyPassword']>) {
-      const valid = await verify.apply(this, args);
+  t.mock.method(repo, 'getUser', async (email: string) => {
+    const snapshot = await getUser(email);
+    if (email === user.email) {
       if (++arrivals === 2) release();
       await ready;
-      return valid;
-    },
-  );
+    }
+    return snapshot;
+  });
   const responses = await Promise.all([recoveryRequest(env, user, false), recoveryRequest(env, user, true)]);
   assert.deepEqual(responses.map((response) => response.status).sort(), [200, 400]);
   await drainWaitUntil();

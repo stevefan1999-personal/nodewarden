@@ -1,3 +1,4 @@
+import { verifyPassword } from '../services/auth-password';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { AppContext } from '../router';
 import { z } from 'zod';
@@ -5,7 +6,6 @@ import { twoFactorProviders } from '../services/two-factor-providers';
 import type { Env, User } from '../types';
 import { LIMITS } from '../config/limits';
 import { EventType, recordEvents } from '../services/events';
-import { AuthService } from '../services/auth';
 import {
   acceptInviteCheck,
   canAccessSecretsManager,
@@ -41,7 +41,7 @@ import {
 import { deleteOrganizationAccount } from '../services/account-deletion';
 import { orgRepo, type CollectionAccessGrants, type OrgRepository } from '../services/storage-org-repo';
 import { errorResponse, type BodyContext } from '../utils/response';
-import { generateUUID, isUUID } from '../utils/uuid';
+import { isUUID } from '../utils/uuid';
 import { organizationResponse, policyResponse } from '../utils/org-response';
 import { enterprisePlansResponse } from '../services/enterprise-license';
 import { RateLimitService } from '../services/ratelimit';
@@ -120,7 +120,7 @@ export async function createOwnedOrganization(
   },
 ) {
   const now = new Date().toISOString();
-  const orgId = generateUUID();
+  const orgId = crypto.randomUUID();
   const org = {
     id: orgId,
     name: input.name,
@@ -133,7 +133,7 @@ export async function createOwnedOrganization(
   };
   await orgRepo(db).insertOrganization(org);
   await orgRepo(db).saveMembership({
-    id: generateUUID(),
+    id: crypto.randomUUID(),
     userId: user.id,
     orgId,
     email: user.email,
@@ -149,7 +149,7 @@ export async function createOwnedOrganization(
     updatedAt: now,
   });
   await orgRepo(db).saveCollection({
-    id: generateUUID(),
+    id: crypto.randomUUID(),
     orgId,
     name: input.collectionName || 'Default Collection',
     externalId: null,
@@ -491,7 +491,7 @@ export async function handleCreateOrgCollection(
   const body = c.req.valid('json');
   const now = new Date().toISOString();
   const collection = {
-    id: generateUUID(),
+    id: crypto.randomUUID(),
     orgId,
     name: body.name,
     externalId: body.externalId || null,
@@ -820,7 +820,7 @@ export async function handleInviteMembers(
   // an existing account, so the invitee stays hidden until they accept with the emailed token.
   const invites = [...new Set(body.emails)]
     .filter((email) => !knownEmails.has(email))
-    .map((email) => ({ id: generateUUID(), email, invitedByEmail: user.email }));
+    .map((email) => ({ id: crypto.randomUUID(), email, invitedByEmail: user.email }));
   if (!invites.length) return c.json({});
   const mailed = await mailOrganizationInvites(c.req.raw, c.env, orgId, user.id, invites);
   if (!mailed.ok) return errorResponse(c, mailed.message, mailed.status, mailed.headers);
@@ -1388,7 +1388,7 @@ export async function handleSaveGroup(
     if (users.some((id) => !orgMembershipIds.has(id))) return errorResponse(c, 'Resource not found.', 404);
   }
   const group = {
-    id: existing?.id || generateUUID(),
+    id: existing?.id || crypto.randomUUID(),
     orgId,
     name: body.name || existing?.name || 'Group',
     accessAll: body.accessAll ?? existing?.accessAll ?? false,
@@ -1507,7 +1507,7 @@ export async function handlePutPolicy(
   const source = c.req.valid('json');
   const existing = await orgRepo(c.env.DB).getPolicy(orgId, policyType);
   const policy = {
-    id: existing?.id || generateUUID(),
+    id: existing?.id || crypto.randomUUID(),
     orgId,
     type: policyType,
     enabled: source.enabled,
@@ -1552,7 +1552,7 @@ export async function handleOrgApiKey(
   if (!secret) return errorResponse(c, 'masterPasswordHash is required', 400);
   const user = await userRepo(c.env.DB).getUserById(userId);
   if (!user) return errorResponse(c, 'User not found', 404);
-  if (!(await new AuthService(c.env).verifyPassword(secret, user.masterPasswordHash, user.email))) {
+  if (!(await verifyPassword(secret, user.masterPasswordHash, user.email))) {
     return errorResponse(c, 'Invalid password', 400);
   }
 
@@ -1567,10 +1567,10 @@ export async function handleOrgApiKey(
     );
   }
 
-  const apiKey = generateUUID().replace(/-/g, '') + generateUUID().replace(/-/g, '');
+  const apiKey = crypto.randomUUID().replace(/-/g, '') + crypto.randomUUID().replace(/-/g, '');
   const revisionDate = new Date().toISOString();
   await orgRepo(c.env.DB).saveOrganizationApiKey({
-    id: existing?.id || generateUUID(),
+    id: existing?.id || crypto.randomUUID(),
     orgId,
     type: 0,
     apiKeyHash: await hashApiKey(apiKey),
@@ -1584,7 +1584,7 @@ export async function handleRotateScimKey(c: AppContext, orgId: string): Promise
   const member = await requireMember(c, userId, orgId);
   if (member instanceof Response) return member;
   if (!canManageScim(member)) return errorResponse(c, 'Access denied', 403);
-  const token = `scim.${orgId}.${generateUUID().replace(/-/g, '')}`;
+  const token = `scim.${orgId}.${crypto.randomUUID().replace(/-/g, '')}`;
   await orgRepo(c.env.DB).saveScimToken(orgId, await hashApiKey(token), new Date().toISOString());
   return c.json({ token, object: 'organizationScimKey' });
 }
@@ -1608,10 +1608,6 @@ export async function handleGetAutoEnrollStatus(c: AppContext, orgId: string): P
     object: 'organizationAutoEnrollStatus',
     enrolled: !!member?.resetPasswordKey,
   });
-}
-
-export function emptyCollectionAccess(): CollectionAccess[] {
-  return [];
 }
 
 export async function handleEnableSecretsManager(c: AppContext, orgId: string): Promise<Response> {

@@ -1,3 +1,4 @@
+import { verifyPassword } from '../services/auth-password';
 import type { AppContext } from '../router';
 import { EventType, recordUserEvent } from '../services/events';
 import {
@@ -10,13 +11,11 @@ import type { AccountPasskeyChallengeScope, AccountPasskeyCredential, Env, User 
 import { AuthService } from '../services/auth';
 import { z } from 'zod';
 import { errorResponse, type BodyContext } from '../utils/response';
-import { generateUUID } from '../utils/uuid';
 import { bytesToBase64Url, parseClientDataJSON } from '../utils/passkey';
 import {
   accountPasskeyCredentialToResponse,
   accountPasskeyPrfStatus,
   accountPasskeyTokenTtlMs,
-  buildWebAuthnPrfOption,
   createAccountPasskeyToken,
   getAccountPasskeyRpConfig,
   isSerializedEncString,
@@ -54,18 +53,17 @@ export const PasskeyRequestSchema = z.looseObject({
 });
 type PasskeyRequest = z.output<typeof PasskeyRequestSchema>;
 
-async function verifyUserSecret(env: Env, user: User, body: PasskeyRequest): Promise<boolean> {
+async function verifyUserSecret(user: User, body: PasskeyRequest): Promise<boolean> {
   const secret = body.masterPasswordHash || body.master_password_hash || body.secret || body.password;
   if (!secret) return false;
   const storedHash = String(user.masterPasswordHash || '').trim();
   if (!storedHash) return false;
-  const auth = new AuthService(env);
-  return auth.verifyPassword(secret, storedHash, user.email);
+  return verifyPassword(secret, storedHash, user.email);
 }
 
 async function verifyTwoFactorWebAuthnUser(env: Env, user: User, body: PasskeyRequest): Promise<boolean> {
   const token = body.userVerificationToken || '';
-  return (await verifyTwoFactorUserVerificationToken(env, user, 7, token)) || (await verifyUserSecret(env, user, body));
+  return (await verifyTwoFactorUserVerificationToken(env, user, 7, token)) || (await verifyUserSecret(user, body));
 }
 
 function hasCompletePrfKeySet(body: PasskeyRequest): boolean {
@@ -320,7 +318,7 @@ export async function assertTwoFactorPasskeyCredential(
 export async function handleGetTwoFactorWebAuthn(c: BodyContext<typeof PasskeyRequestSchema>): Promise<Response> {
   const { userId, currentUser: user } = c.var;
   const body = c.req.valid('json');
-  if (!(await verifyUserSecret(c.env, user, body))) {
+  if (!(await verifyUserSecret(user, body))) {
     return errorResponse(c, 'User verification failed.', 400);
   }
 
@@ -426,7 +424,7 @@ export async function handlePutTwoFactorWebAuthn(c: BodyContext<typeof PasskeyRe
   const transports = normalizeTransports(registrationResponse.response.transports);
   const saved = await passkeyRepo(c.env.DB).saveAccountPasskeyCredential(
     {
-      id: generateUUID(),
+      id: crypto.randomUUID(),
       userId,
       purpose: 'twoFactor',
       name: normalizeAccountPasskeyName(body.name || `Passkey ${currentCount + 1}`),
@@ -518,7 +516,7 @@ export async function handleGetAccountPasskeyAttestationOptions(
 
   let stage = 'verify_master_password';
   try {
-    if (!(await verifyUserSecret(c.env, user, body))) {
+    if (!(await verifyUserSecret(user, body))) {
       return errorResponse(c, 'Master password verification failed', 400);
     }
 
@@ -591,7 +589,7 @@ export async function handleGetAccountPasskeyUpdateAssertionOptions(
 ): Promise<Response> {
   const { userId, currentUser: user } = c.var;
   const body = c.req.valid('json');
-  if (!(await verifyUserSecret(c.env, user, body))) {
+  if (!(await verifyUserSecret(user, body))) {
     return errorResponse(c, 'Master password verification failed', 400);
   }
 
@@ -692,7 +690,7 @@ export async function handleCreateAccountPasskeyCredential(
   const supportsPrf = !!body.supportsPrf || hasCompletePrfKeySet(body);
   const transports = normalizeTransports(registrationResponse.response.transports);
   const credential: AccountPasskeyCredential = {
-    id: generateUUID(),
+    id: crypto.randomUUID(),
     userId,
     purpose: 'login',
     name: normalizeAccountPasskeyName(body.name),
@@ -774,7 +772,7 @@ export async function handleDeleteAccountPasskeyCredential(
 ): Promise<Response> {
   const { userId, currentUser: user } = c.var;
   const body = c.req.valid('json');
-  if (!(await verifyUserSecret(c.env, user, body))) {
+  if (!(await verifyUserSecret(user, body))) {
     return errorResponse(c, 'Master password verification failed', 400);
   }
 
@@ -791,8 +789,4 @@ export async function handleDeleteAccountPasskeyCredential(
     metadata: auditRequestMetadata(c.req.raw),
   });
   return c.json({ success: true });
-}
-
-export function buildAccountPasskeyTokenUserDecryptionOption(credential: AccountPasskeyCredential) {
-  return buildWebAuthnPrfOption(credential);
 }

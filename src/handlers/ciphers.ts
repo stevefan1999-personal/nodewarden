@@ -1,3 +1,4 @@
+import { formatSize } from './sends-shared';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { AppContext } from '../router';
 import { z } from 'zod';
@@ -27,7 +28,7 @@ import {
   notifyUserVaultSync,
 } from '../durable/notifications-hub';
 import { errorResponse, type BodyContext } from '../utils/response';
-import { generateUUID, isUUID } from '../utils/uuid';
+import { isUUID } from '../utils/uuid';
 import { deleteAllAttachmentsForCiphers } from './attachments';
 import { parsePagination, encodeContinuationToken } from '../utils/pagination';
 import { cipherNotifyPayload, readActingDeviceIdentifier } from '../utils/device';
@@ -594,13 +595,6 @@ export function formatAttachments(attachments: Attachment[]): AttachmentResponse
   return formatted.length ? formatted : null;
 }
 
-function formatAttachmentSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} Bytes`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(2)} KB`;
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
-  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
-}
-
 // Only the fields a client sent may overwrite a stored attachment, so absent keys stay absent;
 // size is the older spelling of fileSize.
 const IncomingAttachmentFields = z
@@ -675,7 +669,7 @@ function applyIncomingAttachmentMetadata(current: Attachment[], cipherData: Reco
       const size = Number(item.fileSize);
       if (Number.isFinite(size) && size >= 0 && size !== Number(attachment.size || 0)) {
         attachment.size = size;
-        attachment.sizeName = formatAttachmentSize(size);
+        attachment.sizeName = formatSize(size);
         changed = true;
       }
     }
@@ -711,7 +705,7 @@ export function applyCipherEmbeddedAttachmentMetadata(
       const size = Number(item.fileSize);
       if (Number.isFinite(size) && size >= 0) {
         next.size = size;
-        next.sizeName = formatAttachmentSize(size);
+        next.sizeName = formatSize(size);
       }
     }
     return next;
@@ -942,7 +936,7 @@ export async function handleCreateCipher(c: BodyContext<typeof CipherBody>): Pro
   // then override only server-controlled fields.
   const cipher: Cipher = normalizeCipherForStorage({
     ...cipherData,
-    id: generateUUID(),
+    id: crypto.randomUUID(),
     userId: userId,
     organizationId,
     type: Number(cipherData.type) || 1,

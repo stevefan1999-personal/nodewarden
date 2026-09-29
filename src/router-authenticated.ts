@@ -551,7 +551,7 @@ authenticatedRoutes.on(
   'POST',
   ['/api/auth-requests/admin-request', '/auth-requests/admin-request'],
   jsonBody(AuthRequestCreateSchema),
-  (c) => handleCreateAdminAuthRequest(c, c.get('currentUser').email),
+  handleCreateAdminAuthRequest,
 );
 authenticatedRoutes.on('ALL', ['/api/auth-requests/admin-request', '/auth-requests/admin-request'], methodNotAllowed);
 const authRequest = ['/api/auth-requests/:id{[a-f0-9-]+}', '/auth-requests/:id{[a-f0-9-]+}'] as const;

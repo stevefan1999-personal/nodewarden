@@ -166,20 +166,17 @@ export async function handleCreateAuthRequest(c: BodyContext<typeof AuthRequestC
   return c.json(toAuthRequestResponse(c.req.raw, authRequest));
 }
 
-export async function handleCreateAdminAuthRequest(
-  c: BodyContext<typeof AuthRequestCreateSchema>,
-  userEmail: string,
-): Promise<Response> {
-  const { userId } = c.var;
+export async function handleCreateAdminAuthRequest(c: BodyContext<typeof AuthRequestCreateSchema>): Promise<Response> {
+  const { userId, currentUser } = c.var;
   const body = c.req.valid('json');
   const { publicKey, accessCode, type: requestedType } = body;
-  const email = body.email || userEmail.toLowerCase();
+  const email = body.email || currentUser.email.toLowerCase();
   const deviceInfo = readAuthRequestDeviceInfo(body, c.req.raw);
 
   if (requestedType !== AUTH_REQUEST_TYPE_ADMIN_APPROVAL) {
     return errorResponse(c, 'Invalid AuthRequestType. Expected AdminApproval.', 400);
   }
-  if (email !== userEmail.toLowerCase()) {
+  if (email !== currentUser.email.toLowerCase()) {
     return errorResponse(c, 'Email does not match authenticated user.', 400);
   }
   if (!publicKey || !accessCode || !deviceInfo.deviceIdentifier) {

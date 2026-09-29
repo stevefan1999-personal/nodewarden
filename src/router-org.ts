@@ -9,7 +9,6 @@ import {
   handleCreateOrgCollection,
   handleCreateOrganization,
   handleDeleteGroup,
-  handleDeleteMember,
   handleDeleteOrgCollection,
   handleDeleteOrganization,
   handleEditMember,
@@ -35,8 +34,7 @@ import {
   handlePostOrganizationKeys,
   handlePutPolicy,
   handleReinviteMember,
-  handleRestoreMember,
-  handleRevokeMember,
+  handleMemberAction,
   handleRotateScimKey,
   handleSaveGroup,
   handleUpdateOrgCollection,
@@ -185,10 +183,10 @@ organizationRoutes.post(`${member}/reinvite`, (c) =>
   handleReinviteMember(c, c.req.param('orgId'), c.req.param('memberId')),
 );
 organizationRoutes.on(['PUT', 'PATCH'], `${member}/revoke`, (c) =>
-  handleRevokeMember(c, c.get('userId'), c.req.param('orgId'), c.req.param('memberId')),
+  handleMemberAction(c, c.req.param('orgId'), c.req.param('memberId'), 'revoke'),
 );
 organizationRoutes.on(['PUT', 'PATCH'], [`${member}/restore`, `${member}/restore/vnext`], (c) =>
-  handleRestoreMember(c, c.get('userId'), c.req.param('orgId'), c.req.param('memberId')),
+  handleMemberAction(c, c.req.param('orgId'), c.req.param('memberId'), 'restore'),
 );
 organizationRoutes.get(member, (c) => handleGetMember(c, c.req.param('orgId'), c.req.param('memberId')));
 organizationRoutes.on(['PUT', 'POST'], member, jsonBody(MemberUpdateRequest), (c) =>
@@ -205,7 +203,7 @@ organizationRoutes.on(
     `${member}/restore`,
     `${member}/restore/vnext`,
   ],
-  (c) => handleDeleteMember(c, c.get('userId'), c.req.param('orgId'), c.req.param('memberId')),
+  (c) => handleMemberAction(c, c.req.param('orgId'), c.req.param('memberId'), 'remove'),
 );
 
 organizationRoutes.on('GET', [`${org}/groups`, `${org}/groups/details`], (c) =>

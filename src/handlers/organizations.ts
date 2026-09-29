@@ -1324,30 +1324,19 @@ export async function handleBulkMemberAction(
   return results instanceof Response ? results : bulkResultsResponse(c, results);
 }
 
-async function handleMemberAction(
+export async function handleMemberAction(
   c: AppContext,
-  userId: string,
   orgId: string,
   memberId: string,
   action: MemberAction,
 ): Promise<Response> {
+  const { userId } = c.var;
   const results = await applyMemberAction(c, userId, orgId, [memberId], action);
   if (results instanceof Response) return results;
   const [{ error }] = results;
   if (error === 'Invalid user.') return errorResponse(c, 'Member not found', 404);
   return error ? errorResponse(c, error, 400) : c.json({});
 }
-
-export const handleDeleteMember = (c: AppContext, userId: string, orgId: string, memberId: string): Promise<Response> =>
-  handleMemberAction(c, userId, orgId, memberId, 'remove');
-export const handleRevokeMember = (c: AppContext, userId: string, orgId: string, memberId: string): Promise<Response> =>
-  handleMemberAction(c, userId, orgId, memberId, 'revoke');
-export const handleRestoreMember = (
-  c: AppContext,
-  userId: string,
-  orgId: string,
-  memberId: string,
-): Promise<Response> => handleMemberAction(c, userId, orgId, memberId, 'restore');
 
 export async function handleListGroups(c: AppContext, orgId: string): Promise<Response> {
   const { userId } = c.var;

@@ -1,7 +1,7 @@
 import type { AppContext } from '../router';
 import type { Env, User } from '../types';
 import { z } from 'zod';
-import { errorResponse, jsonResponse, validationErrorResponse, type BodyContext } from '../utils/response';
+import { errorResponse, validationErrorResponse, type BodyContext } from '../utils/response';
 import {
   BackupScheduleSchema,
   loadBackupSchedule,
@@ -19,18 +19,18 @@ function isAdmin(user: User): boolean {
 }
 
 async function requireBackupUserVerification(
+  c: AppContext,
   actorUser: User,
   masterPasswordHash: string | null | undefined,
-  env: Env,
 ): Promise<Response | null> {
   const normalized = (masterPasswordHash ?? '').trim();
   if (!normalized) {
-    return errorResponse('masterPasswordHash is required', 400);
+    return errorResponse(c, 'masterPasswordHash is required', 400);
   }
-  const auth = new AuthService(env);
+  const auth = new AuthService(c.env);
   const valid = await auth.verifyPassword(normalized, actorUser.masterPasswordHash, actorUser.email);
   if (!valid) {
-    return errorResponse('Invalid password', 400);
+    return errorResponse(c, 'Invalid password', 400);
   }
   return null;
 }
@@ -78,38 +78,38 @@ export const BackupUploadBody = z.object(
   { error: 'Backup archive upload payload is invalid' },
 );
 
-async function backupSettingsResponse(env: Env): Promise<Response> {
-  return jsonResponse({
+async function backupSettingsResponse(c: AppContext): Promise<Response> {
+  return c.json({
     object: 'backup-settings',
-    schedule: await loadBackupSchedule(env.DB),
-    status: await loadBackupStatus(env.DB),
-    storageConfigured: !!env.BACKUPS,
-    transfersConfigured: backupTransfersConfigured(env),
+    schedule: await loadBackupSchedule(c.env.DB),
+    status: await loadBackupStatus(c.env.DB),
+    storageConfigured: !!c.env.BACKUPS,
+    transfersConfigured: backupTransfersConfigured(c.env),
   });
 }
 
 export async function handleGetAdminBackupSettings(c: AppContext): Promise<Response> {
   const { currentUser: actorUser } = c.var;
   void c.req.raw;
-  if (!isAdmin(actorUser)) return errorResponse('Forbidden', 403);
-  return backupSettingsResponse(c.env);
+  if (!isAdmin(actorUser)) return errorResponse(c, 'Forbidden', 403);
+  return backupSettingsResponse(c);
 }
 
 // A save may send any subset of the schedule; the rest keeps its stored value.
 export async function handleUpdateAdminBackupSettings(c: BodyContext<typeof BackupSettingsBody>): Promise<Response> {
   const { currentUser: actorUser } = c.var;
-  if (!isAdmin(actorUser)) return errorResponse('Forbidden', 403);
+  if (!isAdmin(actorUser)) return errorResponse(c, 'Forbidden', 403);
 
   const body = c.req.valid('json');
 
-  const verificationError = await requireBackupUserVerification(actorUser, body.masterPasswordHash, c.env);
+  const verificationError = await requireBackupUserVerification(c, actorUser, body.masterPasswordHash);
   if (verificationError) return verificationError;
 
   // Parsed under its body key, so each issue names schedule.<field>.
   const next = z
     .object({ schedule: BackupScheduleSchema })
     .safeParse({ schedule: { ...(await loadBackupSchedule(c.env.DB)), ...body.schedule } });
-  if (!next.success) return validationErrorResponse(next.error);
+  if (!next.success) return validationErrorResponse(c, next.error);
 
   await saveBackupSchedule(c.env.DB, next.data.schedule);
   await writeAuditLog(
@@ -120,37 +120,37 @@ export async function handleUpdateAdminBackupSettings(c: BodyContext<typeof Back
     { schedule: next.data.schedule },
     c.req.raw,
   );
-  return backupSettingsResponse(c.env);
+  return backupSettingsResponse(c);
 }
 
 export async function handleRunAdminBackup(c: BodyContext<typeof BackupRunBody>): Promise<Response> {
   const { currentUser: actorUser } = c.var;
-  if (!isAdmin(actorUser)) return errorResponse('Forbidden', 403);
+  if (!isAdmin(actorUser)) return errorResponse(c, 'Forbidden', 403);
 
   const body = c.req.valid('json');
 
-  const verificationError = await requireBackupUserVerification(actorUser, body.masterPasswordHash, c.env);
+  const verificationError = await requireBackupUserVerification(c, actorUser, body.masterPasswordHash);
   if (verificationError) return verificationError;
-  if (!c.env.BACKUPS) return errorResponse('Backup storage is not configured', 409);
+  if (!c.env.BACKUPS) return errorResponse(c, 'Backup storage is not configured', 409);
 
   try {
     const archive = await backupTransferRunner(c.env).runBackup({
       actorUserId: actorUser.id,
       auditMetadata: auditRequestMetadata(c.req.raw),
     });
-    if (!archive) return errorResponse('Another backup or restore run is already in progress', 409);
-    return jsonResponse({ object: 'backup-run', archive });
+    if (!archive) return errorResponse(c, 'Another backup or restore run is already in progress', 409);
+    return c.json({ object: 'backup-run', archive });
   } catch (error) {
-    return errorResponse(error instanceof Error ? error.message : 'Backup run failed', 500);
+    return errorResponse(c, error instanceof Error ? error.message : 'Backup run failed', 500);
   }
 }
 
 export async function handleListAdminBackupArchives(c: AppContext): Promise<Response> {
   const { currentUser: actorUser } = c.var;
   void c.req.raw;
-  if (!isAdmin(actorUser)) return errorResponse('Forbidden', 403);
-  if (!c.env.BACKUPS) return errorResponse('Backup storage is not configured', 409);
-  return jsonResponse({ object: 'list', data: await listBackupArchives(c.env) });
+  if (!isAdmin(actorUser)) return errorResponse(c, 'Forbidden', 403);
+  if (!c.env.BACKUPS) return errorResponse(c, 'Backup storage is not configured', 409);
+  return c.json({ object: 'list', data: await listBackupArchives(c.env) });
 }
 
 const archiveShape = { key: optionalString, masterPasswordHash: optionalString };
@@ -163,15 +163,15 @@ export const BackupDownloadBody = z.object(archiveShape, { error: 'Backup archiv
 
 export async function handleRestoreAdminBackupArchive(c: BodyContext<typeof BackupRestoreBody>): Promise<Response> {
   const { currentUser: actorUser } = c.var;
-  if (!isAdmin(actorUser)) return errorResponse('Forbidden', 403);
+  if (!isAdmin(actorUser)) return errorResponse(c, 'Forbidden', 403);
 
   const body = c.req.valid('json');
 
-  const verificationError = await requireBackupUserVerification(actorUser, body.masterPasswordHash, c.env);
+  const verificationError = await requireBackupUserVerification(c, actorUser, body.masterPasswordHash);
   if (verificationError) return verificationError;
   const key = (body.key ?? '').trim();
-  if (!isBackupArchiveKey(key)) return errorResponse('Backup archive key is invalid', 400);
-  if (!c.env.BACKUPS) return errorResponse('Backup storage is not configured', 409);
+  if (!isBackupArchiveKey(key)) return errorResponse(c, 'Backup archive key is invalid', 400);
+  if (!c.env.BACKUPS) return errorResponse(c, 'Backup storage is not configured', 409);
 
   try {
     const imported = await backupTransferRunner(c.env).restoreBackup({
@@ -180,8 +180,8 @@ export async function handleRestoreAdminBackupArchive(c: BodyContext<typeof Back
       key,
       replaceExisting: !!body.replaceExisting,
     });
-    if (!imported) return errorResponse('Another backup or restore run is already in progress', 409);
-    return jsonResponse(imported);
+    if (!imported) return errorResponse(c, 'Another backup or restore run is already in progress', 409);
+    return c.json(imported);
   } catch (error) {
     // A failed statement's message ends with the values it bound, which stay out of the response.
     const scrubbed = withoutQueryParams(error);
@@ -196,61 +196,63 @@ export async function handleRestoreAdminBackupArchive(c: BodyContext<typeof Back
           : /fresh instance|not configured/.test(message)
             ? 409
             : 500;
-    return errorResponse(message, status);
+    return errorResponse(c, message, status);
   }
 }
 
 export async function handleDeleteAdminBackupArchive(c: BodyContext<typeof BackupDeleteBody>): Promise<Response> {
   const { currentUser: actorUser } = c.var;
-  if (!isAdmin(actorUser)) return errorResponse('Forbidden', 403);
+  if (!isAdmin(actorUser)) return errorResponse(c, 'Forbidden', 403);
 
   const body = c.req.valid('json');
 
-  const verificationError = await requireBackupUserVerification(actorUser, body.masterPasswordHash, c.env);
+  const verificationError = await requireBackupUserVerification(c, actorUser, body.masterPasswordHash);
   if (verificationError) return verificationError;
   const key = (body.key ?? '').trim();
-  if (!isBackupArchiveKey(key)) return errorResponse('Backup archive key is invalid', 400);
-  if (!c.env.BACKUPS) return errorResponse('Backup storage is not configured', 409);
+  if (!isBackupArchiveKey(key)) return errorResponse(c, 'Backup archive key is invalid', 400);
+  if (!c.env.BACKUPS) return errorResponse(c, 'Backup storage is not configured', 409);
 
   await deleteBackupArchive(c.env, key);
   await writeAuditLog(c.env.DB, actorUser.id, 'admin.backup.archive.delete', key, {}, c.req.raw);
-  return jsonResponse({ object: 'backup-archive-delete', deleted: true, key });
+  return c.json({ object: 'backup-archive-delete', deleted: true, key });
 }
 
 // Archives move in and out only through presigned URLs, straight between the administrator and the bucket.
 export async function handleDownloadAdminBackupArchive(c: BodyContext<typeof BackupDownloadBody>): Promise<Response> {
   const { currentUser: actorUser } = c.var;
-  if (!isAdmin(actorUser)) return errorResponse('Forbidden', 403);
+  if (!isAdmin(actorUser)) return errorResponse(c, 'Forbidden', 403);
 
   const body = c.req.valid('json');
 
-  const verificationError = await requireBackupUserVerification(actorUser, body.masterPasswordHash, c.env);
+  const verificationError = await requireBackupUserVerification(c, actorUser, body.masterPasswordHash);
   if (verificationError) return verificationError;
   const key = (body.key ?? '').trim();
-  if (!isBackupArchiveKey(key)) return errorResponse('Backup archive key is invalid', 400);
-  if (!c.env.BACKUPS) return errorResponse('Backup storage is not configured', 409);
-  if (!backupTransfersConfigured(c.env)) return errorResponse('Presigned backup transfers need R2 S3 credentials', 409);
-  if (!(await c.env.BACKUPS.head(key))) return errorResponse('Backup archive not found', 404);
+  if (!isBackupArchiveKey(key)) return errorResponse(c, 'Backup archive key is invalid', 400);
+  if (!c.env.BACKUPS) return errorResponse(c, 'Backup storage is not configured', 409);
+  if (!backupTransfersConfigured(c.env))
+    return errorResponse(c, 'Presigned backup transfers need R2 S3 credentials', 409);
+  if (!(await c.env.BACKUPS.head(key))) return errorResponse(c, 'Backup archive not found', 404);
 
   const transfer = await presignBackupTransfer(c.env, 'GET', key);
   await writeAuditLog(c.env.DB, actorUser.id, 'admin.backup.archive.download', key, {}, c.req.raw);
-  return jsonResponse({ object: 'backup-transfer', method: 'GET', key, ...transfer });
+  return c.json({ object: 'backup-transfer', method: 'GET', key, ...transfer });
 }
 
 // A fresh key under uploads/, which a restore then names.
 export async function handleUploadAdminBackupArchive(c: BodyContext<typeof BackupUploadBody>): Promise<Response> {
   const { currentUser: actorUser } = c.var;
-  if (!isAdmin(actorUser)) return errorResponse('Forbidden', 403);
+  if (!isAdmin(actorUser)) return errorResponse(c, 'Forbidden', 403);
 
   const body = c.req.valid('json');
 
-  const verificationError = await requireBackupUserVerification(actorUser, body.masterPasswordHash, c.env);
+  const verificationError = await requireBackupUserVerification(c, actorUser, body.masterPasswordHash);
   if (verificationError) return verificationError;
-  if (!c.env.BACKUPS) return errorResponse('Backup storage is not configured', 409);
-  if (!backupTransfersConfigured(c.env)) return errorResponse('Presigned backup transfers need R2 S3 credentials', 409);
+  if (!c.env.BACKUPS) return errorResponse(c, 'Backup storage is not configured', 409);
+  if (!backupTransfersConfigured(c.env))
+    return errorResponse(c, 'Presigned backup transfers need R2 S3 credentials', 409);
 
   const key = `uploads/${crypto.randomUUID()}.zip`;
   const transfer = await presignBackupTransfer(c.env, 'PUT', key);
   await writeAuditLog(c.env.DB, actorUser.id, 'admin.backup.archive.upload', key, {}, c.req.raw);
-  return jsonResponse({ object: 'backup-transfer', method: 'PUT', key, ...transfer });
+  return c.json({ object: 'backup-transfer', method: 'PUT', key, ...transfer });
 }

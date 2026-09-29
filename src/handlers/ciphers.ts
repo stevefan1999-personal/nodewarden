@@ -1,3 +1,4 @@
+import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { AppContext } from '../router';
 import { z } from 'zod';
 import {
@@ -25,7 +26,7 @@ import {
   notifyUserCiphersSync,
   notifyUserVaultSync,
 } from '../durable/notifications-hub';
-import { errorResponse, jsonResponse, type BodyContext } from '../utils/response';
+import { errorResponse, type BodyContext } from '../utils/response';
 import { generateUUID, isUUID } from '../utils/uuid';
 import { deleteAllAttachmentsForCiphers } from './attachments';
 import { parsePagination, encodeContinuationToken } from '../utils/pagination';
@@ -118,8 +119,8 @@ async function finishBulkCipherState(
   return respond();
 }
 
-function cipherJsonResponse(request: Request, cipher: Cipher, attachments: Attachment[] = []): Response {
-  return jsonResponse(cipherToResponse(cipher, attachments, cipherResponseOptionsForRequest(request)));
+function cipherJsonResponse(c: AppContext, cipher: Cipher, attachments: Attachment[] = []): Response {
+  return c.json(cipherToResponse(cipher, attachments, cipherResponseOptionsForRequest(c.req.raw)));
 }
 
 function normalizeCipherTimestamp(value: unknown): string | null {
@@ -827,12 +828,12 @@ function organizationCipherResponse(request: Request, cipher: Cipher, attachment
 export async function handleGetOrganizationCiphers(c: AppContext): Promise<Response> {
   const { userId } = c.var;
   const orgId = new URL(c.req.raw.url).searchParams.get('organizationId');
-  if (!isUUID(orgId)) return errorResponse('OrganizationId must be a valid GUID.', 400);
+  if (!isUUID(orgId)) return errorResponse(c, 'OrganizationId must be a valid GUID.', 400);
   const id = orgId.toLowerCase();
-  if (!(await canReadOrganizationCiphers(c.env.DB, userId, id, 'all'))) return errorResponse('Not found', 404);
+  if (!(await canReadOrganizationCiphers(c.env.DB, userId, id, 'all'))) return errorResponse(c, 'Not found', 404);
   const ciphers = await orgRepo(c.env.DB).listOrganizationCiphers(id);
   const attachments = await attachmentRepo(c.env.DB).getAttachmentsByCipherIds(ciphers.map((cipher) => cipher.id));
-  return jsonResponse({
+  return c.json({
     data: ciphers.map((cipher) => organizationCipherResponse(c.req.raw, cipher, attachments.get(cipher.id) || [])),
     object: 'list',
     continuationToken: null,
@@ -843,9 +844,9 @@ export async function handleGetCipherAdmin(c: AppContext, id: string): Promise<R
   const { userId } = c.var;
   const cipher = await cipherRepo(c.env.DB).getCipher(id);
   if (!cipher?.organizationId || !(await canReadOrganizationCiphers(c.env.DB, userId, cipher.organizationId, 'admin')))
-    return errorResponse('Not found', 404);
+    return errorResponse(c, 'Not found', 404);
   const collectionIds = await orgRepo(c.env.DB).listCipherCollectionIds(id, cipher.organizationId);
-  return jsonResponse(
+  return c.json(
     organizationCipherResponse(
       c.req.raw,
       { ...cipher, collectionIds },
@@ -896,7 +897,7 @@ export async function handleGetCiphers(c: AppContext): Promise<Response> {
     cipherResponses.push(cipherToResponse(cipher, attachments, responseOptions));
   }
 
-  return jsonResponse({
+  return c.json({
     data: cipherResponses,
     object: 'list',
     continuationToken: continuationToken,
@@ -907,9 +908,9 @@ export async function handleGetCiphers(c: AppContext): Promise<Response> {
 export async function handleGetCipher(c: AppContext, id: string): Promise<Response> {
   const { userId } = c.var;
   const cipher = await loadAccessibleCipher(c.env.DB, userId, id, 'read');
-  if (!cipher) return errorResponse('Cipher not found', 404);
+  if (!cipher) return errorResponse(c, 'Cipher not found', 404);
 
-  return cipherJsonResponse(c.req.raw, cipher, await attachmentRepo(c.env.DB).getAttachmentsByCipher(cipher.id));
+  return cipherJsonResponse(c, cipher, await attachmentRepo(c.env.DB).getAttachmentsByCipher(cipher.id));
 }
 
 async function verifyFolderOwnership(
@@ -935,7 +936,7 @@ export async function handleCreateCipher(c: BodyContext<typeof CipherBody>): Pro
     .parse(cipherData.collectionIds || body.collectionIds);
   if (organizationId) {
     const assignment = await checkCollectionAssignment(c.env, userId, organizationId, incomingCollectionIds);
-    if (!assignment.ok) return errorResponse(assignment.message, assignment.status);
+    if (!assignment.ok) return errorResponse(c, assignment.message, assignment.status);
   }
   // Opaque passthrough: spread ALL client fields to preserve unknown/future ones,
   // then override only server-controlled fields.
@@ -967,12 +968,12 @@ export async function handleCreateCipher(c: BodyContext<typeof CipherBody>): Pro
     deletedAt: null,
   });
   const compatibilityError = validateCipherEncryptedFieldsForCompatibility(cipher);
-  if (compatibilityError) return errorResponse(compatibilityError, 400);
+  if (compatibilityError) return errorResponse(c, compatibilityError, 400);
 
   // Prevent referencing a folder owned by another user.
   if (cipher.folderId) {
     const folderOk = await verifyFolderOwnership(c.env.DB, cipher.folderId, userId);
-    if (!folderOk) return errorResponse('Folder not found', 404);
+    if (!folderOk) return errorResponse(c, 'Folder not found', 404);
   }
 
   await cipherRepo(c.env.DB).saveCipher(cipher);
@@ -983,7 +984,7 @@ export async function handleCreateCipher(c: BodyContext<typeof CipherBody>): Pro
   if (organizationId) await orgRepo(c.env.DB).bumpOrgMemberRevisions(organizationId);
   await afterCipherMutation(c.req.raw, c.env, userId, cipher, notifyUserCipherCreate, EventType.CipherCreated);
 
-  return cipherJsonResponse(c.req.raw, cipher);
+  return cipherJsonResponse(c, cipher);
 }
 
 type CipherMerge = { ok: true; cipher: Cipher } | { ok: false; message: string };
@@ -1052,7 +1053,7 @@ export async function handleUpdateCipher(
 ): Promise<Response> {
   const { userId } = c.var;
   const existingCipher = await loadAccessibleCipher(c.env.DB, userId, id, asAdmin ? 'admin-edit' : 'edit');
-  if (!existingCipher) return errorResponse('Cipher not found', 404);
+  if (!existingCipher) return errorResponse(c, 'Cipher not found', 404);
 
   const body = c.req.valid('json');
   const cipherData = body.cipher ?? body;
@@ -1062,20 +1063,20 @@ export async function handleUpdateCipher(
     cipherData.organizationId !== undefined &&
     cipherData.organizationId !== (existingCipher.organizationId ?? null)
   ) {
-    return errorResponse('Organization mismatch. Re-sync if you recently moved this item, then try again.', 400);
+    return errorResponse(c, 'Organization mismatch. Re-sync if you recently moved this item, then try again.', 400);
   }
   const preserveRevisionDate =
     shouldPreserveRepairableCipherUris(c.req.raw) &&
     (body.preserveRevisionDate === true || cipherData.preserveRevisionDate === true);
   const merged = mergeFullCipherUpdate(existingCipher, cipherData, preserveRevisionDate);
-  if (!merged.ok) return errorResponse(merged.message, 400);
+  if (!merged.ok) return errorResponse(c, merged.message, 400);
   const cipher = merged.cipher;
   if (asAdmin) cipher.collectionIds = existingCipher.collectionIds;
 
   // Prevent referencing a folder owned by another user.
   if (cipher.folderId) {
     const folderOk = await verifyFolderOwnership(c.env.DB, cipher.folderId, userId);
-    if (!folderOk) return errorResponse('Folder not found', 404);
+    if (!folderOk) return errorResponse(c, 'Folder not found', 404);
   }
 
   const previousState = cipher.organizationId
@@ -1103,12 +1104,12 @@ export async function handleUpdateCipher(
   );
 
   return asAdmin
-    ? jsonResponse({ ...organizationCipherResponse(c.req.raw, cipher, attachments), object: 'cipherMini' })
-    : cipherJsonResponse(c.req.raw, cipher, attachments);
+    ? c.json({ ...organizationCipherResponse(c.req.raw, cipher, attachments), object: 'cipherMini' })
+    : cipherJsonResponse(c, cipher, attachments);
 }
 
 type ShareResult =
-  { ok: true; ciphers: Cipher[]; revisionDate: string } | { ok: false; status: number; message: string };
+  { ok: true; ciphers: Cipher[]; revisionDate: string } | { ok: false; status: ContentfulStatusCode; message: string };
 
 // Upstream CipherService.ShareAsync / ShareManyAsync. The caller already owns each personal cipher
 // and may write the collections; the client re-encrypted the body under the org key, so it replaces
@@ -1159,9 +1160,9 @@ export async function handleShareCipher(c: BodyContext<typeof ShareCipherBody>, 
 
   // Only a personal cipher of the caller can move; an org cipher or someone else's is not found.
   const existing = await cipherRepo(c.env.DB).getCipherForUser(id, userId);
-  if (!existing) return errorResponse('Cipher not found', 404);
+  if (!existing) return errorResponse(c, 'Cipher not found', 404);
   const assignment = await checkCollectionAssignment(c.env, userId, organizationId, collectionIds);
-  if (!assignment.ok) return errorResponse(assignment.message, assignment.status);
+  if (!assignment.ok) return errorResponse(c, assignment.message, assignment.status);
 
   const shared = await shareOwnedCiphers(
     c.req.raw,
@@ -1172,10 +1173,10 @@ export async function handleShareCipher(c: BodyContext<typeof ShareCipherBody>, 
     [{ existing, cipherData }],
     collectionIds,
   );
-  if (!shared.ok) return errorResponse(shared.message, shared.status);
+  if (!shared.ok) return errorResponse(c, shared.message, shared.status);
   const [cipher] = shared.ciphers;
   notifyUserCipherUpdate(c.env, cipherNotifyPayload(cipher, shared.revisionDate, c.req.raw));
-  return cipherJsonResponse(c.req.raw, cipher, await attachmentRepo(c.env.DB).getAttachmentsByCipher(cipher.id));
+  return cipherJsonResponse(c, cipher, await attachmentRepo(c.env.DB).getAttachmentsByCipher(cipher.id));
 }
 
 // PUT/POST /api/ciphers/share
@@ -1187,7 +1188,7 @@ export async function handleBulkShareCiphers(c: BodyContext<typeof BulkShareCiph
   // Upstream PutShareMany checks membership before ownership.
   const [{ organizationId }] = requested;
   const assignment = await checkCollectionAssignment(c.env, userId, organizationId, collectionIds);
-  if (!assignment.ok) return errorResponse(assignment.message, assignment.status);
+  if (!assignment.ok) return errorResponse(c, assignment.message, assignment.status);
   const owned = new Map(
     (
       await cipherRepo(c.env.DB).getCiphersByIds(
@@ -1200,15 +1201,15 @@ export async function handleBulkShareCiphers(c: BodyContext<typeof BulkShareCiph
     const existing = owned.get(cipherData.id);
     return existing ? [{ existing, cipherData }] : [];
   });
-  if (shares.length < requested.length) return errorResponse('Trying to share ciphers that you do not own.', 400);
+  if (shares.length < requested.length) return errorResponse(c, 'Trying to share ciphers that you do not own.', 400);
 
   const shared = await shareOwnedCiphers(c.req.raw, c.env, c.env.DB, userId, organizationId, shares, collectionIds);
-  if (!shared.ok) return errorResponse(shared.message, shared.status);
+  if (!shared.ok) return errorResponse(c, shared.message, shared.status);
   const attachmentsByCipher = await attachmentRepo(c.env.DB).getAttachmentsByCipherIds(
     shared.ciphers.map((cipher) => cipher.id),
   );
   const responseOptions = cipherResponseOptionsForRequest(c.req.raw);
-  return jsonResponse({
+  return c.json({
     data: shared.ciphers.map((cipher) =>
       cipherToResponse(cipher, attachmentsByCipher.get(cipher.id) || [], responseOptions),
     ),
@@ -1229,7 +1230,7 @@ export async function handleUpdateCipherCollections(
   const body = c.req.valid('json');
 
   const change = await planCipherCollectionChange(c.env, c.env.DB, userId, id, body.collectionIds, mode);
-  if (!change.ok) return errorResponse(change.message, change.status);
+  if (!change.ok) return errorResponse(c, change.message, change.status);
   await orgRepo(c.env.DB).updateCipherCollections(change.cipher.id, change.plan);
   await orgRepo(c.env.DB).bumpOrgMemberRevisions(change.organizationId);
   const cipher = { ...change.cipher, collectionIds: await orgRepo(c.env.DB).listCipherCollectionIds(change.cipher.id) };
@@ -1247,11 +1248,11 @@ export async function handleUpdateCipherCollections(
   const responseOptions = cipherResponseOptionsForRequest(c.req.raw);
   // The admin client fills in edit, viewPassword and favorite itself, so the details shape serves.
   if (mode === 'admin')
-    return jsonResponse({ ...cipherToResponse(cipher, attachments, responseOptions), object: 'cipherMiniDetails' });
+    return c.json({ ...cipherToResponse(cipher, attachments, responseOptions), object: 'cipherMiniDetails' });
   // A member who dropped its last collection holding the item can no longer read it; upstream
   // answers unavailable and the client deletes its local copy.
   const readable = await loadAccessibleCipher(c.env.DB, userId, cipher.id, 'read');
-  return jsonResponse({
+  return c.json({
     object: 'optionalCipherDetails',
     unavailable: !readable,
     cipher: readable ? cipherToResponse(readable, attachments, responseOptions) : null,
@@ -1262,7 +1263,7 @@ export async function handleUpdateCipherCollections(
 export async function handleDeleteCipher(c: AppContext, id: string, asAdmin = false): Promise<Response> {
   const { userId } = c.var;
   const cipher = await loadAccessibleCipher(c.env.DB, userId, id, asAdmin ? 'admin-edit' : 'edit');
-  if (!cipher) return errorResponse('Cipher not found', 404);
+  if (!cipher) return errorResponse(c, 'Cipher not found', 404);
 
   const wasDeleted = !!cipher.deletedAt;
   // Soft delete
@@ -1284,7 +1285,7 @@ export async function handleDeleteCipher(c: AppContext, id: string, asAdmin = fa
     folderId: cipher.folderId ?? null,
   });
 
-  return asAdmin ? new Response(null, { status: 200 }) : cipherJsonResponse(c.req.raw, cipher);
+  return asAdmin ? new Response(null, { status: 200 }) : cipherJsonResponse(c, cipher);
 }
 
 // DELETE /api/ciphers/:id (compat mode)
@@ -1295,7 +1296,7 @@ export async function handleDeleteCipher(c: AppContext, id: string, asAdmin = fa
 export async function handleDeleteCipherCompat(c: AppContext, id: string): Promise<Response> {
   const { userId } = c.var;
   const cipher = await loadAccessibleCipher(c.env.DB, userId, id, 'edit');
-  if (!cipher) return errorResponse('Cipher not found', 404);
+  if (!cipher) return errorResponse(c, 'Cipher not found', 404);
 
   if (cipher.deletedAt) {
     await deleteAllAttachmentsForCiphers(c.env, [id]);
@@ -1317,7 +1318,7 @@ export async function handleDeleteCipherCompat(c: AppContext, id: string): Promi
 export async function handlePermanentDeleteCipher(c: AppContext, id: string, asAdmin = false): Promise<Response> {
   const { userId } = c.var;
   const cipher = await loadAccessibleCipher(c.env.DB, userId, id, asAdmin ? 'admin-edit' : 'edit');
-  if (!cipher) return errorResponse('Cipher not found', 404);
+  if (!cipher) return errorResponse(c, 'Cipher not found', 404);
 
   // Delete all attachments first
   await deleteAllAttachmentsForCiphers(c.env, [id]);
@@ -1337,7 +1338,7 @@ export async function handlePermanentDeleteCipher(c: AppContext, id: string, asA
 export async function handleRestoreCipher(c: AppContext, id: string): Promise<Response> {
   const { userId } = c.var;
   const cipher = await loadAccessibleCipher(c.env.DB, userId, id, 'edit');
-  if (!cipher) return errorResponse('Cipher not found', 404);
+  if (!cipher) return errorResponse(c, 'Cipher not found', 404);
 
   const wasDeleted = !!cipher.deletedAt;
   cipher.deletedAt = null;
@@ -1353,7 +1354,7 @@ export async function handleRestoreCipher(c: AppContext, id: string): Promise<Re
     wasDeleted ? EventType.CipherRestored : undefined,
   );
 
-  return cipherJsonResponse(c.req.raw, cipher);
+  return cipherJsonResponse(c, cipher);
 }
 
 export const PartialUpdateCipherBody = z.object({ folderId: z.unknown().optional(), favorite: z.boolean().optional() });
@@ -1365,7 +1366,7 @@ export async function handlePartialUpdateCipher(
 ): Promise<Response> {
   const { userId } = c.var;
   const cipher = await loadAccessibleCipher(c.env.DB, userId, id, 'edit');
-  if (!cipher) return errorResponse('Cipher not found', 404);
+  if (!cipher) return errorResponse(c, 'Cipher not found', 404);
 
   const body = c.req.valid('json');
 
@@ -1373,7 +1374,7 @@ export async function handlePartialUpdateCipher(
     const folderId = normalizeOptionalId(body.folderId);
     if (folderId) {
       const folderOk = await verifyFolderOwnership(c.env.DB, folderId, userId);
-      if (!folderOk) return errorResponse('Folder not found', 404);
+      if (!folderOk) return errorResponse(c, 'Folder not found', 404);
     }
     cipher.folderId = folderId;
   }
@@ -1386,7 +1387,7 @@ export async function handlePartialUpdateCipher(
   await cipherRepo(c.env.DB).saveCipher(cipher);
   await afterCipherMutation(c.req.raw, c.env, userId, cipher, notifyUserCipherUpdate);
 
-  return cipherJsonResponse(c.req.raw, cipher);
+  return cipherJsonResponse(c, cipher);
 }
 
 export const BulkMoveCiphersBody = CipherIdsBody.extend({ folderId: z.unknown().optional() });
@@ -1399,7 +1400,7 @@ export async function handleBulkMoveCiphers(c: BodyContext<typeof BulkMoveCipher
   const folderId = normalizeOptionalId(body.folderId);
   if (folderId) {
     const folderOk = await verifyFolderOwnership(c.env.DB, folderId, userId);
-    if (!folderOk) return errorResponse('Folder not found', 404);
+    if (!folderOk) return errorResponse(c, 'Folder not found', 404);
   }
 
   const revisionDate = await cipherRepo(c.env.DB).bulkMoveCiphers(body.ids, folderId, userId);
@@ -1408,18 +1409,15 @@ export async function handleBulkMoveCiphers(c: BodyContext<typeof BulkMoveCipher
   return new Response(null, { status: 204 });
 }
 
-async function buildCipherListResponse(
-  request: Request,
-  db: D1Database,
-  userId: string,
-  ids: string[],
-): Promise<Response> {
-  const ciphers = await cipherRepo(db).getCiphersByIds(ids, userId);
-  const attachmentsByCipher = await attachmentRepo(db).getAttachmentsByCipherIds(ciphers.map((cipher) => cipher.id));
+async function buildCipherListResponse(c: AppContext, userId: string, ids: string[]): Promise<Response> {
+  const ciphers = await cipherRepo(c.env.DB).getCiphersByIds(ids, userId);
+  const attachmentsByCipher = await attachmentRepo(c.env.DB).getAttachmentsByCipherIds(
+    ciphers.map((cipher) => cipher.id),
+  );
 
-  return jsonResponse({
+  return c.json({
     data: ciphers.map((cipher) =>
-      cipherToResponse(cipher, attachmentsByCipher.get(cipher.id) || [], cipherResponseOptionsForRequest(request)),
+      cipherToResponse(cipher, attachmentsByCipher.get(cipher.id) || [], cipherResponseOptionsForRequest(c.req.raw)),
     ),
     object: 'list',
     continuationToken: null,
@@ -1430,9 +1428,9 @@ async function buildCipherListResponse(
 export async function handleArchiveCipher(c: AppContext, id: string): Promise<Response> {
   const { userId } = c.var;
   const cipher = await loadAccessibleCipher(c.env.DB, userId, id, 'edit');
-  if (!cipher) return errorResponse('Cipher not found', 404);
+  if (!cipher) return errorResponse(c, 'Cipher not found', 404);
   if (cipher.deletedAt) {
-    return errorResponse('Cannot archive a deleted cipher', 400);
+    return errorResponse(c, 'Cannot archive a deleted cipher', 400);
   }
 
   cipher.archivedAt = new Date().toISOString();
@@ -1441,14 +1439,14 @@ export async function handleArchiveCipher(c: AppContext, id: string): Promise<Re
   await cipherRepo(c.env.DB).saveCipher(cipher);
   await afterCipherMutation(c.req.raw, c.env, userId, cipher, notifyUserCipherUpdate);
 
-  return cipherJsonResponse(c.req.raw, cipher, await attachmentRepo(c.env.DB).getAttachmentsByCipher(cipher.id));
+  return cipherJsonResponse(c, cipher, await attachmentRepo(c.env.DB).getAttachmentsByCipher(cipher.id));
 }
 
 // PUT/POST /api/ciphers/:id/unarchive
 export async function handleUnarchiveCipher(c: AppContext, id: string): Promise<Response> {
   const { userId } = c.var;
   const cipher = await loadAccessibleCipher(c.env.DB, userId, id, 'edit');
-  if (!cipher) return errorResponse('Cipher not found', 404);
+  if (!cipher) return errorResponse(c, 'Cipher not found', 404);
 
   cipher.archivedAt = null;
   cipher.updatedAt = new Date().toISOString();
@@ -1456,7 +1454,7 @@ export async function handleUnarchiveCipher(c: AppContext, id: string): Promise<
   await cipherRepo(c.env.DB).saveCipher(cipher);
   await afterCipherMutation(c.req.raw, c.env, userId, cipher, notifyUserCipherUpdate);
 
-  return cipherJsonResponse(c.req.raw, cipher, await attachmentRepo(c.env.DB).getAttachmentsByCipher(cipher.id));
+  return cipherJsonResponse(c, cipher, await attachmentRepo(c.env.DB).getAttachmentsByCipher(cipher.id));
 }
 
 // PUT/POST /api/ciphers/archive
@@ -1465,7 +1463,7 @@ export async function handleBulkArchiveCiphers(c: BodyContext<typeof CipherIdsBo
   const body = c.req.valid('json');
   const { ids } = body;
   return finishBulkCipherState(c.req.raw, c.env, userId, ids, 'bulkArchiveCiphers', null, () =>
-    buildCipherListResponse(c.req.raw, c.env.DB, userId, ids),
+    buildCipherListResponse(c, userId, ids),
   );
 }
 
@@ -1475,7 +1473,7 @@ export async function handleBulkUnarchiveCiphers(c: BodyContext<typeof CipherIds
   const body = c.req.valid('json');
   const { ids } = body;
   return finishBulkCipherState(c.req.raw, c.env, userId, ids, 'bulkUnarchiveCiphers', null, () =>
-    buildCipherListResponse(c.req.raw, c.env.DB, userId, ids),
+    buildCipherListResponse(c, userId, ids),
   );
 }
 

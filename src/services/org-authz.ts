@@ -1,3 +1,4 @@
+import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import {
   EMPTY_PERMISSIONS,
   clientMembershipType,
@@ -150,7 +151,7 @@ export function restrictsEditingSelf(actor: MembershipRecord, target: Membership
 }
 
 export type MemberCollectionsCheck =
-  { ok: true; collections: CollectionAccess[] } | { ok: false; status: number; message: string };
+  { ok: true; collections: CollectionAccess[] } | { ok: false; status: ContentfulStatusCode; message: string };
 
 // Upstream OrganizationUsersController.Invite and GetAuthorizedCollectionsToSaveAsync: granting
 // access needs ModifyUserAccess on the collection. Owners, Admins and editAnyCollection members hold

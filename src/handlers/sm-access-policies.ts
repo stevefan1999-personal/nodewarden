@@ -15,7 +15,7 @@ import {
   secretAccess,
   serviceAccountAccess,
 } from '../services/sm-authz';
-import { errorResponse, jsonResponse, type BodyContext } from '../utils/response';
+import { errorResponse, type BodyContext } from '../utils/response';
 import { listResponse, PolicyRequests, smContext } from './secrets-manager';
 import { EventType, recordEvents, type EventInput } from '../services/events';
 
@@ -35,10 +35,10 @@ export async function peopleDirectory(db: D1Database, orgId: string, membershipI
 export async function handlePotentialPeople(c: AppContext, orgId: string): Promise<Response> {
   const { principal } = c.var;
   const context = await smContext(c.env, principal, orgId);
-  if (!context || context.actor.kind === 'serviceAccount') return errorResponse('Not found', 404);
+  if (!context || context.actor.kind === 'serviceAccount') return errorResponse(c, 'Not found', 404);
   const membershipId = context.actor.membershipId;
   const { members, groups, ownGroups } = await peopleDirectory(c.env.DB, orgId, membershipId);
-  return jsonResponse(
+  return c.json(
     listResponse([
       ...members
         .filter(({ item }) => item.status === MembershipStatus.Confirmed)
@@ -110,18 +110,18 @@ export async function handlePeoplePolicies(
   const { principal } = c.var;
   const row = kind === 'project' ? await smRepo(c.env.DB).getProject(id) : await smRepo(c.env.DB).getServiceAccount(id);
   const context = row && (await smContext(c.env, principal, row.orgId));
-  if (!row || !context || context.actor.kind === 'serviceAccount') return errorResponse('Not found', 404);
+  if (!row || !context || context.actor.kind === 'serviceAccount') return errorResponse(c, 'Not found', 404);
   const access =
     kind === 'project'
       ? projectAccess(context.actor, context.grants, id)
       : serviceAccountAccess(context.actor, context.grants, id);
-  if (access !== 'write') return errorResponse('Not found', 404);
+  if (access !== 'write') return errorResponse(c, 'Not found', 404);
   if (c.req.raw.method === 'PUT') {
     const body = c.req.valid('json');
     const users = parsePolicyRequests(body.userAccessPolicyRequests ?? [], 'granteeId', kind === 'serviceAccount');
     const groups = parsePolicyRequests(body.groupAccessPolicyRequests ?? [], 'granteeId', kind === 'serviceAccount');
-    if (!users.ok) return errorResponse(users.message, 400);
-    if (!groups.ok) return errorResponse(groups.message, 400);
+    if (!users.ok) return errorResponse(c, users.message, 400);
+    if (!groups.ok) return errorResponse(c, groups.message, 400);
     const directory = await peopleDirectory(c.env.DB, row.orgId, context.actor.membershipId);
     const memberIds = new Set(directory.members.map(({ item }) => item.id));
     const groupIds = new Set(directory.groups.map((group) => group.id));
@@ -129,7 +129,7 @@ export async function handlePeoplePolicies(
       [...users.value.keys()].some((id) => !memberIds.has(id)) ||
       [...groups.value.keys()].some((id) => !groupIds.has(id))
     )
-      return errorResponse('Not found', 404);
+      return errorResponse(c, 'Not found', 404);
     const current = await smRepo(c.env.DB).replacePeoplePolicies(kind, id, users.value, groups.value);
     if (kind === 'serviceAccount' && principal.kind === 'user') {
       const userChanges = diffPolicies(current.users, users.value);
@@ -164,7 +164,7 @@ export async function handlePeoplePolicies(
       await recordEvents(c.env, c.req.raw, { userId: principal.user.id }, events);
     }
   }
-  return jsonResponse(await peoplePolicyResponse(c.env, kind, id, row.orgId, context.actor.membershipId));
+  return c.json(await peoplePolicyResponse(c.env, kind, id, row.orgId, context.actor.membershipId));
 }
 
 export async function handlePotentialMachines(
@@ -174,13 +174,13 @@ export async function handlePotentialMachines(
 ): Promise<Response> {
   const { principal } = c.var;
   const context = await smContext(c.env, principal, orgId);
-  if (!context || context.actor.kind === 'serviceAccount') return errorResponse('Not found', 404);
+  if (!context || context.actor.kind === 'serviceAccount') return errorResponse(c, 'Not found', 404);
   const rows =
     kind === 'projects'
       ? await smRepo(c.env.DB).listProjects(orgId)
       : await smRepo(c.env.DB).listServiceAccounts(orgId);
   const access = kind === 'projects' ? projectAccess : serviceAccountAccess;
-  return jsonResponse(
+  return c.json(
     listResponse(
       rows
         .filter((row) => access(context.actor, context.grants, row.id) === 'write')
@@ -194,11 +194,11 @@ export async function handlePotentialMachines(
   );
 }
 
-export function policyConflict(error: unknown): Response | null {
+export function policyConflict(c: AppContext, error: unknown): Response | null {
   let cause: unknown = error;
   while (cause instanceof Error) {
     if (cause.message.includes('UNIQUE constraint failed: sm_'))
-      return errorResponse('Access policy already exists.', 409);
+      return errorResponse(c, 'Access policy already exists.', 409);
     cause = cause.cause;
   }
   return null;
@@ -212,12 +212,12 @@ export async function handleMachinePolicies(
   const { principal } = c.var;
   const row = kind === 'project' ? await smRepo(c.env.DB).getProject(id) : await smRepo(c.env.DB).getServiceAccount(id);
   const context = row && (await smContext(c.env, principal, row.orgId));
-  if (!row || !context || context.actor.kind === 'serviceAccount') return errorResponse('Not found', 404);
+  if (!row || !context || context.actor.kind === 'serviceAccount') return errorResponse(c, 'Not found', 404);
   const access =
     kind === 'project'
       ? projectAccess(context.actor, context.grants, id)
       : serviceAccountAccess(context.actor, context.grants, id);
-  if (access !== 'write') return errorResponse('Not found', 404);
+  if (access !== 'write') return errorResponse(c, 'Not found', 404);
   let policies =
     kind === 'project'
       ? await smRepo(c.env.DB).readProjectMachinePolicies(row.orgId, id)
@@ -229,7 +229,7 @@ export async function handleMachinePolicies(
       kind === 'project' ? 'granteeId' : 'grantedId',
       false,
     );
-    if (!parsed.ok) return errorResponse(parsed.message, 400);
+    if (!parsed.ok) return errorResponse(c, parsed.message, 400);
     const current = new Map(
       policies.map((policy) => [policy.id, policy.write_access ? ('write' as const) : ('read' as const)]),
     );
@@ -238,7 +238,7 @@ export async function handleMachinePolicies(
       kind === 'project'
         ? new Set((await smRepo(c.env.DB).listServiceAccounts(row.orgId)).map((account) => account.id))
         : await smRepo(c.env.DB).projectsInOrg(row.orgId, [...parsed.value.keys()]);
-    if ([...parsed.value.keys()].some((id) => !known.has(id))) return errorResponse('Not found', 404);
+    if ([...parsed.value.keys()].some((id) => !known.has(id))) return errorResponse(c, 'Not found', 404);
     if (
       kind === 'project'
         ? created.some((id) => serviceAccountAccess(context.actor, context.grants, id) !== 'write')
@@ -246,7 +246,7 @@ export async function handleMachinePolicies(
             (id) => projectAccess(context.actor, context.grants, id) !== 'write',
           )
     )
-      return errorResponse('Not found', 404);
+      return errorResponse(c, 'Not found', 404);
     try {
       await getOrm(c.env.DB).batch([
         smRepo(c.env.DB).bumpServiceAccounts(row.orgId),
@@ -258,7 +258,7 @@ export async function handleMachinePolicies(
         ),
       ]);
     } catch (error) {
-      const conflict = policyConflict(error);
+      const conflict = policyConflict(c, error);
       if (conflict) return conflict;
       throw error;
     }
@@ -267,7 +267,7 @@ export async function handleMachinePolicies(
         ? await smRepo(c.env.DB).readProjectMachinePolicies(row.orgId, id)
         : await smRepo(c.env.DB).readGrantedProjects(row.orgId, id);
   }
-  return jsonResponse(
+  return c.json(
     kind === 'project'
       ? {
           serviceAccountAccessPolicies: policies.map((policy) => ({
@@ -297,7 +297,7 @@ export async function handleMachinePolicies(
 }
 
 export async function prepareSecretPolicies(
-  env: Env,
+  c: AppContext,
   context: NonNullable<Awaited<ReturnType<typeof smContext>>>,
   orgId: string,
   secretId: string,
@@ -308,26 +308,26 @@ export async function prepareSecretPolicies(
   const users = parsePolicyRequests(body.userAccessPolicyRequests, 'granteeId', false);
   const groups = parsePolicyRequests(body.groupAccessPolicyRequests, 'granteeId', false);
   const accounts = parsePolicyRequests(body.serviceAccountAccessPolicyRequests, 'granteeId', false);
-  if (!users.ok) return errorResponse(users.message, 400);
-  if (!groups.ok) return errorResponse(groups.message, 400);
-  if (!accounts.ok) return errorResponse(accounts.message, 400);
+  if (!users.ok) return errorResponse(c, users.message, 400);
+  if (!groups.ok) return errorResponse(c, groups.message, 400);
+  if (!accounts.ok) return errorResponse(c, accounts.message, 400);
   if (context.actor.kind === 'serviceAccount')
-    return users.value.size || groups.value.size || accounts.value.size ? errorResponse('Not found', 404) : [];
-  const directory = await peopleDirectory(env.DB, orgId, context.actor.membershipId);
+    return users.value.size || groups.value.size || accounts.value.size ? errorResponse(c, 'Not found', 404) : [];
+  const directory = await peopleDirectory(c.env.DB, orgId, context.actor.membershipId);
   const members = new Set(directory.members.map(({ item }) => item.id));
   const groupIds = new Set(directory.groups.map((group) => group.id));
-  const machines = new Set((await smRepo(env.DB).listServiceAccounts(orgId)).map((account) => account.id));
+  const machines = new Set((await smRepo(c.env.DB).listServiceAccounts(orgId)).map((account) => account.id));
   if (
     [...users.value.keys()].some((id) => !members.has(id)) ||
     [...groups.value.keys()].some((id) => !groupIds.has(id)) ||
     [...accounts.value.keys()].some((id) => !machines.has(id))
   )
-    return errorResponse('Not found', 404);
+    return errorResponse(c, 'Not found', 404);
   const current = creating
     ? { users: new Map(), groups: new Map() }
-    : await smRepo(env.DB).readPeoplePolicies('secret', secretId);
+    : await smRepo(c.env.DB).readPeoplePolicies('secret', secretId);
   const currentAccounts = new Map(
-    (creating ? [] : await smRepo(env.DB).readSecretMachinePolicies(orgId, secretId)).map((policy) => [
+    (creating ? [] : await smRepo(c.env.DB).readSecretMachinePolicies(orgId, secretId)).map((policy) => [
       policy.id,
       policy.write_access ? ('write' as const) : ('read' as const),
     ]),
@@ -337,11 +337,11 @@ export async function prepareSecretPolicies(
       (id) => serviceAccountAccess(context.actor, context.grants, id) !== 'write',
     )
   )
-    return errorResponse('Not found', 404);
+    return errorResponse(c, 'Not found', 404);
   return [
-    ...smRepo(env.DB).policyDiffStatements('secretMembers', secretId, current.users, users.value),
-    ...smRepo(env.DB).policyDiffStatements('secretGroups', secretId, current.groups, groups.value),
-    ...smRepo(env.DB).policyDiffStatements('secretServiceAccounts', secretId, currentAccounts, accounts.value),
+    ...smRepo(c.env.DB).policyDiffStatements('secretMembers', secretId, current.users, users.value),
+    ...smRepo(c.env.DB).policyDiffStatements('secretGroups', secretId, current.groups, groups.value),
+    ...smRepo(c.env.DB).policyDiffStatements('secretServiceAccounts', secretId, currentAccounts, accounts.value),
   ];
 }
 
@@ -355,10 +355,10 @@ export async function handleSecretPolicies(c: AppContext, id: string): Promise<R
     context.actor.kind === 'serviceAccount' ||
     secretAccess(context.actor, context.grants, secret) !== 'write'
   )
-    return errorResponse('Not found', 404);
+    return errorResponse(c, 'Not found', 404);
   const people = await peoplePolicyResponse(c.env, 'secret', id, secret.orgId, context.actor.membershipId);
   const accounts = await smRepo(c.env.DB).readSecretMachinePolicies(secret.orgId, id);
-  return jsonResponse({
+  return c.json({
     ...people,
     serviceAccountAccessPolicies: accounts.map((policy) => ({
       serviceAccountId: policy.id,

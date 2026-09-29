@@ -7,7 +7,7 @@ import {
   normalizeEquivalentDomains,
   normalizeExcludedGlobalTypes,
 } from '../services/domain-rules';
-import { errorResponse, jsonResponse, type BodyContext } from '../utils/response';
+import { errorResponse, type BodyContext } from '../utils/response';
 import { domainRulesRepo } from '../services/storage-domain-rules-repo';
 
 // CONTRACT:
@@ -22,7 +22,7 @@ export const DomainsBody = z.record(z.string(), z.unknown()).catch({});
 export async function handleGetDomains(c: AppContext): Promise<Response> {
   const { userId } = c.var;
   const settings = await domainRulesRepo(c.env.DB).getUserDomainSettings(userId);
-  return jsonResponse(
+  return c.json(
     buildDomainsResponse(
       settings.equivalentDomains,
       settings.customEquivalentDomains,
@@ -59,9 +59,9 @@ export async function handleUpdateDomains(c: BodyContext<typeof DomainsBody>): P
 
   const settings = await domainRulesRepo(c.env.DB).getUserDomainSettings(userId);
   if (!settings) {
-    return errorResponse('Domain settings unavailable', 500);
+    return errorResponse(c, 'Domain settings unavailable', 500);
   }
-  return jsonResponse(
+  return c.json(
     buildDomainsResponse(
       settings.equivalentDomains,
       settings.customEquivalentDomains,

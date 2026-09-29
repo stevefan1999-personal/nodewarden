@@ -66,7 +66,7 @@ export async function handleSync(c: AppContext): Promise<Response> {
 
   const user = await userRepo(c.env.DB).getUserById(userId);
   if (!user) {
-    return errorResponse('User not found', 404);
+    return errorResponse(c, 'User not found', 404);
   }
 
   const [ciphers, folders, sends, personalAttachments, domainSettings, orgCiphersForAttachments] = await Promise.all([

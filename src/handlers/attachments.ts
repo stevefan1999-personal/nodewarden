@@ -2,7 +2,7 @@ import type { AppContext } from '../router';
 import { z } from 'zod';
 import { Env, Attachment, Cipher } from '../types';
 import { notifyUserCipherUpdate, notifyUserVaultSync } from '../durable/notifications-hub';
-import { errorResponse, jsonResponse, type BodyContext } from '../utils/response';
+import { errorResponse, type BodyContext } from '../utils/response';
 import { buildDirectUploadUrl, parseDirectUploadPayload } from '../utils/direct-upload';
 import { generateUUID } from '../utils/uuid';
 import { contentDispositionAttachment, sanitizeDownloadContentType } from '../utils/content-type';
@@ -81,14 +81,13 @@ function formatSize(bytes: number): string {
 }
 
 async function processAttachmentUpload(
-  request: Request,
-  env: Env,
+  c: AppContext,
   cipher: Cipher,
   attachment: Attachment,
   cipherId: string,
 ): Promise<Response> {
-  const maxFileSize = getBlobStorageMaxBytes(env, LIMITS.attachment.maxFileSizeBytes);
-  const upload = await parseDirectUploadPayload(request, {
+  const maxFileSize = getBlobStorageMaxBytes(c.env, LIMITS.attachment.maxFileSizeBytes);
+  const upload = await parseDirectUploadPayload(c, {
     expectedSize: Number(attachment.size) || 0,
     maxFileSize,
     tooLargeMessage: `File too large. Maximum size is ${Math.floor(maxFileSize / (1024 * 1024))}MB`,
@@ -98,12 +97,12 @@ async function processAttachmentUpload(
   }
 
   const path = getAttachmentObjectKey(cipherId, attachment.id);
-  if (await getBlobObject(env, path)) {
-    return errorResponse('Attachment file has already been uploaded', 409);
+  if (await getBlobObject(c.env, path)) {
+    return errorResponse(c, 'Attachment file has already been uploaded', 409);
   }
 
   try {
-    await putBlobObject(env, path, upload.body, {
+    await putBlobObject(c.env, path, upload.body, {
       size: upload.size,
       contentType: upload.contentType,
       customMetadata: {
@@ -114,18 +113,18 @@ async function processAttachmentUpload(
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (message.includes('KV object too large')) {
-      return errorResponse(`File too large. Maximum size is ${Math.floor(maxFileSize / (1024 * 1024))}MB`, 413);
+      return errorResponse(c, `File too large. Maximum size is ${Math.floor(maxFileSize / (1024 * 1024))}MB`, 413);
     }
-    return errorResponse('Attachment storage is not configured', 500);
+    return errorResponse(c, 'Attachment storage is not configured', 500);
   }
 
   if (upload.size !== attachment.size) {
     attachment.size = upload.size;
     attachment.sizeName = formatSize(upload.size);
-    await attachmentRepo(env.DB).saveAttachment(attachment);
+    await attachmentRepo(c.env.DB).saveAttachment(attachment);
   }
 
-  await afterAttachmentChange(request, env, cipher, cipherId);
+  await afterAttachmentChange(c.req.raw, c.env, cipher, cipherId);
 
   return new Response(null, { status: 201 });
 }
@@ -138,7 +137,7 @@ export async function handleCreateAttachment(
 ): Promise<Response> {
   const { userId } = c.var;
   const cipher = await loadAccessibleCipher(c.env.DB, userId, cipherId, 'edit');
-  if (!cipher) return errorResponse('Cipher not found', 404);
+  if (!cipher) return errorResponse(c, 'Cipher not found', 404);
   const body = c.req.valid('json');
 
   const fileSize = body.fileSize || 0;
@@ -177,7 +176,7 @@ export async function handleCreateAttachment(
   const url = buildDirectUploadUrl(c.req.raw, `/api/ciphers/${cipherId}/attachment/${attachmentId}`, uploadToken);
 
   await recordCipherEvents(c.env, c.req.raw, userId, EventType.CipherAttachmentCreated, [cipher]);
-  return jsonResponse({
+  return c.json({
     object: 'attachment-fileUpload',
     attachmentId: attachmentId,
     url,
@@ -192,14 +191,14 @@ export async function handleCreateAttachment(
 export async function handleUploadAttachment(c: AppContext, cipherId: string, attachmentId: string): Promise<Response> {
   const { userId } = c.var;
   const cipher = await loadAccessibleCipher(c.env.DB, userId, cipherId, 'edit');
-  if (!cipher) return errorResponse('Cipher not found', 404);
+  if (!cipher) return errorResponse(c, 'Cipher not found', 404);
 
   const attachment = await attachmentRepo(c.env.DB).getAttachment(attachmentId);
   if (!attachment || attachment.cipherId !== cipherId) {
-    return errorResponse('Attachment not found', 404);
+    return errorResponse(c, 'Attachment not found', 404);
   }
 
-  return processAttachmentUpload(c.req.raw, c.env, cipher, attachment, cipherId);
+  return processAttachmentUpload(c, cipher, attachment, cipherId);
 }
 
 export async function handlePublicUploadAttachment(
@@ -209,26 +208,26 @@ export async function handlePublicUploadAttachment(
 ): Promise<Response> {
   const token = new URL(c.req.raw.url).searchParams.get('token');
   if (!token) {
-    return errorResponse('Token required', 401);
+    return errorResponse(c, 'Token required', 401);
   }
 
   const claims = await verifyAttachmentUploadToken(token, c.env.JWT_SECRET);
   if (!claims) {
-    return errorResponse('Invalid or expired token', 401);
+    return errorResponse(c, 'Invalid or expired token', 401);
   }
   if (claims.cipherId !== cipherId || claims.attachmentId !== attachmentId) {
-    return errorResponse('Token mismatch', 401);
+    return errorResponse(c, 'Token mismatch', 401);
   }
 
   const cipher = await cipherRepo(c.env.DB).getCipher(cipherId);
-  if (!cipher) return errorResponse('Cipher not found', 404);
+  if (!cipher) return errorResponse(c, 'Cipher not found', 404);
 
   const attachment = await attachmentRepo(c.env.DB).getAttachment(attachmentId);
   if (!attachment || attachment.cipherId !== cipherId) {
-    return errorResponse('Attachment not found', 404);
+    return errorResponse(c, 'Attachment not found', 404);
   }
 
-  return processAttachmentUpload(c.req.raw, c.env, cipher, attachment, cipherId);
+  return processAttachmentUpload(c, cipher, attachment, cipherId);
 }
 
 // GET /api/ciphers/{cipherId}/attachment/{attachmentId}
@@ -236,11 +235,11 @@ export async function handlePublicUploadAttachment(
 export async function handleGetAttachment(c: AppContext, cipherId: string, attachmentId: string): Promise<Response> {
   const { userId } = c.var;
   const cipher = await loadAccessibleCipher(c.env.DB, userId, cipherId, 'read');
-  if (!cipher) return errorResponse('Cipher not found', 404);
+  if (!cipher) return errorResponse(c, 'Cipher not found', 404);
 
   const attachment = await attachmentRepo(c.env.DB).getAttachment(attachmentId);
   if (!attachment || attachment.cipherId !== cipherId) {
-    return errorResponse('Attachment not found', 404);
+    return errorResponse(c, 'Attachment not found', 404);
   }
   const responseAttachment = applyCipherEmbeddedAttachmentMetadata(cipher, [attachment])[0] || attachment;
 
@@ -251,7 +250,7 @@ export async function handleGetAttachment(c: AppContext, cipherId: string, attac
   const url = new URL(c.req.raw.url);
   const downloadUrl = `${url.origin}/api/attachments/${cipherId}/${attachmentId}?token=${token}`;
 
-  return jsonResponse({
+  return c.json({
     object: 'attachment',
     id: responseAttachment.id,
     url: downloadUrl,
@@ -271,11 +270,11 @@ export async function handleUpdateAttachmentMetadata(
 ): Promise<Response> {
   const { userId } = c.var;
   const cipher = await loadAccessibleCipher(c.env.DB, userId, cipherId, 'edit');
-  if (!cipher) return errorResponse('Cipher not found', 404);
+  if (!cipher) return errorResponse(c, 'Cipher not found', 404);
 
   const attachment = await attachmentRepo(c.env.DB).getAttachment(attachmentId);
   if (!attachment || attachment.cipherId !== cipherId) {
-    return errorResponse('Attachment not found', 404);
+    return errorResponse(c, 'Attachment not found', 404);
   }
   const body = c.req.valid('json');
 
@@ -285,7 +284,7 @@ export async function handleUpdateAttachmentMetadata(
   await attachmentRepo(c.env.DB).saveAttachment(attachment);
   await afterAttachmentChange(c.req.raw, c.env, cipher, cipherId);
 
-  return jsonResponse({
+  return c.json({
     object: 'attachment',
     id: attachment.id,
     fileName: attachment.fileName,
@@ -306,35 +305,35 @@ export async function handlePublicDownloadAttachment(
   const token = url.searchParams.get('token');
 
   if (!token) {
-    return errorResponse('Token required', 401);
+    return errorResponse(c, 'Token required', 401);
   }
 
   // Verify token
   const claims = await verifyFileDownloadToken(token, c.env.JWT_SECRET);
   if (!claims) {
-    return errorResponse('Invalid or expired token', 401);
+    return errorResponse(c, 'Invalid or expired token', 401);
   }
 
   // Verify token matches request
   if (claims.cipherId !== cipherId || claims.attachmentId !== attachmentId) {
-    return errorResponse('Token mismatch', 401);
+    return errorResponse(c, 'Token mismatch', 401);
   }
 
   // Verify attachment exists
   const attachment = await attachmentRepo(c.env.DB).getAttachment(attachmentId);
   if (!attachment || attachment.cipherId !== cipherId) {
-    return errorResponse('Attachment not found', 404);
+    return errorResponse(c, 'Attachment not found', 404);
   }
 
   const path = getAttachmentObjectKey(cipherId, attachmentId);
   const firstUse = await attachmentTokenRepo(c.env.DB).consumeAttachmentDownloadToken(claims.jti, claims.exp);
   if (!firstUse) {
-    return errorResponse('Invalid or expired token', 401);
+    return errorResponse(c, 'Invalid or expired token', 401);
   }
 
   const object = await getBlobObject(c.env, path);
   if (!object) {
-    return errorResponse('Attachment file not found', 404);
+    return errorResponse(c, 'Attachment file not found', 404);
   }
 
   return new Response(object.body, {
@@ -353,11 +352,11 @@ export async function handlePublicDownloadAttachment(
 export async function handleDeleteAttachment(c: AppContext, cipherId: string, attachmentId: string): Promise<Response> {
   const { userId } = c.var;
   const cipher = await loadAccessibleCipher(c.env.DB, userId, cipherId, 'edit');
-  if (!cipher) return errorResponse('Cipher not found', 404);
+  if (!cipher) return errorResponse(c, 'Cipher not found', 404);
 
   const attachment = await attachmentRepo(c.env.DB).getAttachment(attachmentId);
   if (!attachment || attachment.cipherId !== cipherId) {
-    return errorResponse('Attachment not found', 404);
+    return errorResponse(c, 'Attachment not found', 404);
   }
 
   const path = getAttachmentObjectKey(cipherId, attachmentId);
@@ -385,7 +384,7 @@ export async function handleDeleteAttachment(c: AppContext, cipherId: string, at
   const cipherResponse = cipherToResponse(updatedCipher || cipher, attachments);
   await recordCipherEvents(c.env, c.req.raw, userId, EventType.CipherAttachmentDeleted, [cipher]);
 
-  return jsonResponse({
+  return c.json({
     Cipher: cipherResponse,
     cipher: cipherResponse,
     Object: 'deleteAttachment',

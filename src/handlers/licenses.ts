@@ -1,7 +1,7 @@
 import type { AppContext } from '../router';
 import { z } from 'zod';
 import type { User } from '../types';
-import { errorResponse, jsonResponse, type BodyContext } from '../utils/response';
+import { errorResponse, type BodyContext } from '../utils/response';
 import { organizationResponse } from '../utils/org-response';
 import { buildNodeWardenEnterpriseLicense, parseOrganizationLicense } from '../services/enterprise-license';
 import { createOwnedOrganization } from './organizations';
@@ -53,7 +53,7 @@ export async function handleCreateSelfHostedOrganizationLicense(
       collectionName: body.collectionName || 'Default Collection',
     };
   }
-  if (!form.key) return errorResponse('Organization key is required', 400);
+  if (!form.key) return errorResponse(c, 'Organization key is required', 400);
   const parsed = parseOrganizationLicense(form.license, user.name || 'Organization');
   const org = await createOwnedOrganization(c.env.DB, user, {
     name: parsed.name,
@@ -61,7 +61,7 @@ export async function handleCreateSelfHostedOrganizationLicense(
     collectionName: form.collectionName || 'Default Collection',
     key: form.key,
   });
-  return jsonResponse(organizationResponse(org));
+  return c.json(organizationResponse(org));
 }
 
 // The uploaded license changes nothing, since every organization runs as Enterprise, so its body is never read.
@@ -69,22 +69,22 @@ export async function handleUpdateSelfHostedOrganizationLicense(c: AppContext, o
   const { currentUser: user } = c.var;
   const member = await orgRepo(c.env.DB).getMembershipByUserAndOrg(user.id, orgId);
   if (!isActiveMember(member) || !canDeleteOrganization(member)) {
-    return errorResponse('Organization not found', 404);
+    return errorResponse(c, 'Organization not found', 404);
   }
   const org = await orgRepo(c.env.DB).getOrganization(orgId);
-  if (!org) return errorResponse('Organization not found', 404);
-  return jsonResponse(organizationResponse(org));
+  if (!org) return errorResponse(c, 'Organization not found', 404);
+  return c.json(organizationResponse(org));
 }
 
 export async function handleSyncSelfHostedOrganizationLicense(c: AppContext, orgId: string): Promise<Response> {
   const { currentUser: user } = c.var;
   const member = await orgRepo(c.env.DB).getMembershipByUserAndOrg(user.id, orgId);
   if (!isActiveMember(member) || !canDeleteOrganization(member)) {
-    return errorResponse('Organization not found', 404);
+    return errorResponse(c, 'Organization not found', 404);
   }
   const org = await orgRepo(c.env.DB).getOrganization(orgId);
-  if (!org) return errorResponse('Organization not found', 404);
-  return jsonResponse(organizationResponse(org));
+  if (!org) return errorResponse(c, 'Organization not found', 404);
+  return c.json(organizationResponse(org));
 }
 
 export async function handleAccountLicenseUpload(): Promise<Response> {

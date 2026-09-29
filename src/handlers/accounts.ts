@@ -29,13 +29,7 @@ import { upsertCredentialAccount, credentialAccountStatement } from '../services
 import { RateLimitService, getClientIdentifier } from '../services/ratelimit';
 import { auditRequestMetadata, writeAuditEvent, auditEventStatement } from '../services/audit-events';
 import { z } from 'zod';
-import {
-  errorResponse,
-  jsonResponse,
-  unsupportedResponse,
-  validationErrorResponse,
-  type BodyContext,
-} from '../utils/response';
+import { errorResponse, unsupportedResponse, validationErrorResponse, type BodyContext } from '../utils/response';
 import { generateUUID } from '../utils/uuid';
 import { LIMITS } from '../config/limits';
 import { isStoredApiKeyHash, randomStringAlphanum } from '../utils/api-key';
@@ -144,7 +138,7 @@ export const CurrentPasswordHash = z
 const echoed = z.unknown().optional();
 const kdfEcho = { kdf: echoed, kdfType: echoed, kdfIterations: echoed, kdfMemory: echoed, kdfParallelism: echoed };
 
-function kdfChangeRefused(user: User, endpoint: 'password' | 'email', body: unknown): Response | null {
+function kdfChangeRefused(c: AppContext, user: User, endpoint: 'password' | 'email', body: unknown): Response | null {
   const same = (expected: unknown) =>
     z
       .unknown()
@@ -159,7 +153,7 @@ function kdfChangeRefused(user: User, endpoint: 'password' | 'email', body: unkn
       kdfParallelism: same(user.kdfParallelism ?? null),
     })
     .safeParse(body);
-  return echoed.success ? null : validationErrorResponse(echoed.error);
+  return echoed.success ? null : validationErrorResponse(c, echoed.error);
 }
 
 const masterPasswordHalf = { salt: text, kdf: KdfSettings };
@@ -187,10 +181,11 @@ export const MasterPasswordFields = z.object(
 // with each other and with the user's stored KDF and email salt, otherwise the stored hash and wrapped
 // user key stop matching what clients derive at the next login.
 export function masterPasswordUpdate(
+  c: AppContext,
   body: z.output<typeof MasterPasswordFields>,
   user: User,
 ): { masterPasswordHash: string; key: string } | Response {
-  const reject = (message: string) => errorResponse(message, 400);
+  const reject = (message: string) => errorResponse(c, message, 400);
   const { authenticationData: auth, unlockData: unlock } = body;
   if (!auth !== !unlock) return reject('authenticationData and unlockData must be provided together');
   const update =
@@ -258,14 +253,14 @@ export async function handleRegister(c: BodyContext<typeof RegisterSchema>): Pro
   if (parsed.emailVerificationToken) {
     const claims = await verifyRegisterVerifyToken(parsed.emailVerificationToken, c.env.JWT_SECRET);
     if (!claims || claims.email !== email) {
-      return errorResponse('Email verification token is invalid or expired', 400);
+      return errorResponse(c, 'Email verification token is invalid or expired', 400);
     }
   }
   if (!looksLikeEncString(key)) {
-    return errorResponse('key is not a valid encrypted string', 400);
+    return errorResponse(c, 'key is not a valid encrypted string', 400);
   }
   if (!looksLikeEncString(privateKey)) {
-    return errorResponse('encryptedPrivateKey is not a valid encrypted string', 400);
+    return errorResponse(c, 'encryptedPrivateKey is not a valid encrypted string', 400);
   }
 
   const now = new Date().toISOString();
@@ -312,11 +307,11 @@ export async function handleRegister(c: BodyContext<typeof RegisterSchema>): Pro
     user.role = 'admin';
     const created = await userRepo(c.env.DB).createFirstUser(user);
     if (!created) {
-      return errorResponse('Registration is temporarily unavailable, retry once', 409);
+      return errorResponse(c, 'Registration is temporarily unavailable, retry once', 409);
     }
     AuthService.invalidateUserCache(user.id);
     if (!(await upsertCredentialAccount(c.env.DB, user.id, user.masterPasswordHash, user.securityStamp)))
-      return errorResponse('User verification failed.', 400);
+      return errorResponse(c, 'User verification failed.', 400);
     await configRepo(c.env.DB).setRegistered();
     await writeAuditEvent(c.env.DB, {
       actorUserId: user.id,
@@ -332,17 +327,17 @@ export async function handleRegister(c: BodyContext<typeof RegisterSchema>): Pro
       vaultOrigin: configuredVaultOrigin(c.req.raw, c.env),
     });
     await syncVaultAdminRoles(c.env);
-    return registerSuccessResponse((await userRepo(c.env.DB).getUserById(user.id))!.role);
+    return registerSuccessResponse(c, (await userRepo(c.env.DB).getUserById(user.id))!.role);
   }
 
   if (!inviteCode && !isOpenRegistrationEnabled(c.env)) {
-    return errorResponse('Invite code is required', 403);
+    return errorResponse(c, 'Invite code is required', 403);
   }
 
   if (inviteCode) {
     const inviteMarked = await adminRepo(c.env.DB).markInviteUsed(inviteCode, user.id);
     if (!inviteMarked) {
-      return errorResponse('Invite code is invalid or expired', 403);
+      return errorResponse(c, 'Invite code is invalid or expired', 403);
     }
   }
 
@@ -350,14 +345,14 @@ export async function handleRegister(c: BodyContext<typeof RegisterSchema>): Pro
     await userRepo(c.env.DB).createUser(user);
     AuthService.invalidateUserCache(user.id);
     if (!(await upsertCredentialAccount(c.env.DB, user.id, user.masterPasswordHash, user.securityStamp)))
-      return errorResponse('User verification failed.', 400);
+      return errorResponse(c, 'User verification failed.', 400);
   } catch (error) {
     if (inviteCode) await adminRepo(c.env.DB).revertInviteUsed(inviteCode, user.id);
     let cause = error;
     while (cause instanceof Error && cause.cause) cause = cause.cause;
     const msg = (cause instanceof Error ? cause.message : String(cause)).toLowerCase();
     if (msg.includes('unique') || msg.includes('constraint')) {
-      return errorResponse('Email already registered', 409);
+      return errorResponse(c, 'Email already registered', 409);
     }
     console.error('Registration failed after invite reservation:', withoutQueryParams(error));
     throw error;
@@ -390,11 +385,11 @@ export async function handleRegister(c: BodyContext<typeof RegisterSchema>): Pro
     vaultOrigin: configuredVaultOrigin(c.req.raw, c.env),
   });
   await syncVaultAdminRoles(c.env);
-  return registerSuccessResponse((await userRepo(c.env.DB).getUserById(user.id))!.role);
+  return registerSuccessResponse(c, (await userRepo(c.env.DB).getUserById(user.id))!.role);
 }
 
-function registerSuccessResponse(role: User['role']): Response {
-  return jsonResponse(
+function registerSuccessResponse(c: AppContext, role: User['role']): Response {
+  return c.json(
     {
       object: 'register',
       captchaBypassToken: '',
@@ -419,10 +414,10 @@ export async function handleRegisterSendVerificationEmail(
 
   const userCount = await userRepo(c.env.DB).getUserCount();
   if (userCount > 0 && !isOpenRegistrationEnabled(c.env)) {
-    return errorResponse('Registration is invite-only', 403);
+    return errorResponse(c, 'Registration is invite-only', 403);
   }
 
-  if (readMailConfig(c.env).kind !== 'enabled') return errorResponse('Email sending is not configured', 503);
+  if (readMailConfig(c.env).kind !== 'enabled') return errorResponse(c, 'Email sending is not configured', 503);
   runInBackground('register-verification', async () => {
     if (isReservedDocumentationEmail(email) || (await userRepo(c.env.DB).getUser(email))) return;
     const token = await createRegisterVerifyToken(c.env.JWT_SECRET, email, name);
@@ -435,7 +430,7 @@ export async function handleRegisterSendVerificationEmail(
 
   // Official clients treat a non-empty string as an inline token (no SMTP).
   // An empty JSON string means "check your email".
-  return jsonResponse('');
+  return c.json('');
 }
 
 export async function handleRegisterFinish(c: BodyContext<typeof RegisterSchema>): Promise<Response> {
@@ -453,7 +448,7 @@ export const GetPasswordHintBody = z.object({
 export async function handleGetPasswordHint(c: BodyContext<typeof GetPasswordHintBody>): Promise<Response> {
   const clientIdentifier = getClientIdentifier(c.req.raw);
   if (!clientIdentifier) {
-    return errorResponse('Client IP is required', 403);
+    return errorResponse(c, 'Client IP is required', 403);
   }
 
   const body = c.req.valid('json');
@@ -505,7 +500,7 @@ export async function handleGetPasswordHint(c: BodyContext<typeof GetPasswordHin
   }
 
   const mail = readMailConfig(c.env);
-  if (mail.kind === 'misconfigured') return errorResponse('Email sending is not configured', 503);
+  if (mail.kind === 'misconfigured') return errorResponse(c, 'Email sending is not configured', 503);
   if (mail.kind === 'enabled') {
     runInBackground('password-hint', async () => {
       const user = await userRepo(c.env.DB).getUser(email);
@@ -514,11 +509,11 @@ export async function handleGetPasswordHint(c: BodyContext<typeof GetPasswordHin
       if (hint) await sendMail(c.env, user.email, 'passwordHint', { hint });
       else await sendMail(c.env, user.email, 'noPasswordHint');
     });
-    return jsonResponse({ object: 'passwordHint', hasHint: false, masterPasswordHint: null, sentByEmail: true });
+    return c.json({ object: 'passwordHint', hasHint: false, masterPasswordHint: null, sentByEmail: true });
   }
   const user = await userRepo(c.env.DB).getUser(email);
   const hint = user?.status === 'active' ? user.masterPasswordHint?.trim() || null : null;
-  return jsonResponse({
+  return c.json({
     object: 'passwordHint',
     hasHint: !!hint,
     masterPasswordHint: hint,
@@ -529,10 +524,10 @@ export async function handleGetPasswordHint(c: BodyContext<typeof GetPasswordHin
 export async function handleDeleteAccount(c: BodyContext<typeof VerifiedBody>): Promise<Response> {
   const { userId } = c.var;
   const user = await userRepo(c.env.DB).getUserById(userId);
-  if (!user) return errorResponse('User not found', 404);
+  if (!user) return errorResponse(c, 'User not found', 404);
   const body = c.req.valid('json');
   if (!(await verifyUserSecret(new AuthService(c.env), user, body.masterPasswordHash)))
-    return errorResponse('User verification failed.', 400);
+    return errorResponse(c, 'User verification failed.', 400);
   const result = await deleteUserAccount(
     c.env,
     userId,
@@ -547,14 +542,15 @@ export async function handleDeleteAccount(c: BodyContext<typeof VerifiedBody>): 
     },
     user.securityStamp,
   );
-  if (result.kind === 'not-found') return errorResponse('User not found', 404);
+  if (result.kind === 'not-found') return errorResponse(c, 'User not found', 404);
   if (result.kind === 'blocked-by-orgs')
     return errorResponse(
+      c,
       'You cannot delete this member because they are the sole owner of at least one organization vault. Delete these organization vaults or make another member an owner.',
       400,
     );
   if (result.kind === 'last-vault-admin')
-    return errorResponse('You cannot delete the last instance administrator.', 400);
+    return errorResponse(c, 'You cannot delete the last instance administrator.', 400);
   notifyUserLogout(c.env, userId, null);
   return new Response(null, { status: 200 });
 }
@@ -564,13 +560,13 @@ export const EmailTokenBody = VerifiedBody.extend({ newEmail: emailAddress('Inva
 export async function handleEmailToken(c: BodyContext<typeof EmailTokenBody>): Promise<Response> {
   const { userId } = c.var;
   const user = await userRepo(c.env.DB).getUserById(userId);
-  if (!user) return errorResponse('User not found', 404);
+  if (!user) return errorResponse(c, 'User not found', 404);
   const body = c.req.valid('json');
   if (!(await verifyUserSecret(new AuthService(c.env), user, body.masterPasswordHash))) {
-    return errorResponse('Invalid password.', 400, {}, { MasterPasswordHash: ['Invalid password.'] });
+    return errorResponse(c, 'Invalid password.', 400, {}, { MasterPasswordHash: ['Invalid password.'] });
   }
   const email = body.newEmail;
-  if (readMailConfig(c.env).kind !== 'enabled') return errorResponse('Email sending is not configured', 503);
+  if (readMailConfig(c.env).kind !== 'enabled') return errorResponse(c, 'Email sending is not configured', 503);
   const target = { purpose: 'email-change' as const, subject: user.id, binding: `${user.securityStamp}:${email}` };
   let outcome: MailOutcome;
   if (await userRepo(c.env.DB).getUser(email)) {
@@ -583,7 +579,7 @@ export async function handleEmailToken(c: BodyContext<typeof EmailTokenBody>): P
     );
   }
   const check = mailStatusCheck(outcome);
-  return check.ok ? new Response(null, { status: 200 }) : errorResponse(check.message, check.status, check.headers);
+  return check.ok ? new Response(null, { status: 200 }) : errorResponse(c, check.message, check.status, check.headers);
 }
 
 export const ChangeEmailBody = MasterPasswordFields.extend({
@@ -596,15 +592,15 @@ export const ChangeEmailBody = MasterPasswordFields.extend({
 export async function handleChangeEmail(c: BodyContext<typeof ChangeEmailBody>): Promise<Response> {
   const { userId } = c.var;
   const user = await userRepo(c.env.DB).getUserById(userId);
-  if (!user) return errorResponse('User not found', 404);
+  if (!user) return errorResponse(c, 'User not found', 404);
   const body = c.req.valid('json');
-  const kdfChange = kdfChangeRefused(user, 'email', body);
+  const kdfChange = kdfChangeRefused(c, user, 'email', body);
   if (kdfChange) return kdfChange;
   const auth = new AuthService(c.env);
   if (!(await verifyUserSecret(auth, user, body.masterPasswordHash)))
-    return errorResponse('Invalid password.', 400, {}, { MasterPasswordHash: ['Invalid password.'] });
+    return errorResponse(c, 'Invalid password.', 400, {}, { MasterPasswordHash: ['Invalid password.'] });
   const email = body.newEmail;
-  const update = masterPasswordUpdate(body, { ...user, email });
+  const update = masterPasswordUpdate(c, body, { ...user, email });
   if (update instanceof Response) return update;
   if (
     !(await redeemEmailOtp(
@@ -613,7 +609,7 @@ export async function handleChangeEmail(c: BodyContext<typeof ChangeEmailBody>):
       body.token,
     ))
   )
-    return errorResponse('Invalid token.', 400);
+    return errorResponse(c, 'Invalid token.', 400);
   const passwordHash = await auth.hashPasswordServer(update.masterPasswordHash);
   const stamp = generateUUID();
   const now = new Date().toISOString();
@@ -664,10 +660,10 @@ export async function handleChangeEmail(c: BodyContext<typeof ChangeEmailBody>):
     ]);
   } catch (error) {
     if (error instanceof Error && /UNIQUE constraint failed: users\.email/i.test(error.message))
-      return errorResponse('Email already in use.', 400);
+      return errorResponse(c, 'Email already in use.', 400);
     throw error;
   }
-  if (!changed.meta.changes) return errorResponse('User verification failed.', 400);
+  if (!changed.meta.changes) return errorResponse(c, 'User verification failed.', 400);
   AuthService.invalidateUserCache(user.id);
   notifyUserLogout(c.env, user.id, null);
   notifyMail(c.env, user.email, 'emailChanged', { utc: now, ip: getClientIdentifier(c.req.raw) ?? 'Unknown' });
@@ -681,16 +677,17 @@ export async function handleDeleteRecover(c: BodyContext<typeof DeleteRecoverBod
   const body = c.req.valid('json');
   const { email } = body;
   const clientId = getClientIdentifier(c.req.raw);
-  if (!clientId) return errorResponse('Client IP is required', 403);
+  if (!clientId) return errorResponse(c, 'Client IP is required', 403);
   const budget = await new RateLimitService(c.env).consumeStrictBudgetWithWindow(
     `delete-recover:${clientId}`,
     LIMITS.rateLimit.deleteRecoverPerIpPerHour,
     3600,
   );
   if (!budget.allowed)
-    return errorResponse('Too many requests', 429, { 'Retry-After': String(budget.retryAfterSeconds ?? 3600) });
+    return errorResponse(c, 'Too many requests', 429, { 'Retry-After': String(budget.retryAfterSeconds ?? 3600) });
   const origin = configuredVaultOrigin(c.req.raw, c.env);
-  if (readMailConfig(c.env).kind !== 'enabled' || !origin) return errorResponse('Email sending is not configured', 503);
+  if (readMailConfig(c.env).kind !== 'enabled' || !origin)
+    return errorResponse(c, 'Email sending is not configured', 503);
   runInBackground('delete-recover', async () => {
     const user = await userRepo(c.env.DB).getUser(email);
     if (!user || user.status !== 'active') return;
@@ -700,18 +697,18 @@ export async function handleDeleteRecover(c: BodyContext<typeof DeleteRecoverBod
       url: toSafeUrl(new URL(`${origin}/#/verify-recover-delete?${params}`)),
     });
   });
-  return jsonResponse('');
+  return c.json('');
 }
 
 export const DeleteRecoverTokenBody = z.object({ userId: text, token: text });
 // One answer for every refusal, a body its schema refuses included, so it tells nothing about the account.
-export const invalidRecoverToken = () => errorResponse('Invalid token.', 400);
+export const invalidRecoverToken = (c: AppContext) => errorResponse(c, 'Invalid token.', 400);
 
 export async function handleDeleteRecoverToken(c: BodyContext<typeof DeleteRecoverTokenBody>): Promise<Response> {
   const body = c.req.valid('json');
   const user = body.userId ? await userRepo(c.env.DB).getUserById(body.userId) : null;
   if (!user || user.status !== 'active' || !(await verifyDeleteRecoverToken(c.env, user, body.token)))
-    return invalidRecoverToken();
+    return invalidRecoverToken(c);
   const result = await deleteUserAccount(
     c.env,
     user.id,
@@ -726,14 +723,15 @@ export async function handleDeleteRecoverToken(c: BodyContext<typeof DeleteRecov
     },
     user.securityStamp,
   );
-  if (result.kind === 'not-found') return invalidRecoverToken();
+  if (result.kind === 'not-found') return invalidRecoverToken(c);
   if (result.kind === 'blocked-by-orgs')
     return errorResponse(
+      c,
       'You cannot delete this member because they are the sole owner of at least one organization vault. Delete these organization vaults or make another member an owner.',
       400,
     );
   if (result.kind === 'last-vault-admin')
-    return errorResponse('You cannot delete the last instance administrator.', 400);
+    return errorResponse(c, 'You cannot delete the last instance administrator.', 400);
   notifyUserLogout(c.env, user.id, null);
   return new Response(null, { status: 200 });
 }
@@ -743,8 +741,8 @@ export async function handleGetProfile(c: AppContext): Promise<Response> {
   const { userId } = c.var;
   void c.req.raw;
   const user = await userRepo(c.env.DB).getUserById(userId);
-  if (!user) return errorResponse('User not found', 404);
-  return jsonResponse(await buildProfileResponse(user, c.env));
+  if (!user) return errorResponse(c, 'User not found', 404);
+  return c.json(await buildProfileResponse(user, c.env));
 }
 
 export const UpdateProfileBody = z.object({ masterPasswordHint: MasterPasswordHint });
@@ -753,14 +751,14 @@ export const UpdateProfileBody = z.object({ masterPasswordHint: MasterPasswordHi
 export async function handleUpdateProfile(c: BodyContext<typeof UpdateProfileBody>): Promise<Response> {
   const { userId } = c.var;
   const user = await userRepo(c.env.DB).getUserById(userId);
-  if (!user) return errorResponse('User not found', 404);
+  if (!user) return errorResponse(c, 'User not found', 404);
 
   const body = c.req.valid('json');
 
   user.masterPasswordHint = body.masterPasswordHint;
   user.updatedAt = new Date().toISOString();
   if (!(await userRepo(c.env.DB).saveUser(user, ['masterPasswordHint'])))
-    return errorResponse('User verification failed.', 400);
+    return errorResponse(c, 'User verification failed.', 400);
   await writeAuditEvent(c.env.DB, {
     actorUserId: user.id,
     action: 'account.profile.update',
@@ -774,7 +772,7 @@ export async function handleUpdateProfile(c: BodyContext<typeof UpdateProfileBod
     },
   });
 
-  return jsonResponse(await buildProfileResponse(user, c.env));
+  return c.json(await buildProfileResponse(user, c.env));
 }
 
 export const SetVerifyDevicesBody = VerifiedBody.extend({
@@ -786,20 +784,21 @@ export const SetVerifyDevicesBody = VerifiedBody.extend({
 export async function handleSetVerifyDevices(c: BodyContext<typeof SetVerifyDevicesBody>): Promise<Response> {
   const { userId } = c.var;
   const user = await userRepo(c.env.DB).getUserById(userId);
-  if (!user) return errorResponse('User not found', 404);
+  if (!user) return errorResponse(c, 'User not found', 404);
   const mail = readMailConfig(c.env);
   if (mail.kind !== 'enabled' || !mail.newDeviceVerification)
     return errorResponse(
+      c,
       'New device verification is not available on this server. Enable TOTP or WebAuthn two-factor authentication instead.',
       400,
     );
   const body = c.req.valid('json');
   if (!(await verifyUserSecret(new AuthService(c.env), user, body.masterPasswordHash)))
-    return errorResponse('User verification failed.', 400);
+    return errorResponse(c, 'User verification failed.', 400);
   const { verifyDevices } = body;
   user.verifyDevices = verifyDevices;
   if (!(await userRepo(c.env.DB).saveUser(user, ['verifyDevices'])))
-    return errorResponse('User verification failed.', 400);
+    return errorResponse(c, 'User verification failed.', 400);
   await revisionRepo(c.env.DB).updateRevisionDate(user.id);
   AuthService.invalidateUserCache(user.id);
   await writeAuditEvent(c.env.DB, {
@@ -821,8 +820,8 @@ export const ResendNewDeviceOtpBody = VerifiedBody.extend({
 
 export async function handleResendNewDeviceOtp(c: BodyContext<typeof ResendNewDeviceOtpBody>): Promise<Response> {
   const mail = readMailConfig(c.env);
-  if (mail.kind === 'disabled') return unsupportedResponse('Email delivery is not supported by this server.');
-  if (mail.kind === 'misconfigured') return errorResponse('Email sending is not configured', 503);
+  if (mail.kind === 'disabled') return unsupportedResponse(c, 'Email delivery is not supported by this server.');
+  if (mail.kind === 'misconfigured') return errorResponse(c, 'Email sending is not configured', 503);
   const body = c.req.valid('json');
   if (mail.newDeviceVerification)
     runInBackground('new-device-resend', async () => {
@@ -846,7 +845,7 @@ export async function handleResendNewDeviceOtp(c: BodyContext<typeof ResendNewDe
       const device = readAuthRequestDeviceInfo({ deviceType: body.deviceType }, c.req.raw);
       notifyNewDeviceVerification(c.env, c.req.raw, user, device.deviceType);
     });
-  return jsonResponse('');
+  return c.json('');
 }
 
 // GET /api/accounts/keys
@@ -856,10 +855,10 @@ export async function handleGetKeys(c: AppContext): Promise<Response> {
   const user = await userRepo(c.env.DB).getUserById(userId);
 
   if (!user) {
-    return errorResponse('User not found', 404);
+    return errorResponse(c, 'User not found', 404);
   }
 
-  return jsonResponse(keysResponse(user));
+  return c.json(keysResponse(user));
 }
 
 // GET /api/users/{id}/public-key: upstream UsersController.GetPublicKeyAsync. Official clients
@@ -867,8 +866,8 @@ export async function handleGetKeys(c: AppContext): Promise<Response> {
 // logged-in caller may read it.
 export async function handleGetUserPublicKey(c: AppContext, id: string): Promise<Response> {
   const user = await userRepo(c.env.DB).getUserById(id);
-  if (!user?.publicKey) return errorResponse('Resource not found.', 404);
-  return jsonResponse({ userId: user.id, publicKey: user.publicKey, object: 'userKey' });
+  if (!user?.publicKey) return errorResponse(c, 'Resource not found.', 404);
+  return c.json({ userId: user.id, publicKey: user.publicKey, object: 'userKey' });
 }
 
 export const SetKeysBody = z.object({
@@ -885,25 +884,25 @@ export async function handleSetKeys(c: BodyContext<typeof SetKeysBody>): Promise
   const user = await userRepo(c.env.DB).getUserById(userId);
 
   if (!user) {
-    return errorResponse('User not found', 404);
+    return errorResponse(c, 'User not found', 404);
   }
 
   const body = c.req.valid('json');
 
   // Require password verification before allowing key replacement.
   if (!body.masterPasswordHash) {
-    return errorResponse('masterPasswordHash is required', 400);
+    return errorResponse(c, 'masterPasswordHash is required', 400);
   }
   const passwordValid = await auth.verifyPassword(body.masterPasswordHash, user.masterPasswordHash, user.email);
   if (!passwordValid) {
-    return errorResponse('Invalid password', 400);
+    return errorResponse(c, 'Invalid password', 400);
   }
 
   if (body.key && !looksLikeEncString(body.key)) {
-    return errorResponse('key is not a valid encrypted string', 400);
+    return errorResponse(c, 'key is not a valid encrypted string', 400);
   }
   if (body.encryptedPrivateKey && !looksLikeEncString(body.encryptedPrivateKey)) {
-    return errorResponse('encryptedPrivateKey is not a valid encrypted string', 400);
+    return errorResponse(c, 'encryptedPrivateKey is not a valid encrypted string', 400);
   }
 
   if (body.key) user.key = body.key;
@@ -918,7 +917,7 @@ export async function handleSetKeys(c: BodyContext<typeof SetKeysBody>): Promise
       ...(body.publicKey ? ['publicKey' as const] : []),
     ]))
   )
-    return errorResponse('User verification failed.', 400);
+    return errorResponse(c, 'User verification failed.', 400);
   await writeAuditEvent(c.env.DB, {
     actorUserId: user.id,
     action: 'account.keys.update',
@@ -934,7 +933,7 @@ export async function handleSetKeys(c: BodyContext<typeof SetKeysBody>): Promise
     },
   });
 
-  return jsonResponse(keysResponse(user));
+  return c.json(keysResponse(user));
 }
 
 // POST/PUT /api/accounts/password
@@ -953,24 +952,24 @@ export async function handleChangePassword(c: BodyContext<typeof ChangePasswordB
   const { userId } = c.var;
   const auth = new AuthService(c.env);
   const user = await userRepo(c.env.DB).getUserById(userId);
-  if (!user) return errorResponse('User not found', 404);
+  if (!user) return errorResponse(c, 'User not found', 404);
 
   const body = c.req.valid('json');
-  const kdfChange = kdfChangeRefused(user, 'password', body);
+  const kdfChange = kdfChangeRefused(c, user, 'password', body);
   if (kdfChange) return kdfChange;
 
   const currentHash = body.currentPasswordHash || body.masterPasswordHash;
-  if (!currentHash) return errorResponse('Current password hash is required', 400);
+  if (!currentHash) return errorResponse(c, 'Current password hash is required', 400);
   const valid = await auth.verifyPassword(currentHash, user.masterPasswordHash, user.email);
-  if (!valid) return errorResponse('Invalid password', 400);
+  if (!valid) return errorResponse(c, 'Invalid password', 400);
 
-  const update = masterPasswordUpdate(body, user);
+  const update = masterPasswordUpdate(c, body, user);
   if (update instanceof Response) return update;
 
   const nextPrivateKey = body.newEncryptedPrivateKey || body.encryptedPrivateKey;
   const nextPublicKey = body.newPublicKey || body.publicKey;
   if (nextPrivateKey && !looksLikeEncString(nextPrivateKey)) {
-    return errorResponse('new encryptedPrivateKey is not a valid encrypted string', 400);
+    return errorResponse(c, 'new encryptedPrivateKey is not a valid encrypted string', 400);
   }
   const shouldUpdateHint = 'masterPasswordHint' in body;
 
@@ -998,10 +997,10 @@ export async function handleChangePassword(c: BodyContext<typeof ChangePasswordB
       originalSecurityStamp,
     ))
   )
-    return errorResponse('User verification failed.', 400);
+    return errorResponse(c, 'User verification failed.', 400);
   AuthService.invalidateUserCache(user.id);
   if (!(await upsertCredentialAccount(c.env.DB, user.id, user.masterPasswordHash, user.securityStamp)))
-    return errorResponse('User verification failed.', 400);
+    return errorResponse(c, 'User verification failed.', 400);
   await sessionRepo(c.env.DB).deleteRefreshTokensByUserId(user.id);
   await recordUserEvent(c.env, c.req.raw, user.id, EventType.UserChangedPassword);
   await writeAuditEvent(c.env.DB, {
@@ -1071,13 +1070,13 @@ export async function handleGetTwoFactorProviders(c: AppContext): Promise<Respon
   const { userId } = c.var;
   void c.req.raw;
   const user = await userRepo(c.env.DB).getUserById(userId);
-  if (!user) return errorResponse('User not found', 404);
+  if (!user) return errorResponse(c, 'User not found', 404);
 
   const hasTwoFactorPasskey =
     (await passkeyRepo(c.env.DB).countAccountPasskeyCredentialsByUserId(user.id, 'twoFactor')) > 0;
   const data = twoFactorProviders(user, hasTwoFactorPasskey).map((type) => twoFactorProviderResponse(type, true));
 
-  return jsonResponse({
+  return c.json({
     Data: data,
     ContinuationToken: null,
     Object: 'list',
@@ -1089,12 +1088,12 @@ export async function handleGetTwoFactorAuthenticator(c: BodyContext<typeof Veri
   const { userId } = c.var;
   const auth = new AuthService(c.env);
   const user = await userRepo(c.env.DB).getUserById(userId);
-  if (!user) return errorResponse('User not found', 404);
+  if (!user) return errorResponse(c, 'User not found', 404);
 
   const body = c.req.valid('json');
 
   const verified = await verifyUserSecret(auth, user, verificationSecret(body));
-  if (!verified) return errorResponse('User verification failed.', 400);
+  if (!verified) return errorResponse(c, 'User verification failed.', 400);
 
   const key = normalizeTotpSecret(user.totpSecret || '') || new Secret().base32;
   const userVerificationToken = await createTwoFactorUserVerificationToken(
@@ -1103,7 +1102,7 @@ export async function handleGetTwoFactorAuthenticator(c: BodyContext<typeof Veri
     TWO_FACTOR_PROVIDER_AUTHENTICATOR,
     key,
   );
-  return jsonResponse(twoFactorAuthenticatorResponse(!!user.totpSecret, key, userVerificationToken));
+  return c.json(twoFactorAuthenticatorResponse(!!user.totpSecret, key, userVerificationToken));
 }
 
 // POST /api/two-factor/get-yubikey
@@ -1111,14 +1110,14 @@ export async function handleGetTwoFactorYubiKey(c: BodyContext<typeof VerifiedBo
   const { userId } = c.var;
   const auth = new AuthService(c.env);
   const user = await userRepo(c.env.DB).getUserById(userId);
-  if (!user) return errorResponse('User not found', 404);
+  if (!user) return errorResponse(c, 'User not found', 404);
 
   const body = c.req.valid('json');
 
   const verified = await verifyUserSecret(auth, user, verificationSecret(body));
-  if (!verified) return errorResponse('User verification failed.', 400);
+  if (!verified) return errorResponse(c, 'User verification failed.', 400);
 
-  return jsonResponse({
+  return c.json({
     ...(await yubiKeySettingsResponse(c.env.DB, user)),
     UserVerificationToken: await createTwoFactorUserVerificationToken(c.env, user, TWO_FACTOR_PROVIDER_YUBIKEY),
   });
@@ -1131,7 +1130,7 @@ const optionalText = z
   .transform((value) => value?.trim() ?? '');
 // One answer for every refusal before mail availability, a body its schema refuses included, so it tells nothing
 // about the credentials.
-export const twoFactorEmailRejected = () => errorResponse('Cannot send two-factor email.', 400);
+export const twoFactorEmailRejected = (c: AppContext) => errorResponse(c, 'Cannot send two-factor email.', 400);
 export const TwoFactorEmailLoginBody = z.preprocess(
   (body) => Object.fromEntries(Object.entries(body ?? {}).map(([name, value]) => [name.toLowerCase(), value])),
   z.object({
@@ -1148,7 +1147,7 @@ export async function handleSendTwoFactorEmailLogin(c: BodyContext<typeof TwoFac
   const body = c.req.valid('json');
   const email = body.email.toLowerCase();
   const user = email ? await userRepo(c.env.DB).getUser(email) : null;
-  if (!user || user.status !== 'active' || !user.twoFactorEmail) return twoFactorEmailRejected();
+  if (!user || user.status !== 'active' || !user.twoFactorEmail) return twoFactorEmailRejected(c);
   const accessCode = body.authrequestaccesscode;
   const sessionToken = body.ssoemail2fasessiontoken;
   let verified: boolean;
@@ -1160,8 +1159,8 @@ export async function handleSendTwoFactorEmailLogin(c: BodyContext<typeof TwoFac
   } else {
     verified = await verifyUserSecret(new AuthService(c.env), user, body.masterpasswordhash);
   }
-  if (!verified) return twoFactorEmailRejected();
-  if (readMailConfig(c.env).kind !== 'enabled') return errorResponse('Email sending is not configured', 503);
+  if (!verified) return twoFactorEmailRejected(c);
+  if (readMailConfig(c.env).kind !== 'enabled') return errorResponse(c, 'Email sending is not configured', 503);
   const device = readAuthRequestDeviceInfo({ deviceType: body.devicetype }, c.req.raw);
   const outcome = await issueEmailOtp(
     c.env,
@@ -1176,7 +1175,7 @@ export async function handleSendTwoFactorEmailLogin(c: BodyContext<typeof TwoFac
       }),
   );
   const check = mailStatusCheck(outcome);
-  return check.ok ? new Response(null, { status: 200 }) : errorResponse(check.message, check.status, check.headers);
+  return check.ok ? new Response(null, { status: 200 }) : errorResponse(c, check.message, check.status, check.headers);
 }
 
 function twoFactorEmailResponse(email: string | null, userVerificationToken?: string): Record<string, unknown> {
@@ -1207,11 +1206,11 @@ async function verifyEmailTwoFactorUser(
 export async function handleGetTwoFactorEmail(c: BodyContext<typeof VerifiedBody>): Promise<Response> {
   const { userId } = c.var;
   const user = await userRepo(c.env.DB).getUserById(userId);
-  if (!user) return errorResponse('User not found', 404);
+  if (!user) return errorResponse(c, 'User not found', 404);
   const body = c.req.valid('json');
   if (!(await verifyUserSecret(new AuthService(c.env), user, body.masterPasswordHash || body.secret)))
-    return errorResponse('User verification failed.', 400);
-  return jsonResponse(
+    return errorResponse(c, 'User verification failed.', 400);
+  return c.json(
     twoFactorEmailResponse(
       user.twoFactorEmail,
       await createTwoFactorUserVerificationToken(c.env, user, TWO_FACTOR_PROVIDER_EMAIL),
@@ -1222,27 +1221,27 @@ export async function handleGetTwoFactorEmail(c: BodyContext<typeof VerifiedBody
 export async function handleSendTwoFactorEmail(c: BodyContext<typeof EmailTwoFactorBody>): Promise<Response> {
   const { userId } = c.var;
   const user = await userRepo(c.env.DB).getUserById(userId);
-  if (!user) return errorResponse('User not found', 404);
+  if (!user) return errorResponse(c, 'User not found', 404);
   const body = c.req.valid('json');
-  if (!(await verifyEmailTwoFactorUser(c.env, user, body))) return errorResponse('User verification failed.', 400);
+  if (!(await verifyEmailTwoFactorUser(c.env, user, body))) return errorResponse(c, 'User verification failed.', 400);
   const { email } = body;
-  if (readMailConfig(c.env).kind !== 'enabled') return errorResponse('Email sending is not configured', 503);
+  if (readMailConfig(c.env).kind !== 'enabled') return errorResponse(c, 'Email sending is not configured', 503);
   const outcome = await issueEmailOtp(
     c.env,
     { purpose: 'two-factor-setup', subject: user.id, binding: `${user.securityStamp}:${email}` },
     (code) => sendMail(c.env, email, 'verificationCode', { code, reason: 'two-factor-setup' }),
   );
   const check = mailStatusCheck(outcome);
-  if (!check.ok) return errorResponse(check.message, check.status, check.headers);
+  if (!check.ok) return errorResponse(c, check.message, check.status, check.headers);
   return new Response(null, { status: 200 });
 }
 
 export async function handlePutTwoFactorEmail(c: BodyContext<typeof EmailTwoFactorBody>): Promise<Response> {
   const { userId } = c.var;
   const user = await userRepo(c.env.DB).getUserById(userId);
-  if (!user) return errorResponse('User not found', 404);
+  if (!user) return errorResponse(c, 'User not found', 404);
   const body = c.req.valid('json');
-  if (!(await verifyEmailTwoFactorUser(c.env, user, body))) return errorResponse('User verification failed.', 400);
+  if (!(await verifyEmailTwoFactorUser(c.env, user, body))) return errorResponse(c, 'User verification failed.', 400);
   const { email } = body;
   if (
     !(await redeemEmailOtp(
@@ -1251,14 +1250,14 @@ export async function handlePutTwoFactorEmail(c: BodyContext<typeof EmailTwoFact
       body.token,
     ))
   ) {
-    return errorResponse('Invalid token.', 400, {}, { Token: ['Invalid token.'] });
+    return errorResponse(c, 'Invalid token.', 400, {}, { Token: ['Invalid token.'] });
   }
   const [changed] = await getOrm(c.env.DB)
     .update(users)
     .set({ twoFactorEmail: email, totpRecoveryCode: existingOrNewRecoveryCode(), updatedAt: new Date().toISOString() })
     .where(and(eq(users.id, user.id), eq(users.securityStamp, user.securityStamp)))
     .returning({ id: users.id });
-  if (!changed) return errorResponse('User verification failed.', 400);
+  if (!changed) return errorResponse(c, 'User verification failed.', 400);
   await revisionRepo(c.env.DB).updateRevisionDate(user.id);
   AuthService.invalidateUserCache(user.id);
   if (user.twoFactorEmail !== email) await recordUserEvent(c.env, c.req.raw, user.id, EventType.UserUpdated2fa);
@@ -1271,7 +1270,7 @@ export async function handlePutTwoFactorEmail(c: BodyContext<typeof EmailTwoFact
     targetId: user.id,
     metadata: auditRequestMetadata(c.req.raw),
   });
-  return jsonResponse(twoFactorEmailResponse(email));
+  return c.json(twoFactorEmailResponse(email));
 }
 
 // POST /api/two-factor/get-device-verification-settings
@@ -1279,9 +1278,9 @@ export async function handleGetDeviceVerificationSettings(c: AppContext): Promis
   const { userId } = c.var;
   void c.req.raw;
   const user = await userRepo(c.env.DB).getUserById(userId);
-  if (!user) return errorResponse('User not found', 404);
+  if (!user) return errorResponse(c, 'User not found', 404);
   // This obsolete two-factor surface stays disabled; /accounts/verify-devices owns the preference.
-  return jsonResponse({
+  return c.json({
     isDeviceVerificationSectionEnabled: false,
     unknownDeviceVerificationEnabled: false,
     object: 'deviceVerificationSettings',
@@ -1323,14 +1322,14 @@ export async function handlePutTwoFactorAuthenticator(
 ): Promise<Response> {
   const { userId } = c.var;
   const user = await userRepo(c.env.DB).getUserById(userId);
-  if (!user) return errorResponse('User not found', 404);
+  if (!user) return errorResponse(c, 'User not found', 404);
 
   const body = c.req.valid('json');
 
   const key = normalizeTotpSecret(body.key);
   const { token, userVerificationToken } = body;
   if (!key || !token || !userVerificationToken) {
-    return errorResponse('Key, token and userVerificationToken are required', 400);
+    return errorResponse(c, 'Key, token and userVerificationToken are required', 400);
   }
   if (
     !(await verifyTwoFactorUserVerificationToken(
@@ -1341,21 +1340,21 @@ export async function handlePutTwoFactorAuthenticator(
       key,
     ))
   ) {
-    return errorResponse('User verification failed.', 400);
+    return errorResponse(c, 'User verification failed.', 400);
   }
-  if (!isTotpEnabled(key)) return errorResponse('Invalid TOTP secret', 400);
+  if (!isTotpEnabled(key)) return errorResponse(c, 'Invalid TOTP secret', 400);
   const matchedCounter = await findMatchingTotpCounter(key, token);
   if (matchedCounter == null || !(await totpReplayRepo(c.env.DB).consumeTotpLoginCounter(user.id, matchedCounter))) {
-    return errorResponse('Invalid token.', 400);
+    return errorResponse(c, 'Invalid token.', 400);
   }
 
   const factorChanged = user.totpSecret !== key;
   user.totpSecret = key;
   user.totpRecoveryCode = await ensureTwoFactorRecoveryCode(c.env.DB, user.id, user.securityStamp);
-  if (!user.totpRecoveryCode) return errorResponse('User verification failed.', 400);
+  if (!user.totpRecoveryCode) return errorResponse(c, 'User verification failed.', 400);
   user.updatedAt = new Date().toISOString();
   if (!(await userRepo(c.env.DB).saveUser(user, ['totpSecret'])))
-    return errorResponse('User verification failed.', 400);
+    return errorResponse(c, 'User verification failed.', 400);
   await finalizeTwoFactorChange(
     c.req.raw,
     c.env,
@@ -1364,7 +1363,7 @@ export async function handlePutTwoFactorAuthenticator(
     factorChanged ? EventType.UserUpdated2fa : null,
   );
 
-  return jsonResponse(twoFactorAuthenticatorResponse(true, key));
+  return c.json(twoFactorAuthenticatorResponse(true, key));
 }
 
 export const PutTwoFactorYubiKeyBody = VerifiedBody.extend({
@@ -1382,7 +1381,7 @@ export async function handlePutTwoFactorYubiKey(c: BodyContext<typeof PutTwoFact
   const { userId } = c.var;
   const auth = new AuthService(c.env);
   const user = await userRepo(c.env.DB).getUserById(userId);
-  if (!user) return errorResponse('User not found', 404);
+  if (!user) return errorResponse(c, 'User not found', 404);
 
   const body = c.req.valid('json');
 
@@ -1393,7 +1392,7 @@ export async function handlePutTwoFactorYubiKey(c: BodyContext<typeof PutTwoFact
       TWO_FACTOR_PROVIDER_YUBIKEY,
       body.userVerificationToken,
     )) || (await verifyUserSecret(auth, user, verificationSecret(body)));
-  if (!verified) return errorResponse('User verification failed.', 400);
+  if (!verified) return errorResponse(c, 'User verification failed.', 400);
 
   const keys = [body.key1, body.key2, body.key3, body.key4, body.key5];
   const publicIds: Array<string | null> = [];
@@ -1406,23 +1405,23 @@ export async function handlePutTwoFactorYubiKey(c: BodyContext<typeof PutTwoFact
       continue;
     }
     const publicId = yubiKeyPublicIdFromOtp(trimmed);
-    if (!publicId) return errorResponse('Invalid YubiKey OTP.', 400);
+    if (!publicId) return errorResponse(c, 'Invalid YubiKey OTP.', 400);
     if (isYubiKeyPublicId(trimmed)) {
       publicIds.push(publicId);
       continue;
     }
     if (!credentials) {
       const initialized = await initializeYubicoCredentialsOnce(c.env.DB, user.email, trimmed);
-      if (!initialized) return errorResponse('Unable to initialize Yubico validation credentials.', 400);
+      if (!initialized) return errorResponse(c, 'Unable to initialize Yubico validation credentials.', 400);
       credentials = initialized.credentials;
       if (initialized.created) apiKeyBootstrapOtpIndex = publicIds.length;
     }
     if (apiKeyBootstrapOtpIndex !== publicIds.length && !(await verifyYubicoOtp(c.env, trimmed, credentials))) {
-      return errorResponse('Invalid YubiKey OTP.', 400);
+      return errorResponse(c, 'Invalid YubiKey OTP.', 400);
     }
     publicIds.push(publicId);
   }
-  if (!publicIds.some(Boolean)) return errorResponse('At least one YubiKey OTP is required.', 400);
+  if (!publicIds.some(Boolean)) return errorResponse(c, 'At least one YubiKey OTP is required.', 400);
 
   const factorChanged =
     [user.yubikeyKey1, user.yubikeyKey2, user.yubikeyKey3, user.yubikeyKey4, user.yubikeyKey5].some(
@@ -1435,7 +1434,7 @@ export async function handlePutTwoFactorYubiKey(c: BodyContext<typeof PutTwoFact
   user.yubikeyKey5 = publicIds[4] ?? null;
   user.yubikeyNfc = !!body.nfc;
   user.totpRecoveryCode = await ensureTwoFactorRecoveryCode(c.env.DB, user.id, user.securityStamp);
-  if (!user.totpRecoveryCode) return errorResponse('User verification failed.', 400);
+  if (!user.totpRecoveryCode) return errorResponse(c, 'User verification failed.', 400);
   user.updatedAt = new Date().toISOString();
   if (
     !(await userRepo(c.env.DB).saveUser(user, [
@@ -1447,7 +1446,7 @@ export async function handlePutTwoFactorYubiKey(c: BodyContext<typeof PutTwoFact
       'yubikeyNfc',
     ]))
   )
-    return errorResponse('User verification failed.', 400);
+    return errorResponse(c, 'User verification failed.', 400);
   await finalizeTwoFactorChange(
     c.req.raw,
     c.env,
@@ -1456,7 +1455,7 @@ export async function handlePutTwoFactorYubiKey(c: BodyContext<typeof PutTwoFact
     factorChanged ? EventType.UserUpdated2fa : null,
   );
 
-  return jsonResponse({ ...(await yubiKeySettingsResponse(c.env.DB, user)), Object: 'twoFactorYubiKeyUpdate' });
+  return c.json({ ...(await yubiKeySettingsResponse(c.env.DB, user)), Object: 'twoFactorYubiKeyUpdate' });
 }
 
 export const PutTwoFactorYubiKeyConfigBody = VerifiedBody.extend({
@@ -1473,17 +1472,17 @@ export async function handlePutTwoFactorYubiKeyConfig(
   const { userId } = c.var;
   const auth = new AuthService(c.env);
   const user = await userRepo(c.env.DB).getUserById(userId);
-  if (!user) return errorResponse('User not found', 404);
-  if (user.role !== 'admin' || user.status !== 'active') return errorResponse('Forbidden', 403);
+  if (!user) return errorResponse(c, 'User not found', 404);
+  if (user.role !== 'admin' || user.status !== 'active') return errorResponse(c, 'Forbidden', 403);
 
   const body = c.req.valid('json');
 
   const verified = await verifyUserSecret(auth, user, verificationSecret(body));
-  if (!verified) return errorResponse('User verification failed.', 400);
+  if (!verified) return errorResponse(c, 'User verification failed.', 400);
 
   const clientId = body.yubicoClientId || body.clientId;
   const secretKey = body.yubicoSecretKey || body.secretKey;
-  if (!clientId || !secretKey) return errorResponse('Yubico Client ID and Secret Key are required.', 400);
+  if (!clientId || !secretKey) return errorResponse(c, 'Yubico Client ID and Secret Key are required.', 400);
 
   await replaceYubicoCredentials(c.env.DB, { clientId, secretKey });
   await writeAuditEvent(c.env.DB, {
@@ -1496,7 +1495,7 @@ export async function handlePutTwoFactorYubiKeyConfig(
     metadata: auditRequestMetadata(c.req.raw),
   });
 
-  return jsonResponse(await yubiKeySettingsResponse(c.env.DB, user));
+  return c.json(await yubiKeySettingsResponse(c.env.DB, user));
 }
 
 export const BootstrapTwoFactorYubiKeyConfigBody = VerifiedBody.extend({ token: text });
@@ -1508,31 +1507,32 @@ export async function handleBootstrapTwoFactorYubiKeyConfig(
   const { userId } = c.var;
   const auth = new AuthService(c.env);
   const user = await userRepo(c.env.DB).getUserById(userId);
-  if (!user) return errorResponse('User not found', 404);
+  if (!user) return errorResponse(c, 'User not found', 404);
 
   const body = c.req.valid('json');
 
   const verified = await verifyUserSecret(auth, user, body.masterPasswordHash || body.secret);
-  if (!verified) return errorResponse('User verification failed.', 400);
+  if (!verified) return errorResponse(c, 'User verification failed.', 400);
 
   const otp = (body.otp || body.OTP || body.token).trim();
-  if (!yubiKeyPublicIdFromOtp(otp)) return errorResponse('Invalid YubiKey OTP.', 400);
+  if (!yubiKeyPublicIdFromOtp(otp)) return errorResponse(c, 'Invalid YubiKey OTP.', 400);
   const existing = await getYubicoCredentials(c.env.DB);
   if (user.role !== 'admin' && existing) {
-    return errorResponse('Yubico validation credentials are already configured.', 403);
+    return errorResponse(c, 'Yubico validation credentials are already configured.', 403);
   }
 
   let credentials;
   if (user.role === 'admin') {
     credentials = await requestYubicoApiCredentials(user.email, otp);
     if (!credentials?.clientId || !credentials.secretKey) {
-      return errorResponse('Unable to initialize Yubico validation credentials.', 400);
+      return errorResponse(c, 'Unable to initialize Yubico validation credentials.', 400);
     }
     await replaceYubicoCredentials(c.env.DB, credentials);
   } else {
     const initialized = await initializeYubicoCredentialsOnce(c.env.DB, user.email, otp);
     if (!initialized?.created) {
       return errorResponse(
+        c,
         initialized?.credentials
           ? 'Yubico validation credentials are already configured.'
           : 'Unable to initialize Yubico validation credentials.',
@@ -1552,7 +1552,7 @@ export async function handleBootstrapTwoFactorYubiKeyConfig(
     metadata: auditRequestMetadata(c.req.raw),
   });
 
-  return jsonResponse(await yubiKeySettingsResponse(c.env.DB, user));
+  return c.json(await yubiKeySettingsResponse(c.env.DB, user));
 }
 
 export const DisableTwoFactorProviderBody = VerifiedBody.extend({
@@ -1569,7 +1569,7 @@ export async function handleDisableTwoFactorProvider(
   const { userId } = c.var;
   const auth = new AuthService(c.env);
   const user = await userRepo(c.env.DB).getUserById(userId);
-  if (!user) return errorResponse('User not found', 404);
+  if (!user) return errorResponse(c, 'User not found', 404);
 
   const body = c.req.valid('json');
 
@@ -1583,7 +1583,7 @@ export async function handleDisableTwoFactorProvider(
       TWO_FACTOR_PROVIDER_WEBAUTHN,
     ].includes(type)
   ) {
-    return errorResponse('Two-factor provider is not supported by this server.', 400);
+    return errorResponse(c, 'Two-factor provider is not supported by this server.', 400);
   }
 
   const verified =
@@ -1596,7 +1596,7 @@ export async function handleDisableTwoFactorProvider(
         normalizeTotpSecret(body.key),
       ))) ||
     (await verifyUserSecret(auth, user, verificationSecret(body)));
-  if (!verified) return errorResponse('User verification failed.', 400);
+  if (!verified) return errorResponse(c, 'User verification failed.', 400);
 
   const wasEnabled = twoFactorProviders(
     user,
@@ -1624,14 +1624,14 @@ export async function handleDisableTwoFactorProvider(
           : [],
     ))
   )
-    return errorResponse('User verification failed.', 400);
+    return errorResponse(c, 'User verification failed.', 400);
   if (type === TWO_FACTOR_PROVIDER_EMAIL) {
     const [updated] = await getOrm(c.env.DB)
       .update(users)
       .set({ twoFactorEmail: null })
       .where(and(eq(users.id, user.id), eq(users.securityStamp, user.securityStamp)))
       .returning({ id: users.id });
-    if (!updated) return errorResponse('User verification failed.', 400);
+    if (!updated) return errorResponse(c, 'User verification failed.', 400);
   }
   if (type === TWO_FACTOR_PROVIDER_WEBAUTHN) {
     const orm = getOrm(c.env.DB);
@@ -1651,7 +1651,7 @@ export async function handleDisableTwoFactorProvider(
       !deleted.length &&
       (await passkeyRepo(c.env.DB).countAccountPasskeyCredentialsByUserId(user.id, 'twoFactor')) > 0
     )
-      return errorResponse('User verification failed.', 400);
+      return errorResponse(c, 'User verification failed.', 400);
   }
   await finalizeTwoFactorChange(
     c.req.raw,
@@ -1668,9 +1668,7 @@ export async function handleDisableTwoFactorProvider(
   );
 
   await revisionRepo(c.env.DB).updateRevisionDate(user.id);
-  return routeType === undefined
-    ? jsonResponse(twoFactorProviderResponse(type, false))
-    : new Response(null, { status: 204 });
+  return routeType === undefined ? c.json(twoFactorProviderResponse(type, false)) : new Response(null, { status: 204 });
 }
 
 // POST /api/two-factor/get-recover
@@ -1678,16 +1676,16 @@ export async function handleGetTotpRecoveryCode(c: BodyContext<typeof CurrentPas
   const { userId } = c.var;
   const auth = new AuthService(c.env);
   const user = await userRepo(c.env.DB).getUserById(userId);
-  if (!user) return errorResponse('User not found', 404);
+  if (!user) return errorResponse(c, 'User not found', 404);
 
   const currentHash = c.req.valid('json');
   const valid = await auth.verifyPassword(currentHash, user.masterPasswordHash, user.email);
-  if (!valid) return errorResponse('Invalid password', 400);
+  if (!valid) return errorResponse(c, 'Invalid password', 400);
 
   user.totpRecoveryCode = await ensureTwoFactorRecoveryCode(c.env.DB, user.id, user.securityStamp);
-  if (!user.totpRecoveryCode) return errorResponse('User verification failed.', 400);
+  if (!user.totpRecoveryCode) return errorResponse(c, 'User verification failed.', 400);
 
-  return jsonResponse({
+  return c.json({
     Code: user.totpRecoveryCode,
     code: user.totpRecoveryCode,
     Object: 'twoFactorRecover',
@@ -1724,38 +1722,39 @@ export async function handleRecoverTwoFactor(c: BodyContext<typeof RecoverTwoFac
   const { email, masterPasswordHash, recoveryCode } = body;
   const clientIdentifier = getClientIdentifier(c.req.raw);
   if (!clientIdentifier) {
-    return errorResponse('Client IP is required', 403);
+    return errorResponse(c, 'Client IP is required', 403);
   }
   const recoverLimitKey = `${clientIdentifier}:recover-2fa`;
 
   const recoverAttemptCheck = await rateLimit.checkLoginAttempt(recoverLimitKey);
   if (!recoverAttemptCheck.allowed) {
     return errorResponse(
+      c,
       `Too many failed recovery attempts. Try again in ${Math.ceil((recoverAttemptCheck.retryAfterSeconds || 60) / 60)} minutes.`,
       429,
     );
   }
 
   if (!email || !masterPasswordHash || !recoveryCode) {
-    return errorResponse('Email, masterPasswordHash and recoveryCode are required', 400);
+    return errorResponse(c, 'Email, masterPasswordHash and recoveryCode are required', 400);
   }
 
   const user = await userRepo(c.env.DB).getUser(email);
   if (!user || user.status !== 'active') {
     await rateLimit.recordFailedLogin(recoverLimitKey);
-    return errorResponse('Invalid credentials or recovery code', 400);
+    return errorResponse(c, 'Invalid credentials or recovery code', 400);
   }
 
   const validPassword = await auth.verifyPassword(masterPasswordHash, user.masterPasswordHash, user.email);
   if (!validPassword) {
     await rateLimit.recordFailedLogin(recoverLimitKey);
-    return errorResponse('Invalid credentials or recovery code', 400);
+    return errorResponse(c, 'Invalid credentials or recovery code', 400);
   }
 
   if (!recoveryCodeEquals(recoveryCode, user.totpRecoveryCode)) {
     notifyFailedTwoFactor(c.env, c.req.raw, user, 8);
     await rateLimit.recordFailedLogin(recoverLimitKey);
-    return errorResponse('Invalid credentials or recovery code', 400);
+    return errorResponse(c, 'Invalid credentials or recovery code', 400);
   }
 
   const nextRecoveryCode = createRecoveryCode();
@@ -1773,7 +1772,7 @@ export async function handleRecoverTwoFactor(c: BodyContext<typeof RecoverTwoFac
   if (!cleared.meta.changes) {
     notifyFailedTwoFactor(c.env, c.req.raw, user, 8);
     await rateLimit.recordFailedLogin(recoverLimitKey);
-    return errorResponse('Invalid credentials or recovery code', 400);
+    return errorResponse(c, 'Invalid credentials or recovery code', 400);
   }
   AuthService.invalidateUserCache(user.id);
   await recordUserEvent(c.env, c.req.raw, user.id, EventType.UserRecovered2fa);
@@ -1792,7 +1791,7 @@ export async function handleRecoverTwoFactor(c: BodyContext<typeof RecoverTwoFac
     metadata: auditRequestMetadata(c.req.raw),
   });
 
-  return jsonResponse({
+  return c.json({
     success: true,
     twoFactorEnabled: false,
     newRecoveryCode: nextRecoveryCode,
@@ -1808,7 +1807,7 @@ export async function handleGetRevisionDate(c: AppContext): Promise<Response> {
 
   // Return as milliseconds timestamp (Bitwarden format)
   const timestamp = new Date(revisionDate).getTime();
-  return jsonResponse(timestamp);
+  return c.json(timestamp);
 }
 
 // Upstream KeyId: exactly 16 bytes as lowercase hex. The SDK rejects a whole sync whose
@@ -1831,7 +1830,7 @@ export async function handleSetUserKeyId(c: BodyContext<typeof UserKeyIdBody>): 
   const body = c.req.valid('json');
 
   if (!(await userRepo(c.env.DB).setUserKeyIdIfUnset(userId, body.userKeyId))) {
-    return errorResponse('User key id is already set.', 400);
+    return errorResponse(c, 'User key id is already set.', 400);
   }
   await revisionRepo(c.env.DB).updateRevisionDate(userId);
   return new Response(null, { status: 200 });
@@ -1848,22 +1847,22 @@ export async function handleVerifyPassword(c: BodyContext<typeof VerifyPasswordB
   const user = await userRepo(c.env.DB).getUserById(userId);
 
   if (!user) {
-    return errorResponse('User not found', 404);
+    return errorResponse(c, 'User not found', 404);
   }
 
   const body = c.req.valid('json');
 
   const masterPasswordHash = body.masterPasswordHash || body.authenticationData?.masterPasswordAuthenticationHash;
   if (!masterPasswordHash) {
-    return errorResponse('masterPasswordHash is required', 400);
+    return errorResponse(c, 'masterPasswordHash is required', 400);
   }
 
   const valid = await auth.verifyPassword(masterPasswordHash, user.masterPasswordHash, user.email);
   if (!valid) {
-    return errorResponse('Invalid password', 400);
+    return errorResponse(c, 'Invalid password', 400);
   }
 
-  return jsonResponse({
+  return c.json({
     minComplexity: 0,
     minLength: 0,
     requireUpper: false,
@@ -1878,31 +1877,26 @@ export async function handleVerifyPassword(c: BodyContext<typeof VerifyPasswordB
 // POST /api/accounts/api-key
 export async function handleGetApiKey(c: BodyContext<typeof CurrentPasswordHash>): Promise<Response> {
   const { userId } = c.var;
-  return apiKey(c.req.raw, c.env, userId, c.req.valid('json'), false);
+  return apiKey(c, userId, c.req.valid('json'), false);
 }
 
 // POST /api/accounts/rotate-api-key
 export async function handleRotateApiKey(c: BodyContext<typeof CurrentPasswordHash>): Promise<Response> {
   const { userId } = c.var;
-  return apiKey(c.req.raw, c.env, userId, c.req.valid('json'), true);
+  return apiKey(c, userId, c.req.valid('json'), true);
 }
 
-async function apiKey(
-  request: Request,
-  env: Env,
-  userId: string,
-  currentHash: string,
-  rotate: boolean,
-): Promise<Response> {
-  const auth = new AuthService(env);
-  const user = await userRepo(env.DB).getUserById(userId);
-  if (!user) return errorResponse('User not found', 404);
+async function apiKey(c: AppContext, userId: string, currentHash: string, rotate: boolean): Promise<Response> {
+  const auth = new AuthService(c.env);
+  const user = await userRepo(c.env.DB).getUserById(userId);
+  if (!user) return errorResponse(c, 'User not found', 404);
 
   const valid = await auth.verifyPassword(currentHash, user.masterPasswordHash, user.email);
-  if (!valid) return errorResponse('Invalid password', 400);
+  if (!valid) return errorResponse(c, 'Invalid password', 400);
 
   if (!rotate && isStoredApiKeyHash(user.apiKey)) {
     return errorResponse(
+      c,
       'This API key was created by an older NodeWarden version and cannot be displayed. Rotate it once to use the Bitwarden-compatible readable format.',
       409,
     );
@@ -1912,21 +1906,22 @@ async function apiKey(
   if (rotate || !user.apiKey) {
     user.apiKey = randomStringAlphanum(LIMITS.auth.clientSecretLength);
     user.updatedAt = new Date().toISOString();
-    if (!(await userRepo(env.DB).saveUser(user, ['apiKey']))) return errorResponse('User verification failed.', 400);
+    if (!(await userRepo(c.env.DB).saveUser(user, ['apiKey'])))
+      return errorResponse(c, 'User verification failed.', 400);
     AuthService.invalidateUserCache(user.id);
     auditAction = rotate ? 'account.api_key.rotate' : 'account.api_key.create';
   }
-  await writeAuditEvent(env.DB, {
+  await writeAuditEvent(c.env.DB, {
     actorUserId: user.id,
     action: auditAction,
     category: 'security',
     level: rotate ? 'security' : 'info',
     targetType: 'user',
     targetId: user.id,
-    metadata: auditRequestMetadata(request),
+    metadata: auditRequestMetadata(c.req.raw),
   });
 
-  return jsonResponse({
+  return c.json({
     apiKey: user.apiKey,
     revisionDate: user.updatedAt,
     object: 'apiKey',

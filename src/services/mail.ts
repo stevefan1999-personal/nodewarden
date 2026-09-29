@@ -1,3 +1,4 @@
+import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { LIMITS } from '../config/limits';
 import { EMAIL_PATTERN, MailSettings } from '../config/env';
 import { RateLimitService } from './ratelimit';
@@ -40,7 +41,7 @@ export type MailOutcome =
   | { kind: 'failed'; code: string };
 // Failures carry the status and headers every caller answers with, such as Retry-After on a 429.
 export type StatusCheck =
-  { ok: true } | { ok: false; status: number; message: string; headers: Record<string, string> };
+  { ok: true } | { ok: false; status: ContentfulStatusCode; message: string; headers: Record<string, string> };
 
 export function readMailConfig(
   env: Pick<

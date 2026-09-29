@@ -12,7 +12,7 @@ import type {
   PasswordHistory,
 } from '../types';
 import { readActingDeviceIdentifier } from '../utils/device';
-import { errorResponse, jsonResponse, type BodyContext } from '../utils/response';
+import { errorResponse, type BodyContext } from '../utils/response';
 import { generateUUID } from '../utils/uuid';
 import {
   normalizeCipherLoginForStorage,
@@ -139,7 +139,7 @@ export async function handleCiphersImport(c: BodyContext<typeof CiphersImportBod
   const { folders, ciphers, folderRelationships } = body;
 
   if (folders.length + ciphers.length > LIMITS.performance.importItemLimit) {
-    return errorResponse(`Import exceeds maximum of ${LIMITS.performance.importItemLimit} items`, 400);
+    return errorResponse(c, `Import exceeds maximum of ${LIMITS.performance.importItemLimit} items`, 400);
   }
 
   const now = new Date().toISOString();
@@ -194,15 +194,17 @@ export async function handleCiphersImport(c: BodyContext<typeof CiphersImportBod
   const cipherRows: Cipher[] = [];
   const cipherMapRows: Array<{ index: number; sourceId: string | null; id: string }> = [];
   for (let i = 0; i < ciphers.length; i++) {
-    const c = ciphers[i];
-    const folderId = cipherFolderMap.get(i) || (c.folderId && existingFolderIds.has(c.folderId) ? c.folderId : null);
+    const imported = ciphers[i];
+    const folderId =
+      cipherFolderMap.get(i) ||
+      (imported.folderId && existingFolderIds.has(imported.folderId) ? imported.folderId : null);
     const cipher: Cipher = {
-      ...c,
+      ...imported,
       id: generateUUID(),
       userId: userId,
       folderId: folderId,
-      login: normalizeCipherLoginForStorage(c.login),
-      sshKey: normalizeCipherSshKeyForCompatibility(c.sshKey ?? null),
+      login: normalizeCipherLoginForStorage(imported.login),
+      sshKey: normalizeCipherSshKeyForCompatibility(imported.sshKey ?? null),
       createdAt: now,
       updatedAt: now,
       archivedAt: null,
@@ -210,11 +212,11 @@ export async function handleCiphersImport(c: BodyContext<typeof CiphersImportBod
     };
     const compatibilityError = validateCipherEncryptedFieldsForCompatibility(cipher);
     if (compatibilityError) {
-      return errorResponse(`Cipher ${i + 1}: ${compatibilityError}`, 400);
+      return errorResponse(c, `Cipher ${i + 1}: ${compatibilityError}`, 400);
     }
 
     cipherRows.push(cipher);
-    cipherMapRows.push({ index: i, sourceId: c.id, id: cipher.id });
+    cipherMapRows.push({ index: i, sourceId: imported.id, id: cipher.id });
   }
 
   if (cipherRows.length > 0) {
@@ -265,7 +267,7 @@ export async function handleCiphersImport(c: BodyContext<typeof CiphersImportBod
   notifyUserVaultSync(c.env, userId, revisionDate, readActingDeviceIdentifier(c.req.raw));
 
   if (returnCipherMap) {
-    return jsonResponse({
+    return c.json({
       object: 'import-result',
       cipherMap: cipherMapRows,
     });

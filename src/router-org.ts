@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { errorResponse, jsonResponse, jsonBody } from './utils/response';
+import { errorResponse, jsonBody } from './utils/response';
 import {
   handleAcceptInvite,
   handleBulkConfirmMembers,
@@ -73,7 +73,7 @@ organizationRoutes.on(
   jsonBody(CreateOrganizationRequest),
   handleCreateOrganization,
 );
-organizationRoutes.on('GET', ['/api/plans', '/plans'], () => handleGetPlans());
+organizationRoutes.on('GET', ['/api/plans', '/plans'], handleGetPlans);
 organizationRoutes.on(
   'GET',
   ['/api/licenses/nodewarden-enterprise.json', '/licenses/nodewarden-enterprise.json'],
@@ -108,14 +108,12 @@ organizationRoutes.on('GET', [`${org}/keys`, `${org}/public-key`], (c) =>
   handleGetOrganizationKeys(c, c.req.param('orgId')),
 );
 organizationRoutes.get(`${org}/auto-enroll-status`, (c) => handleGetAutoEnrollStatus(c, c.req.param('orgId')));
-organizationRoutes.get(`${org}/billing/metadata`, () =>
-  jsonResponse({ object: 'list', data: [], continuationToken: null }),
+organizationRoutes.get(`${org}/billing/metadata`, (c) => c.json({ object: 'list', data: [], continuationToken: null }));
+organizationRoutes.get(`${org}/billing/vnext/warnings`, (c) =>
+  c.json({ freeTrial: null, inactiveSubscription: null, resellerRenewal: null, taxId: null }),
 );
-organizationRoutes.get(`${org}/billing/vnext/warnings`, () =>
-  jsonResponse({ freeTrial: null, inactiveSubscription: null, resellerRenewal: null, taxId: null }),
-);
-organizationRoutes.get(`${org}/billing/vnext/self-host/metadata`, () =>
-  jsonResponse({ isOnSecretsManagerStandalone: true, organizationOccupiedSeats: 0 }),
+organizationRoutes.get(`${org}/billing/vnext/self-host/metadata`, (c) =>
+  c.json({ isOnSecretsManagerStandalone: true, organizationOccupiedSeats: 0 }),
 );
 
 organizationRoutes.get(`${org}/collections/details`, (c) => handleListOrgCollectionDetails(c, c.req.param('orgId')));
@@ -187,10 +185,10 @@ organizationRoutes.post(`${member}/reinvite`, (c) =>
   handleReinviteMember(c, c.req.param('orgId'), c.req.param('memberId')),
 );
 organizationRoutes.on(['PUT', 'PATCH'], `${member}/revoke`, (c) =>
-  handleRevokeMember(c.req.raw, c.env, c.get('userId'), c.req.param('orgId'), c.req.param('memberId')),
+  handleRevokeMember(c, c.get('userId'), c.req.param('orgId'), c.req.param('memberId')),
 );
 organizationRoutes.on(['PUT', 'PATCH'], [`${member}/restore`, `${member}/restore/vnext`], (c) =>
-  handleRestoreMember(c.req.raw, c.env, c.get('userId'), c.req.param('orgId'), c.req.param('memberId')),
+  handleRestoreMember(c, c.get('userId'), c.req.param('orgId'), c.req.param('memberId')),
 );
 organizationRoutes.get(member, (c) => handleGetMember(c, c.req.param('orgId'), c.req.param('memberId')));
 organizationRoutes.on(['PUT', 'POST'], member, jsonBody(MemberUpdateRequest), (c) =>
@@ -207,7 +205,7 @@ organizationRoutes.on(
     `${member}/restore`,
     `${member}/restore/vnext`,
   ],
-  (c) => handleDeleteMember(c.req.raw, c.env, c.get('userId'), c.req.param('orgId'), c.req.param('memberId')),
+  (c) => handleDeleteMember(c, c.get('userId'), c.req.param('orgId'), c.req.param('memberId')),
 );
 
 organizationRoutes.on('GET', [`${org}/groups`, `${org}/groups/details`], (c) =>
@@ -238,4 +236,4 @@ organizationRoutes.on('POST', [`${org}/scim-key`, `${org}/rotate-scim-key`], (c)
 );
 
 // Anything else under a well-formed organization id is unknown rather than an empty list.
-organizationRoutes.on('ALL', [org, `${org}/*`], () => errorResponse('Not found', 404));
+organizationRoutes.on('ALL', [org, `${org}/*`], (c) => errorResponse(c, 'Not found', 404));

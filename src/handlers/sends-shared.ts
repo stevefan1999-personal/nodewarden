@@ -1,7 +1,8 @@
+import type { AppContext } from '../router';
 import { decodeBase64Url } from 'hono/utils/encode';
 import { z } from 'zod';
 import { Send, SendAuthType, SendResponse, SendType } from '../types';
-import { errorResponse, jsonResponse } from '../utils/response';
+import { errorResponse } from '../utils/response';
 import { bytesToBase64Url } from '../utils/passkey';
 import { sendRepo } from '../services/storage-send-repo';
 import { userRepo } from '../services/storage-user-repo';
@@ -254,13 +255,13 @@ function sendPasswordLockMessage(retryAfterSeconds: number): string {
   return `Too many failed send password attempts. Try again in ${Math.ceil(retryAfterSeconds / 60)} minutes.`;
 }
 
-export function sendPasswordLockedErrorResponse(retryAfterSeconds: number): Response {
-  return errorResponse(sendPasswordLockMessage(retryAfterSeconds), 429);
+export function sendPasswordLockedErrorResponse(c: AppContext, retryAfterSeconds: number): Response {
+  return errorResponse(c, sendPasswordLockMessage(retryAfterSeconds), 429);
 }
 
-export function sendPasswordLockedOAuthResponse(retryAfterSeconds: number): Response {
+export function sendPasswordLockedOAuthResponse(c: AppContext, retryAfterSeconds: number): Response {
   const message = sendPasswordLockMessage(retryAfterSeconds);
-  return jsonResponse(
+  return c.json(
     {
       error: 'invalid_grant',
       error_description: message,
@@ -292,11 +293,15 @@ const SendAccessBody = z
     passwordHashB64: hash.password_hash_b64 ?? hash.passwordHashB64 ?? hash.passwordHash ?? hash.password_hash,
   }));
 
-export async function validatePublicSendAccess(send: Send, body: unknown): Promise<PublicSendAccessValidationResult> {
+export async function validatePublicSendAccess(
+  c: AppContext,
+  send: Send,
+  body: unknown,
+): Promise<PublicSendAccessValidationResult> {
   if (hasEmailAuth(send)) {
     return {
       ok: false,
-      response: errorResponse('Send email verification is not supported by this server.', 501),
+      response: errorResponse(c, 'Send email verification is not supported by this server.', 501),
       reason: 'email_auth_unsupported',
     };
   }
@@ -308,17 +313,17 @@ export async function validatePublicSendAccess(send: Send, body: unknown): Promi
   let validPassword = false;
   if (send.passwordSalt && send.passwordIterations) {
     if (password === undefined) {
-      return { ok: false, response: errorResponse('Password not provided', 401), reason: 'password_missing' };
+      return { ok: false, response: errorResponse(c, 'Password not provided', 401), reason: 'password_missing' };
     }
     validPassword = await verifySendPassword(send, password);
   } else {
     const candidate = passwordHashB64 ?? password;
     if (!candidate)
-      return { ok: false, response: errorResponse('Password not provided', 401), reason: 'password_missing' };
+      return { ok: false, response: errorResponse(c, 'Password not provided', 401), reason: 'password_missing' };
     validPassword = verifySendPasswordHashB64(send, candidate);
   }
   if (!validPassword) {
-    return { ok: false, response: errorResponse('Invalid password', 400), reason: 'invalid_password' };
+    return { ok: false, response: errorResponse(c, 'Invalid password', 400), reason: 'invalid_password' };
   }
 
   return { ok: true };

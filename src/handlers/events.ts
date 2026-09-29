@@ -57,14 +57,14 @@ export async function handleCollectEvents(c: BodyContext<typeof ClientEvents>): 
   const exportCopies =
     input.filter((event) => event.type === EventType.UserClientExportedVault).length * memberships.length;
   const batches = Math.ceil((input.length + exportCopies) / CLIENT_EVENT_UPLOAD_BATCH);
-  if (batches > EVENT_BATCHES_PER_MINUTE) return errorResponse('Invalid events.', 400);
+  if (batches > EVENT_BATCHES_PER_MINUTE) return errorResponse(c, 'Invalid events.', 400);
   const budget = await new RateLimitService(c.env).consumeBudget(
     `${user.id}:events`,
     EVENT_BATCHES_PER_MINUTE,
     batches,
   );
   if (!budget.allowed)
-    return errorResponse('Too many requests', 429, { 'Retry-After': String(budget.retryAfterSeconds || 60) });
+    return errorResponse(c, 'Too many requests', 429, { 'Retry-After': String(budget.retryAfterSeconds || 60) });
   const memberByOrg = new Map(memberships.map((member) => [member.orgId, member]));
   const ids = [
     ...new Set(
@@ -151,47 +151,47 @@ export async function handleEventRoute(c: AppContext, path: string, method: stri
   const { currentUser: user } = c.var;
   if (path === '/api/events')
     return method === 'GET'
-      ? listEventsResponse(c.req.raw, c.env.DB, { personalUserId: user.id })
-      : errorResponse('Method not allowed', 405);
+      ? listEventsResponse(c, { personalUserId: user.id })
+      : errorResponse(c, 'Method not allowed', 405);
   const cipherPath = path.match(/^\/api\/ciphers\/([a-f0-9-]+)\/events$/i);
   if (cipherPath) {
-    if (method !== 'GET') return errorResponse('Method not allowed', 405);
+    if (method !== 'GET') return errorResponse(c, 'Method not allowed', 405);
     const cipher = await cipherRepo(c.env.DB).getCipher(cipherPath[1]);
-    if (!cipher) return errorResponse('Not found', 404);
+    if (!cipher) return errorResponse(c, 'Not found', 404);
     if (cipher.organizationId) {
       if (!canAccessEventLogs(await orgRepo(c.env.DB).getMembershipByUserAndOrg(user.id, cipher.organizationId)))
-        return errorResponse('Not found', 404);
-      return listEventsResponse(c.req.raw, c.env.DB, {
+        return errorResponse(c, 'Not found', 404);
+      return listEventsResponse(c, {
         organizationId: cipher.organizationId,
         resourceType: 'cipher',
         resourceId: cipher.id,
       });
     }
     return cipher.userId === user.id
-      ? listEventsResponse(c.req.raw, c.env.DB, {
+      ? listEventsResponse(c, {
           personalUserId: user.id,
           resourceType: 'cipher',
           resourceId: cipher.id,
         })
-      : errorResponse('Not found', 404);
+      : errorResponse(c, 'Not found', 404);
   }
   const orgPath = path.match(/^\/api\/organizations\/([a-f0-9-]+)(?:\/(users|sends)\/([a-f0-9-]+))?\/events$/i);
   if (!orgPath) return null;
-  if (method !== 'GET') return errorResponse('Method not allowed', 405);
+  if (method !== 'GET') return errorResponse(c, 'Method not allowed', 405);
   const orgId = orgPath[1];
   if (!canAccessEventLogs(await orgRepo(c.env.DB).getMembershipByUserAndOrg(user.id, orgId)))
-    return errorResponse('Not found', 404);
+    return errorResponse(c, 'Not found', 404);
   if (orgPath[2] === 'users') {
     const member = await orgRepo(c.env.DB).getMembership(orgPath[3]);
-    if (!member?.userId || member.orgId !== orgId) return errorResponse('Not found', 404);
-    return listEventsResponse(c.req.raw, c.env.DB, { organizationId: orgId, actingUserId: member.userId });
+    if (!member?.userId || member.orgId !== orgId) return errorResponse(c, 'Not found', 404);
+    return listEventsResponse(c, { organizationId: orgId, actingUserId: member.userId });
   }
   // As upstream GetSend: the rows are already scoped to this organization, so a deleted Send keeps its history.
   if (orgPath[2] === 'sends')
-    return listEventsResponse(c.req.raw, c.env.DB, {
+    return listEventsResponse(c, {
       organizationId: orgId,
       resourceType: 'send',
       resourceId: orgPath[3],
     });
-  return listEventsResponse(c.req.raw, c.env.DB, { organizationId: orgId });
+  return listEventsResponse(c, { organizationId: orgId });
 }

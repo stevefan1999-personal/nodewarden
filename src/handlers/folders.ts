@@ -7,7 +7,7 @@ import {
   notifyUserFolderUpdate,
   notifyUserVaultSync,
 } from '../durable/notifications-hub';
-import { errorResponse, jsonResponse, type BodyContext } from '../utils/response';
+import { errorResponse, type BodyContext } from '../utils/response';
 import { readActingDeviceIdentifier } from '../utils/device';
 import { generateUUID } from '../utils/uuid';
 import { parsePagination, encodeContinuationToken } from '../utils/pagination';
@@ -44,7 +44,7 @@ export async function handleGetFolders(c: AppContext): Promise<Response> {
     folders = await folderRepo(c.env.DB).getAllFolders(userId);
   }
 
-  return jsonResponse({
+  return c.json({
     data: folders.map(folderToResponse),
     object: 'list',
     continuationToken: continuationToken,
@@ -57,10 +57,10 @@ export async function handleGetFolder(c: AppContext, id: string): Promise<Respon
   const folder = await folderRepo(c.env.DB).getFolderForUser(id, userId);
 
   if (!folder || folder.userId !== userId) {
-    return errorResponse('Folder not found', 404);
+    return errorResponse(c, 'Folder not found', 404);
   }
 
-  return jsonResponse(folderToResponse(folder));
+  return c.json(folderToResponse(folder));
 }
 
 export const CreateFolderBody = z.object({
@@ -91,7 +91,7 @@ export async function handleCreateFolder(c: BodyContext<typeof CreateFolderBody>
     contextId: readActingDeviceIdentifier(c.req.raw),
   });
 
-  return jsonResponse(folderToResponse(folder), 200);
+  return c.json(folderToResponse(folder), 200);
 }
 
 export const UpdateFolderBody = z.object({ name: z.string().nullish() });
@@ -102,7 +102,7 @@ export async function handleUpdateFolder(c: BodyContext<typeof UpdateFolderBody>
   const folder = await folderRepo(c.env.DB).getFolderForUser(id, userId);
 
   if (!folder || folder.userId !== userId) {
-    return errorResponse('Folder not found', 404);
+    return errorResponse(c, 'Folder not found', 404);
   }
 
   const body = c.req.valid('json');
@@ -122,7 +122,7 @@ export async function handleUpdateFolder(c: BodyContext<typeof UpdateFolderBody>
     contextId: readActingDeviceIdentifier(c.req.raw),
   });
 
-  return jsonResponse(folderToResponse(folder));
+  return c.json(folderToResponse(folder));
 }
 
 // DELETE /api/folders/:id
@@ -131,7 +131,7 @@ export async function handleDeleteFolder(c: AppContext, id: string): Promise<Res
   const folder = await folderRepo(c.env.DB).getFolderForUser(id, userId);
 
   if (!folder || folder.userId !== userId) {
-    return errorResponse('Folder not found', 404);
+    return errorResponse(c, 'Folder not found', 404);
   }
 
   await folderRepo(c.env.DB).clearFolderFromCiphers(userId, id);

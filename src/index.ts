@@ -8,7 +8,7 @@ import { Env } from './types';
 import { NotificationsHub } from './durable/notifications-hub';
 import { BackupTransferRunner } from './durable/backup-transfer-runner';
 import { app } from './router';
-import { applyCors, applySecurityHeaders, jsonResponse } from './utils/response';
+import { applyCors, applySecurityHeaders } from './utils/response';
 import { runScheduledBackupIfDue } from './handlers/backup';
 import { approveExpiredEmergencyAccess, remindPendingEmergencyAccess } from './handlers/emergency-access';
 import { isBackendRequestPath } from './web-vault-visibility';
@@ -83,7 +83,8 @@ export default {
     if (dbInitError) {
       // Log full error server-side, return generic message to client.
       console.error('DB init error (not forwarded to client):', dbInitError);
-      const resp = jsonResponse(
+      // Outside the Hono app, so no context answers it.
+      const resp = Response.json(
         {
           error: 'Database not initialized',
           error_description: 'Database initialization failed. Check server logs for details.',
@@ -92,7 +93,7 @@ export default {
             Object: 'error',
           },
         },
-        500,
+        { status: 500 },
       );
       return applyCors(normalizedRequest, resp, env);
     }

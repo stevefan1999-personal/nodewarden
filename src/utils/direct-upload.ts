@@ -1,3 +1,4 @@
+import type { AppContext } from '../router';
 import { errorResponse } from './response';
 
 export interface DirectUploadPayload {
@@ -39,7 +40,7 @@ function parseContentLength(request: Request): number | null {
 }
 
 export async function parseDirectUploadPayload(
-  request: Request,
+  c: AppContext,
   options: ParseDirectUploadOptions,
 ): Promise<DirectUploadPayload | Response> {
   const {
@@ -52,26 +53,26 @@ export async function parseDirectUploadPayload(
     sizeMismatchMessage,
     fileNameMismatchMessage,
   } = options;
-  const contentType = request.headers.get('content-type') || '';
+  const contentType = c.req.raw.headers.get('content-type') || '';
 
   if (contentType.includes('multipart/form-data')) {
-    const declaredSize = parseContentLength(request);
+    const declaredSize = parseContentLength(c.req.raw);
     if (declaredSize !== null && declaredSize > getMultipartRequestMaxBytes(maxFileSize)) {
-      return errorResponse(tooLargeMessage, 413);
+      return errorResponse(c, tooLargeMessage, 413);
     }
-    const formData = await request.formData();
+    const formData = await c.req.raw.formData();
     const file = formData.get('data') as File | null;
     if (!file) {
-      return errorResponse(missingBodyMessage, 400);
+      return errorResponse(c, missingBodyMessage, 400);
     }
     if (file.size > maxFileSize) {
-      return errorResponse(tooLargeMessage, 413);
+      return errorResponse(c, tooLargeMessage, 413);
     }
     if (expectedFileName && file.name !== expectedFileName) {
-      return errorResponse(fileNameMismatchMessage || 'File name does not match.', 400);
+      return errorResponse(c, fileNameMismatchMessage || 'File name does not match.', 400);
     }
     if (expectedSize !== null && expectedSize !== undefined && file.size !== expectedSize) {
-      return errorResponse(sizeMismatchMessage || 'File size does not match.', 400);
+      return errorResponse(c, sizeMismatchMessage || 'File size does not match.', 400);
     }
     return {
       body: file.stream(),
@@ -80,24 +81,24 @@ export async function parseDirectUploadPayload(
     };
   }
 
-  if (!request.body) {
-    return errorResponse(missingBodyMessage, 400);
+  if (!c.req.raw.body) {
+    return errorResponse(c, missingBodyMessage, 400);
   }
 
-  const declaredSize = parseContentLength(request);
+  const declaredSize = parseContentLength(c.req.raw);
   const uploadSize = declaredSize ?? (expectedSize && expectedSize > 0 ? expectedSize : null);
   if (uploadSize === null) {
-    return errorResponse(contentLengthRequiredMessage, 400);
+    return errorResponse(c, contentLengthRequiredMessage, 400);
   }
   if (uploadSize > maxFileSize) {
-    return errorResponse(tooLargeMessage, 413);
+    return errorResponse(c, tooLargeMessage, 413);
   }
   if (expectedSize !== null && expectedSize !== undefined && uploadSize !== expectedSize) {
-    return errorResponse(sizeMismatchMessage || 'File size does not match.', 400);
+    return errorResponse(c, sizeMismatchMessage || 'File size does not match.', 400);
   }
 
   return {
-    body: request.body,
+    body: c.req.raw.body,
     contentType: contentType || 'application/octet-stream',
     size: uploadSize,
   };

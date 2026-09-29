@@ -1,5 +1,6 @@
 import { zValidator } from '@hono/zod-validator';
 import type { Context, MiddlewareHandler } from 'hono';
+import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { z } from 'zod';
 import type { AppEnv } from '../router';
 import { isAdminPortalPath } from '../web-vault-visibility';
@@ -88,26 +89,17 @@ export function applySecurityHeaders(request: Request, response: Response): Resp
 }
 
 // JSON response helper
-export function jsonResponse(data: unknown, status: number = 200, headers: Record<string, string> = {}): Response {
-  return new Response(JSON.stringify(data), {
-    status,
-    headers: {
-      'Content-Type': 'application/json',
-      ...headers,
-    },
-  });
-}
-
 // Error response helper. The top-level fields mirror upstream ErrorResponseModel,
 // which official clients read for non-identity calls; error/error_description and
 // ErrorModel stay for identity-style readers.
 export function errorResponse(
+  c: Context,
   message: string,
-  status: number = 400,
+  status: ContentfulStatusCode = 400,
   headers: Record<string, string> = {},
   validationErrors: Record<string, string[]> | null = null,
 ): Response {
-  return jsonResponse(
+  return c.json(
     {
       message,
       validationErrors,
@@ -124,8 +116,8 @@ export function errorResponse(
   );
 }
 
-export function deviceErrorResponse(kind: 'required' | 'invalid_otp'): Response {
-  return jsonResponse(
+export function deviceErrorResponse(c: Context, kind: 'required' | 'invalid_otp'): Response {
+  return c.json(
     {
       error: 'device_error',
       error_description: kind === 'required' ? 'New device verification required' : 'Invalid New Device OTP',
@@ -139,18 +131,22 @@ export function deviceErrorResponse(kind: 'required' | 'invalid_otp'): Response 
   );
 }
 
-export function unsupportedResponse(message: string = 'This feature is not supported by this server.'): Response {
-  return errorResponse(message, 501);
+export function unsupportedResponse(
+  c: Context,
+  message: string = 'This feature is not supported by this server.',
+): Response {
+  return errorResponse(c, message, 501);
 }
 
 // Identity endpoint error response (for /identity/connect/token)
 export function identityErrorResponse(
+  c: Context,
   message: string,
   error: string = 'invalid_grant',
-  status: number = 400,
+  status: ContentfulStatusCode = 400,
   headers: Record<string, string> = {},
 ): Response {
-  return jsonResponse(
+  return c.json(
     {
       error: error,
       error_description: message,
@@ -162,16 +158,6 @@ export function identityErrorResponse(
     status,
     { 'Cache-Control': 'no-store', Pragma: 'no-cache', ...headers },
   );
-}
-
-// HTML response helper
-export function htmlResponse(html: string, status: number = 200): Response {
-  return new Response(html, {
-    status,
-    headers: {
-      'Content-Type': 'text/html; charset=utf-8',
-    },
-  });
 }
 
 // Official clients post camelCase; older and .NET-style clients post PascalCase. Lower-casing the
@@ -200,16 +186,17 @@ export async function readFormOrJson(request: Request): Promise<unknown> {
 
 // Input a schema refused, in the Bitwarden error shape: the first issue's message, with validationErrors grouping
 // every issue message under its dotted path ('' for the body itself) as in upstream ErrorResponseModel.
-export function validationErrorResponse(error: {
-  issues: readonly { path: readonly PropertyKey[]; message: string }[];
-}): Response {
+export function validationErrorResponse(
+  c: Context,
+  error: { issues: readonly { path: readonly PropertyKey[]; message: string }[] },
+): Response {
   const validationErrors = Object.fromEntries(
     error.issues.reduce((byPath, { path, message }) => {
       const field = path.join('.');
       return byPath.set(field, [...(byPath.get(field) ?? []), message]);
     }, new Map<string, string[]>()),
   );
-  return errorResponse(error.issues[0].message, 400, {}, validationErrors);
+  return errorResponse(c, error.issues[0].message, 400, {}, validationErrors);
 }
 
 // Request bodies validate at the route through @hono/zod-validator, and a handler typed BodyContext<typeof Schema>
@@ -219,13 +206,13 @@ export function validationErrorResponse(error: {
 // `refused`, by default validationErrorResponse; JSON that does not parse reaches app.onError as an HTTPException.
 export function jsonBody<S extends z.ZodType>(
   schema: S,
-  refused: (error: Parameters<typeof validationErrorResponse>[0]) => Response = validationErrorResponse,
+  refused: (c: Context, error: Parameters<typeof validationErrorResponse>[1]) => Response = validationErrorResponse,
 ): MiddlewareHandler<AppEnv, string, BodyInput<S>> {
   return zValidator(
     'json',
     z.preprocess((payload) => (payload && typeof payload === 'object' ? normalizeJsonKeys(payload) : {}), schema),
-    (result) => {
-      if (!result.success) return refused(result.error);
+    (result, c) => {
+      if (!result.success) return refused(c, result.error);
     },
   );
 }

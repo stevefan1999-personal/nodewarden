@@ -3,7 +3,7 @@ import { decode, verify } from 'hono/jwt';
 import { signHs256Jwt } from '../utils/jwt';
 import { readEnvConfig } from '../config/env';
 import type { Env } from '../types';
-import { errorResponse, jsonResponse } from '../utils/response';
+import { errorResponse } from '../utils/response';
 import { generateUUID } from '../utils/uuid';
 import { orgRepo } from '../services/storage-org-repo';
 import { PolicyType } from '../services/org-types';
@@ -26,14 +26,14 @@ export async function userRequiresSso(env: Env, userId: string): Promise<boolean
 }
 
 export async function handleSsoPrevalidate(c: AppContext): Promise<Response> {
-  if (!isSsoEnabled(c.env)) return errorResponse('SSO is not enabled', 404);
+  if (!isSsoEnabled(c.env)) return errorResponse(c, 'SSO is not enabled', 404);
   const now = Math.floor(Date.now() / 1000);
   const token = await signHs256Jwt({ sub: 'nodewarden-sso', nbf: now, exp: now + 120 }, c.env.JWT_SECRET);
-  return jsonResponse({ token });
+  return c.json({ token });
 }
 
 export async function handleSsoAuthorize(c: AppContext): Promise<Response> {
-  if (!isSsoEnabled(c.env)) return errorResponse('SSO is not enabled', 404);
+  if (!isSsoEnabled(c.env)) return errorResponse(c, 'SSO is not enabled', 404);
   const url = new URL(c.req.raw.url);
   const state = url.searchParams.get('state') || generateUUID();
   const codeChallenge = url.searchParams.get('code_challenge');
@@ -52,7 +52,7 @@ export async function handleSsoAuthorize(c: AppContext): Promise<Response> {
       redirectUri = null;
     }
   }
-  if (!redirectUri) return errorResponse('Invalid redirect_uri', 400);
+  if (!redirectUri) return errorResponse(c, 'Invalid redirect_uri', 400);
 
   const now = new Date().toISOString();
   await orgRepo(c.env.DB).saveSsoAuth({
@@ -91,7 +91,7 @@ export async function handleOidcSignin(c: AppContext): Promise<Response> {
   const code = url.searchParams.get('code');
   const error = url.searchParams.get('error');
   const session = await orgRepo(c.env.DB).getSsoAuth(state);
-  if (!session) return errorResponse('Unknown SSO state', 400);
+  if (!session) return errorResponse(c, 'Unknown SSO state', 400);
   const now = new Date().toISOString();
   await orgRepo(c.env.DB).saveSsoAuth({
     ...session,

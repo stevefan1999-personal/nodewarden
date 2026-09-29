@@ -40,7 +40,7 @@ adminRoutes.on(
   ],
   async (c, next) => {
     const currentUser = c.get('currentUser');
-    if (currentUser.role !== 'admin' || currentUser.status !== 'active') return errorResponse('Forbidden', 403);
+    if (currentUser.role !== 'admin' || currentUser.status !== 'active') return errorResponse(c, 'Forbidden', 403);
     await next();
   },
 );

@@ -2,7 +2,7 @@ import type { AppContext } from '../router';
 import { AuthService } from '../services/auth';
 import { isAuthRequestExpired, authRequestRepo } from '../services/storage-auth-request-repo';
 import type { Env, JWTPayload } from '../types';
-import { errorResponse, jsonResponse } from '../utils/response';
+import { errorResponse } from '../utils/response';
 import { generateUUID } from '../utils/uuid';
 import { createWebSocketConnectionToken, verifyWebSocketConnectionToken } from '../utils/websocket-connection-token';
 
@@ -19,7 +19,7 @@ async function authenticateAccessToken(request: Request, env: Env): Promise<JWTP
 
 export async function handleNotificationsNegotiate(c: AppContext): Promise<Response> {
   const payload = await authenticateAccessToken(c.req.raw, c.env);
-  if (!payload?.sub) return errorResponse('Unauthorized', 401);
+  if (!payload?.sub) return errorResponse(c, 'Unauthorized', 401);
 
   // Issue the single-use connection token the WebSocket upgrade presents instead of the access JWT.
   const expiresAt = Date.now() + WEBSOCKET_CONNECTION_TOKEN_TTL_MS;
@@ -37,7 +37,7 @@ export async function handleNotificationsNegotiate(c: AppContext): Promise<Respo
     }),
   });
   if (!response.ok) throw new Error('Failed to issue websocket connection token');
-  return jsonResponse(
+  return c.json(
     {
       connectionId: generateUUID(),
       connectionToken,
@@ -56,7 +56,7 @@ export async function handleNotificationsNegotiate(c: AppContext): Promise<Respo
 
 export async function handleNotificationsHub(c: AppContext): Promise<Response> {
   if (c.req.raw.headers.get('Upgrade')?.toLowerCase() !== 'websocket') {
-    return errorResponse('Expected websocket', 426);
+    return errorResponse(c, 'Expected websocket', 426);
   }
   // Never accept an access JWT from the URL: URLs are routinely retained by logs,
   // browser history, proxies, monitoring, and error tracking systems.
@@ -67,7 +67,7 @@ export async function handleNotificationsHub(c: AppContext): Promise<Response> {
     // Without the header, consume the single-use connection token from negotiate (SignalR sends it as id).
     const token = String(new URL(c.req.raw.url).searchParams.get('id') || '').trim();
     const claims = await verifyWebSocketConnectionToken(token, c.env.JWT_SECRET);
-    if (!claims) return errorResponse('Unauthorized', 401);
+    if (!claims) return errorResponse(c, 'Unauthorized', 401);
 
     // Verify the signed routing claim before selecting a Durable Object. Otherwise an
     // attacker could activate arbitrary object names with forged token prefixes.
@@ -77,20 +77,20 @@ export async function handleNotificationsHub(c: AppContext): Promise<Response> {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ token }),
     });
-    if (!response.ok) return errorResponse('Unauthorized', 401);
+    if (!response.ok) return errorResponse(c, 'Unauthorized', 401);
 
     const connection = (await response.json().catch(() => null)) as {
       userId?: string;
       deviceIdentifier?: string | null;
     } | null;
-    if (connection?.userId !== claims.userId) return errorResponse('Unauthorized', 401);
+    if (connection?.userId !== claims.userId) return errorResponse(c, 'Unauthorized', 401);
 
     payload = {
       sub: claims.userId,
       did: String(connection.deviceIdentifier || '').trim() || undefined,
     } as JWTPayload;
   }
-  if (!payload?.sub) return errorResponse('Unauthorized', 401);
+  if (!payload?.sub) return errorResponse(c, 'Unauthorized', 401);
 
   const userId = payload.sub;
   const id = c.env.NOTIFICATIONS_HUB.idFromName(userId);
@@ -106,14 +106,14 @@ export async function handleNotificationsHub(c: AppContext): Promise<Response> {
 export async function handleAnonymousNotificationsHub(c: AppContext): Promise<Response> {
   const url = new URL(c.req.raw.url);
   const authRequestId = String(url.searchParams.get('Token') || url.searchParams.get('token') || '').trim();
-  if (!authRequestId) return errorResponse('Token is required', 400);
+  if (!authRequestId) return errorResponse(c, 'Token is required', 400);
   if (c.req.raw.headers.get('Upgrade')?.toLowerCase() !== 'websocket') {
-    return errorResponse('Expected websocket', 426);
+    return errorResponse(c, 'Expected websocket', 426);
   }
 
   const authRequest = await authRequestRepo(c.env.DB).getAuthRequestById(authRequestId);
   if (!authRequest || isAuthRequestExpired(authRequest)) {
-    return errorResponse('Not found', 404);
+    return errorResponse(c, 'Not found', 404);
   }
 
   const id = c.env.NOTIFICATIONS_HUB.idFromName(authRequestId);

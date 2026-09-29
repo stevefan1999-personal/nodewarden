@@ -1,6 +1,7 @@
+import type { AppContext } from './router';
 import { Hono } from 'hono';
 import { ClientEvents, handleCollectEvents, handleEventRoute } from './handlers/events';
-import { errorResponse, jsonBody, jsonResponse, unsupportedResponse } from './utils/response';
+import { errorResponse, jsonBody, unsupportedResponse } from './utils/response';
 import {
   handleGetProfile,
   handleUpdateProfile,
@@ -172,8 +173,8 @@ import { handleAccountLicenseUpload } from './handlers/licenses';
 import { handleListAllCollections } from './handlers/organizations';
 import type { AppEnv } from './router';
 
-const methodNotAllowed = () => errorResponse('Method not allowed', 405);
-const emptyList = () => jsonResponse({ data: [], object: 'list', continuationToken: null });
+const methodNotAllowed = (c: AppContext) => errorResponse(c, 'Method not allowed', 405);
+const emptyList = (c: AppContext) => c.json({ data: [], object: 'list', continuationToken: null });
 
 // Two-factor providers are disabled by provider type: 0 authenticator, 1 email, 3 YubiKey, 7 WebAuthn.
 const TWO_FACTOR_AUTHENTICATOR = 0;
@@ -195,13 +196,13 @@ authenticatedRoutes.all('/events/collect', methodNotAllowed);
 authenticatedRoutes.on(
   ['POST', 'PUT', 'DELETE'],
   ['/api/accounts/set-password', '/api/accounts/delete-account', '/api/accounts/delete-vault'],
-  () => errorResponse('Not implemented', 501),
+  (c) => errorResponse(c, 'Not implemented', 501),
 );
 
 authenticatedRoutes.on('DELETE', ['/api/accounts', '/accounts'], jsonBody(VerifiedBody), handleDeleteAccount);
 authenticatedRoutes.post('/api/accounts/delete', jsonBody(VerifiedBody), handleDeleteAccount);
-authenticatedRoutes.on(['POST', 'PUT'], ['/api/accounts/kdf', '/accounts/kdf'], () =>
-  unsupportedResponse('KDF changes are not supported by this server.'),
+authenticatedRoutes.on(['POST', 'PUT'], ['/api/accounts/kdf', '/accounts/kdf'], (c) =>
+  unsupportedResponse(c, 'KDF changes are not supported by this server.'),
 );
 authenticatedRoutes.on(
   'POST',
@@ -227,7 +228,7 @@ authenticatedRoutes.on(
     '/api/accounts/verify-otp',
     '/accounts/verify-otp',
   ],
-  () => unsupportedResponse('Email delivery is not supported by this server.'),
+  (c) => unsupportedResponse(c, 'Email delivery is not supported by this server.'),
 );
 
 authenticatedRoutes.on(

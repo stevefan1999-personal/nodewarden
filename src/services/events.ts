@@ -1,3 +1,4 @@
+import type { AppContext } from '../router';
 import { and, desc, eq, gte, inArray, isNull, lt, lte, or } from 'drizzle-orm';
 import { decodeBase64Url } from 'hono/utils/encode';
 import { z } from 'zod';
@@ -5,7 +6,7 @@ import { chunkRows, columnCount, getOrm } from '../db/client';
 import { events, organizationMemberships } from '../db/schema';
 import { SendAuthType, SendType, type Env, type Send } from '../types';
 import { bytesToBase64Url } from '../utils/passkey';
-import { errorResponse, jsonResponse, validationErrorResponse } from '../utils/response';
+import { errorResponse, validationErrorResponse } from '../utils/response';
 import { DEFAULT_AUDIT_LOG_SETTINGS, getAuditLogSettings } from './audit-events';
 import { MembershipStatus } from './org-types';
 
@@ -270,16 +271,16 @@ const DateRange = z.object({ start: queryDate, end: queryDate });
 // A cursor is the last row's canonical ISO date and id, exactly as listEventsResponse writes them.
 const Cursor = z.tuple([z.iso.datetime({ precision: 3 }), z.string().regex(/^[a-f0-9-]{36}$/i)]);
 
-export async function listEventsResponse(request: Request, db: D1Database, filter: EventFilter): Promise<Response> {
-  const params = new URL(request.url).searchParams;
+export async function listEventsResponse(c: AppContext, filter: EventFilter): Promise<Response> {
+  const params = new URL(c.req.raw.url).searchParams;
   const range = DateRange.safeParse({ start: params.get('start') ?? undefined, end: params.get('end') ?? undefined });
-  if (!range.success) return validationErrorResponse(range.error);
+  if (!range.success) return validationErrorResponse(c, range.error);
   const today = new Date().setUTCHours(0, 0, 0, 0);
   const [start, end] =
     range.data.start === undefined || range.data.end === undefined
       ? [today - 30 * 86_400_000, today + 86_400_000 - 1]
       : [Math.min(range.data.start, range.data.end), Math.max(range.data.start, range.data.end)];
-  if (end - start > 367 * 86_400_000) return errorResponse('Range too large.', 400);
+  if (end - start > 367 * 86_400_000) return errorResponse(c, 'Range too large.', 400);
   const conditions = [gte(events.date, new Date(start).toISOString()), lte(events.date, new Date(end).toISOString())];
   if (filter.personalUserId)
     conditions.push(isNull(events.organizationId), eq(events.actingUserId, filter.personalUserId));
@@ -302,10 +303,10 @@ export async function listEventsResponse(request: Request, db: D1Database, filte
       const [date, id] = Cursor.parse(JSON.parse(new TextDecoder().decode(decodeBase64Url(token))));
       conditions.push(or(lt(events.date, date), and(eq(events.date, date), lt(events.id, id)))!);
     } catch {
-      return errorResponse('Invalid continuation token.', 400);
+      return errorResponse(c, 'Invalid continuation token.', 400);
     }
   }
-  const rows = await getOrm(db)
+  const rows = await getOrm(c.env.DB)
     .select()
     .from(events)
     .where(and(...conditions))
@@ -313,7 +314,7 @@ export async function listEventsResponse(request: Request, db: D1Database, filte
     .limit(51);
   const data = rows.slice(0, 50);
   const last = data.at(-1);
-  return jsonResponse({
+  return c.json({
     object: 'list',
     data: data.map((row) => {
       const references: Record<string, string | null> = {

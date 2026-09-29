@@ -50,7 +50,7 @@ import {
 } from './handlers/notifications';
 import { handlePublicUploadSendFile } from './handlers/sends';
 import { isSafeWebsiteIconContentType } from './utils/content-type';
-import { jsonResponse, unsupportedResponse, jsonBody } from './utils/response';
+import { unsupportedResponse, jsonBody } from './utils/response';
 import { createAuth } from './auth';
 import type { Env } from './types';
 import { isConfiguredWebVaultOrigin } from './utils/origins';
@@ -380,7 +380,7 @@ publicRoutes.use(async (c, next) => {
 });
 
 publicRoutes.get('/api/devices/knowndevice', async (c) =>
-  (await enforcePublicRateLimit(c.req.raw, c.env)) ? jsonResponse(false) : handleKnownDevice(c),
+  (await enforcePublicRateLimit(c.req.raw, c.env)) ? c.json(false) : handleKnownDevice(c),
 );
 publicRoutes.on(
   ['PUT', 'POST'],
@@ -452,7 +452,7 @@ publicRoutes.on(
     '/accounts/verify-email-token',
   ],
   publicSensitive,
-  () => unsupportedResponse('Email delivery is not supported by this server.'),
+  (c) => unsupportedResponse(c, 'Email delivery is not supported by this server.'),
 );
 
 publicRoutes.post(
@@ -473,9 +473,9 @@ publicRoutes.on(
     }),
 );
 publicRoutes.on('GET', ['/config', '/api/config'], publicRead, (c) =>
-  jsonResponse(buildConfigResponse(new URL(c.req.url).origin), 200, { 'Cache-Control': 'no-store' }),
+  c.json(buildConfigResponse(new URL(c.req.url).origin), 200, { 'Cache-Control': 'no-store' }),
 );
-publicRoutes.get('/api/version', publicRead, () => jsonResponse(LIMITS.compatibility.bitwardenServerVersion));
+publicRoutes.get('/api/version', publicRead, (c) => c.json(LIMITS.compatibility.bitwardenServerVersion));
 
 publicRoutes.on(
   'POST',

@@ -71,7 +71,7 @@ app.use(async (c, next) => {
     const contentLengthRaw = request.headers.get('Content-Length');
     const contentLength = Number(contentLengthRaw);
     if (contentLengthRaw && Number.isFinite(contentLength) && contentLength > LIMITS.request.maxBodyBytes) {
-      return errorResponse('Request body too large', 413);
+      return errorResponse(c, 'Request body too large', 413);
     }
     // A declared length within the cap is trusted; otherwise the body is read up to the cap and replayed.
     if (!contentLengthRaw || !Number.isFinite(contentLength) || contentLength < 0) {
@@ -89,7 +89,7 @@ app.use(async (c, next) => {
           } catch {
             // Ignore cancellation races after the oversized body is rejected.
           }
-          return errorResponse('Request body too large', 413);
+          return errorResponse(c, 'Request body too large', 413);
         }
         chunks.push(value);
       }
@@ -128,7 +128,7 @@ app.use(async (c, next) => {
         path === '/v1/assetlinks:check' ||
         path === '/api/v1/assetlinks:check' ||
         /^\/icons\/[^/]+\/icon\.png$/i.test(path));
-    if (!servable) return errorResponse('Server configuration error: JWT_SECRET is not set or too weak', 500);
+    if (!servable) return errorResponse(c, 'Server configuration error: JWT_SECRET is not set or too weak', 500);
   }
   await next();
 });
@@ -137,7 +137,7 @@ app.route('/', publicRoutes);
 
 app.use(async (c, next) => {
   const verified = await new AuthService(c.env).verifyPrincipal(c.req.raw.headers.get('Authorization'));
-  if (!verified) return errorResponse('Unauthorized', 401);
+  if (!verified) return errorResponse(c, 'Unauthorized', 401);
   c.set('principal', verified);
 
   if (verified.kind === 'serviceAccount') {
@@ -146,8 +146,8 @@ app.use(async (c, next) => {
       LIMITS.rateLimit.apiRequestsPerMinute,
     );
     if (!budget.allowed)
-      return errorResponse('Too many requests', 429, { 'Retry-After': String(budget.retryAfterSeconds || 60) });
-    if (!isMachineAllowedRoute(c.req.path, c.req.method)) return errorResponse('Not found', 404);
+      return errorResponse(c, 'Too many requests', 429, { 'Retry-After': String(budget.retryAfterSeconds || 60) });
+    if (!isMachineAllowedRoute(c.req.path, c.req.method)) return errorResponse(c, 'Not found', 404);
     return next();
   }
 
@@ -159,7 +159,7 @@ app.use(async (c, next) => {
     c.req.raw = new Request(c.req.raw, { headers: nextHeaders });
   }
 
-  if (user.status !== 'active') return errorResponse('Account is disabled', 403);
+  if (user.status !== 'active') return errorResponse(c, 'Account is disabled', 403);
 
   const budget = await new RateLimitService(c.env).consumeBudget(
     `${payload.sub}:api`,
@@ -176,17 +176,17 @@ app.route('/', secretsManagerRoutes);
 
 // A machine token that passed the allowlist but matched no Secrets Manager route ends here.
 app.use(async (c, next) => {
-  if (c.get('principal').kind !== 'user') return errorResponse('Not found', 404);
+  if (c.get('principal').kind !== 'user') return errorResponse(c, 'Not found', 404);
   await next();
 });
 
 app.route('/', authenticatedRoutes);
 
-app.notFound(() => errorResponse('Not found', 404));
+app.notFound((c) => errorResponse(c, 'Not found', 404));
 
-app.onError((error) => {
+app.onError((error, c) => {
   // The body validators throw for JSON that does not parse.
-  if (error instanceof HTTPException) return errorResponse(error.message, error.status);
+  if (error instanceof HTTPException) return errorResponse(c, error.message, error.status);
   console.error('Request error:', withoutQueryParams(error));
-  return errorResponse('Internal server error', 500);
+  return errorResponse(c, 'Internal server error', 500);
 });

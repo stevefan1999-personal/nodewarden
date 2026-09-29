@@ -309,7 +309,7 @@ publicRoutes.get(
 );
 
 publicRoutes.get('/api/attachments/:cipherId{[a-f0-9-]+}/:attachmentId{[a-f0-9-]+}', (c) =>
-  handlePublicDownloadAttachment(c.req.raw, c.env, c.req.param('cipherId'), c.req.param('attachmentId')),
+  handlePublicDownloadAttachment(c, c.req.param('cipherId'), c.req.param('attachmentId')),
 );
 // Token-bearing uploads are anonymous; without a token the same paths fall through to the
 // authenticated upload routes.
@@ -318,53 +318,49 @@ publicRoutes.on(
   '/api/ciphers/:cipherId{[a-f0-9-]+}/attachment/:attachmentId{[a-f0-9-]+}',
   async (c, next) => {
     if (!hasUploadToken(c.req.raw)) return next();
-    return handlePublicUploadAttachment(c.req.raw, c.env, c.req.param('cipherId'), c.req.param('attachmentId'));
+    return handlePublicUploadAttachment(c, c.req.param('cipherId'), c.req.param('attachmentId'));
   },
 );
 publicRoutes.on(['POST', 'PUT'], '/api/sends/:sendId/file/:fileId', async (c, next) => {
   if (!hasUploadToken(c.req.raw)) return next();
-  return handlePublicUploadSendFile(c.req.raw, c.env, c.req.param('sendId'), c.req.param('fileId'));
+  return handlePublicUploadSendFile(c, c.req.param('sendId'), c.req.param('fileId'));
 });
 
 publicRoutes.post('/api/sends/access/:accessId', publicRateLimit(), (c) =>
-  handleAccessSend(c.req.raw, c.env, c.req.param('accessId')),
+  handleAccessSend(c, c.req.param('accessId')),
 );
-publicRoutes.post('/api/sends/access', publicRateLimit(), (c) => handleAccessSendV2(c.req.raw, c.env));
+publicRoutes.post('/api/sends/access', publicRateLimit(), handleAccessSendV2);
 publicRoutes.post('/api/sends/access/file/:fileId', publicRateLimit(), (c) =>
-  handleAccessSendFileV2(c.req.raw, c.env, c.req.param('fileId')),
+  handleAccessSendFileV2(c, c.req.param('fileId')),
 );
 publicRoutes.post('/api/sends/:sendId/access/file/:fileId', publicRateLimit(), (c) =>
-  handleAccessSendFile(c.req.raw, c.env, c.req.param('sendId'), c.req.param('fileId')),
+  handleAccessSendFile(c, c.req.param('sendId'), c.req.param('fileId')),
 );
 publicRoutes.get('/api/sends/:sendId/:fileId', (c) =>
-  handleDownloadSendFile(c.req.raw, c.env, c.req.param('sendId'), c.req.param('fileId')),
+  handleDownloadSendFile(c, c.req.param('sendId'), c.req.param('fileId')),
 );
 
-publicRoutes.on('POST', ['/api/auth-requests', '/auth-requests'], publicSensitive, (c) =>
-  handleCreateAuthRequest(c.req.raw, c.env),
-);
+publicRoutes.on('POST', ['/api/auth-requests', '/auth-requests'], publicSensitive, handleCreateAuthRequest);
 publicRoutes.on(
   'GET',
   ['/api/auth-requests/:id{[a-f0-9-]+}/response', '/auth-requests/:id{[a-f0-9-]+}/response'],
   publicSensitive,
-  (c) => handleGetAuthRequestResponse(c.req.raw, c.env, c.req.param('id')),
+  (c) => handleGetAuthRequestResponse(c, c.req.param('id')),
 );
 
-publicRoutes.post('/identity/connect/token', (c) => handleToken(c.req.raw, c.env));
-publicRoutes.on('GET', ['/identity/sso/prevalidate', '/sso/prevalidate'], (c) => handleSsoPrevalidate(c.env));
-publicRoutes.on('GET', ['/identity/connect/authorize', '/connect/authorize'], (c) =>
-  handleSsoAuthorize(c.req.raw, c.env),
-);
-publicRoutes.on('GET', ['/identity/oidc-signin', '/oidc-signin'], (c) => handleOidcSignin(c.req.raw, c.env));
+publicRoutes.post('/identity/connect/token', handleToken);
+publicRoutes.on('GET', ['/identity/sso/prevalidate', '/sso/prevalidate'], handleSsoPrevalidate);
+publicRoutes.on('GET', ['/identity/connect/authorize', '/connect/authorize'], handleSsoAuthorize);
+publicRoutes.on('GET', ['/identity/oidc-signin', '/oidc-signin'], handleOidcSignin);
 
 publicRoutes.use(async (c, next) => {
-  const scim = await handleScimRoute(c.req.raw, c.env, c.req.path);
+  const scim = await handleScimRoute(c, c.req.path);
   if (scim) return scim;
   await next();
 });
 
 publicRoutes.get('/api/devices/knowndevice', async (c) =>
-  (await enforcePublicRateLimit(c.req.raw, c.env)) ? jsonResponse(false) : handleKnownDevice(c.req.raw, c.env),
+  (await enforcePublicRateLimit(c.req.raw, c.env)) ? jsonResponse(false) : handleKnownDevice(c),
 );
 publicRoutes.on(
   ['PUT', 'POST'],
@@ -372,35 +368,52 @@ publicRoutes.on(
   () => new Response(null, { status: 200 }),
 );
 
-publicRoutes.on('POST', ['/identity/connect/revocation', '/identity/connect/revoke'], publicSensitive, (c) =>
-  handleRevocation(c.req.raw, c.env),
+publicRoutes.on(
+  'POST',
+  ['/identity/connect/revocation', '/identity/connect/revoke'],
+  publicSensitive,
+  handleRevocation,
 );
-publicRoutes.on('POST', ['/identity/accounts/prelogin', '/identity/accounts/prelogin/password'], publicSensitive, (c) =>
-  handlePrelogin(c.req.raw, c.env),
+publicRoutes.on(
+  'POST',
+  ['/identity/accounts/prelogin', '/identity/accounts/prelogin/password'],
+  publicSensitive,
+  handlePrelogin,
 );
-publicRoutes.get('/identity/accounts/webauthn/assertion-options', publicSensitive, (c) =>
-  handleGetAccountPasskeyAssertionOptions(c.req.raw, c.env),
+publicRoutes.get(
+  '/identity/accounts/webauthn/assertion-options',
+  publicSensitive,
+  handleGetAccountPasskeyAssertionOptions,
 );
-publicRoutes.on('POST', ['/identity/accounts/recover-2fa', '/api/accounts/recover-2fa'], publicSensitive, (c) =>
-  handleRecoverTwoFactor(c.req.raw, c.env),
+publicRoutes.on(
+  'POST',
+  ['/identity/accounts/recover-2fa', '/api/accounts/recover-2fa'],
+  publicSensitive,
+  handleRecoverTwoFactor,
 );
-publicRoutes.on('POST', ['/api/two-factor/send-email-login', '/two-factor/send-email-login'], publicSensitive, (c) =>
-  handleSendTwoFactorEmailLogin(c.req.raw, c.env),
+publicRoutes.on(
+  'POST',
+  ['/api/two-factor/send-email-login', '/two-factor/send-email-login'],
+  publicSensitive,
+  handleSendTwoFactorEmailLogin,
 );
 publicRoutes.on(
   'POST',
   ['/api/accounts/resend-new-device-otp', '/accounts/resend-new-device-otp'],
   publicSensitive,
-  (c) => handleResendNewDeviceOtp(c.req.raw, c.env),
+  handleResendNewDeviceOtp,
 );
-publicRoutes.on('POST', ['/api/accounts/delete-recover', '/accounts/delete-recover'], publicSensitive, (c) =>
-  handleDeleteRecover(c.req.raw, c.env),
+publicRoutes.on(
+  'POST',
+  ['/api/accounts/delete-recover', '/accounts/delete-recover'],
+  publicSensitive,
+  handleDeleteRecover,
 );
 publicRoutes.on(
   'POST',
   ['/api/accounts/delete-recover-token', '/accounts/delete-recover-token'],
   publicSensitive,
-  (c) => handleDeleteRecoverToken(c.req.raw, c.env),
+  handleDeleteRecoverToken,
 );
 
 publicRoutes.on(
@@ -416,9 +429,7 @@ publicRoutes.on(
   () => unsupportedResponse('Email delivery is not supported by this server.'),
 );
 
-publicRoutes.post('/api/accounts/password-hint', publicSensitive, requireSameOriginWrite, (c) =>
-  handleGetPasswordHint(c.req.raw, c.env),
-);
+publicRoutes.post('/api/accounts/password-hint', publicSensitive, requireSameOriginWrite, handleGetPasswordHint);
 
 publicRoutes.on(
   'GET',
@@ -443,25 +454,23 @@ publicRoutes.on(
   ],
   register,
   requireSameOriginWrite,
-  (c) => handleRegisterSendVerificationEmail(c.req.raw, c.env),
+  handleRegisterSendVerificationEmail,
 );
 publicRoutes.on(
   'POST',
   ['/api/accounts/register/finish', '/accounts/register/finish', '/identity/accounts/register/finish'],
   register,
   requireSameOriginWrite,
-  (c) => handleRegisterFinish(c.req.raw, c.env),
+  handleRegisterFinish,
 );
 publicRoutes.on(
   'POST',
   ['/api/accounts/register', '/identity/accounts/register'],
   register,
   requireSameOriginWrite,
-  (c) => handleRegister(c.req.raw, c.env),
+  handleRegister,
 );
 
-publicRoutes.post('/notifications/hub/negotiate', (c) => handleNotificationsNegotiate(c.req.raw, c.env));
-publicRoutes.get('/notifications/hub', (c) => handleNotificationsHub(c.req.raw, c.env));
-publicRoutes.get('/notifications/anonymous-hub', publicSensitive, (c) =>
-  handleAnonymousNotificationsHub(c.req.raw, c.env),
-);
+publicRoutes.post('/notifications/hub/negotiate', handleNotificationsNegotiate);
+publicRoutes.get('/notifications/hub', handleNotificationsHub);
+publicRoutes.get('/notifications/anonymous-hub', publicSensitive, handleAnonymousNotificationsHub);

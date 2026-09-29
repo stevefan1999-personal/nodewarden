@@ -1,4 +1,4 @@
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import { cors } from 'hono/cors';
 import { isMachineAllowedRoute, secretsManagerRoutes } from './router-sm';
 import { isAdminPortalPath } from './web-vault-visibility';
@@ -20,6 +20,7 @@ export type AppEnv = {
   Bindings: Env;
   Variables: { principal: Principal; userId: string; currentUser: User };
 };
+export type AppContext = Context<AppEnv>;
 
 // Routes match the raw pathname exactly as index.ts normalised it (Hono's default path getter
 // would percent-decode it first). Secrets Manager routes are the exception: they match a

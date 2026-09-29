@@ -2,10 +2,12 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { registerHooks } from 'node:module';
 import { getTableName, type Table } from 'drizzle-orm';
+import { Context } from 'hono';
 import type { SQLiteColumn } from 'drizzle-orm/sqlite-core';
 
 import { LIMITS } from '../../config/limits';
-import { AuthService } from '../../services/auth';
+import { AuthService, type Principal } from '../../services/auth';
+import type { AppContext, AppEnv } from '../../router';
 import type { Env, User } from '../../types';
 import { waitUntil } from './cloudflare-workers';
 import './workers-crypto';
@@ -319,6 +321,14 @@ export async function authedFetch(
     body: body === undefined || isForm ? body : JSON.stringify(body),
   });
   return worker.fetch(request, env, executionContext);
+}
+
+// Handlers read the request, the bindings and the gate's principal from their Hono context; a test calling one
+// directly builds it here.
+export function contextFor(env: Env, request: Request, principal?: Principal): AppContext {
+  const context = new Context<AppEnv>(request, { env });
+  if (principal) context.set('principal', principal);
+  return context;
 }
 
 export const MAILABLE_DOMAIN = 'stevefan1999.tech';

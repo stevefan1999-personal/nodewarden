@@ -16,7 +16,7 @@ import {
 import { handleCreateServiceAccount } from '../handlers/secrets-manager';
 import { orgRepo } from '../services/storage-org-repo';
 import { smRepo } from '../services/storage-secret-repo';
-import { abortWrites, authedFetch, createTestEnv } from './support/env';
+import { abortWrites, authedFetch, contextFor, createTestEnv } from './support/env';
 import { ENCRYPTED_FIELD, postJson, seedMember, seedSmOrg, smLogin, smUser, TOKEN_FIELDS } from './support/sm';
 
 async function setup() {
@@ -194,12 +194,14 @@ test('machine creation ignores legacy projectIds, rolls back creator grants atom
   await assert.rejects(
     async () =>
       handleCreateServiceAccount(
-        new Request('https://vault.example.test', {
-          method: 'POST',
-          body: JSON.stringify({ name: ENCRYPTED_FIELD, projectIds: [ownProject.id] }),
-        }),
-        env,
-        await smUser(env, a),
+        contextFor(
+          env,
+          new Request('https://vault.example.test', {
+            method: 'POST',
+            body: JSON.stringify({ name: ENCRYPTED_FIELD, projectIds: [ownProject.id] }),
+          }),
+          await smUser(env, a),
+        ),
         orgId,
       ),
     /test machine rollback/,

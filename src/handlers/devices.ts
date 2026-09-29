@@ -1,10 +1,10 @@
+import type { AppContext } from '../router';
 import type {
   Device,
   DevicePendingAuthRequest,
   DeviceResponse,
   ProtectedDeviceResponse as ProtectedDeviceWireResponse,
 } from '../types';
-import { Env } from '../types';
 import { getOnlineUserDevices, notifyUserLogout } from '../durable/notifications-hub';
 import { AuthService } from '../services/auth';
 import { auditRequestMetadata, writeAuditEvent } from '../services/audit-events';
@@ -129,19 +129,20 @@ const PUSH_TOKEN_INVALID = { error: 'Invalid push token' };
 const PushTokenSchema = z.object({ pushToken: z.string(PUSH_TOKEN_INVALID).trim().min(1, PUSH_TOKEN_INVALID) });
 
 // POST /api/devices
-export async function handleRegisterDevice(request: Request, env: Env, userId: string): Promise<Response> {
-  const body = await parseBody(request, RegisterDeviceSchema, 'Invalid request payload');
+export async function handleRegisterDevice(c: AppContext): Promise<Response> {
+  const { userId } = c.var;
+  const body = await parseBody(c.req.raw, RegisterDeviceSchema, 'Invalid request payload');
   if (body instanceof Response) return body;
   const { deviceIdentifier: identifier, deviceName: name, deviceType: type, pushToken, ...keys } = body;
 
-  await deviceRepo(env.DB).upsertDevice(userId, identifier, name, type, undefined, keys);
+  await deviceRepo(c.env.DB).upsertDevice(userId, identifier, name, type, undefined, keys);
 
   if (pushToken) {
-    const device = await deviceRepo(env.DB).getDevice(userId, identifier);
+    const device = await deviceRepo(c.env.DB).getDevice(userId, identifier);
     const pushUuid = device?.pushUuid || generateUUID();
-    const updated = await deviceRepo(env.DB).updateDevicePushToken(userId, identifier, pushUuid, pushToken);
+    const updated = await deviceRepo(c.env.DB).updateDevicePushToken(userId, identifier, pushUuid, pushToken);
     if (updated) {
-      await registerMobilePushDevice(env, {
+      await registerMobilePushDevice(c.env, {
         userId,
         deviceIdentifier: identifier,
         type,
@@ -151,27 +152,28 @@ export async function handleRegisterDevice(request: Request, env: Env, userId: s
     }
   }
 
-  const device = await deviceRepo(env.DB).getDevice(userId, identifier);
+  const device = await deviceRepo(c.env.DB).getDevice(userId, identifier);
   if (!device) return errorResponse('Device registration failed', 500);
-  await writeAuditEvent(env.DB, {
+  await writeAuditEvent(c.env.DB, {
     actorUserId: userId,
     action: 'device.register',
     category: 'device',
     level: 'info',
     targetType: 'device',
     targetId: identifier,
-    metadata: auditRequestMetadata(request),
+    metadata: auditRequestMetadata(c.req.raw),
   });
   return jsonResponse(buildDeviceResponse(device));
 }
 
 // POST /api/devices/lost-trust
-export async function handleReportLostTrust(request: Request, env: Env, userId: string): Promise<Response> {
+export async function handleReportLostTrust(c: AppContext): Promise<Response> {
+  const { userId } = c.var;
   // Official clients post no body and send the device in the Device-Identifier header.
-  const deviceInfo = readAuthRequestDeviceInfo({}, request);
+  const deviceInfo = readAuthRequestDeviceInfo({}, c.req.raw);
   if (!deviceInfo.deviceIdentifier) return errorResponse('Please provide a device identifier', 400);
 
-  await writeAuditEvent(env.DB, {
+  await writeAuditEvent(c.env.DB, {
     actorUserId: userId,
     action: 'device.lost_trust',
     category: 'device',
@@ -181,7 +183,7 @@ export async function handleReportLostTrust(request: Request, env: Env, userId: 
     metadata: {
       deviceIdentifier: deviceInfo.deviceIdentifier,
       deviceType: deviceInfo.deviceType,
-      ...auditRequestMetadata(request),
+      ...auditRequestMetadata(c.req.raw),
     },
   });
   return new Response(null, { status: 200 });
@@ -191,21 +193,22 @@ export async function handleReportLostTrust(request: Request, env: Env, userId: 
 // Compatible with Bitwarden/Vaultwarden behavior:
 // - X-Request-Email: base64url(email) without padding
 // - X-Device-Identifier: client device identifier
-export async function handleKnownDevice(request: Request, env: Env): Promise<Response> {
-  const { email, deviceIdentifier } = readKnownDeviceProbe(request);
+export async function handleKnownDevice(c: AppContext): Promise<Response> {
+  const { email, deviceIdentifier } = readKnownDeviceProbe(c.req.raw);
 
   if (!email || !deviceIdentifier) {
     return jsonResponse(false);
   }
 
-  const known = await deviceRepo(env.DB).isKnownDeviceByEmail(email, deviceIdentifier);
+  const known = await deviceRepo(c.env.DB).isKnownDeviceByEmail(email, deviceIdentifier);
   return jsonResponse(known);
 }
 
 // GET /api/devices
-export async function handleGetDevices(request: Request, env: Env, userId: string): Promise<Response> {
-  void request;
-  const devices = await deviceRepo(env.DB).getDevicesByUserId(userId);
+export async function handleGetDevices(c: AppContext): Promise<Response> {
+  const { userId } = c.var;
+  void c.req.raw;
+  const devices = await deviceRepo(c.env.DB).getDevicesByUserId(userId);
 
   return jsonResponse({
     data: devices.map((device) => buildDeviceResponse(device)),
@@ -215,17 +218,13 @@ export async function handleGetDevices(request: Request, env: Env, userId: strin
 }
 
 // GET /api/devices/identifier/:deviceIdentifier
-export async function handleGetDeviceByIdentifier(
-  request: Request,
-  env: Env,
-  userId: string,
-  deviceIdentifier: string,
-): Promise<Response> {
-  void request;
+export async function handleGetDeviceByIdentifier(c: AppContext, deviceIdentifier: string): Promise<Response> {
+  const { userId } = c.var;
+  void c.req.raw;
   const normalized = normalizeIdentifier(deviceIdentifier);
   if (!normalized) return errorResponse('Invalid device identifier', 400);
 
-  const device = await deviceRepo(env.DB).getDevice(userId, normalized);
+  const device = await deviceRepo(c.env.DB).getDevice(userId, normalized);
   if (!device) {
     return errorResponse('Device not found', 404);
   }
@@ -234,23 +233,19 @@ export async function handleGetDeviceByIdentifier(
 }
 
 // GET /api/devices/:deviceIdentifier
-export async function handleGetDevice(
-  request: Request,
-  env: Env,
-  userId: string,
-  deviceIdentifier: string,
-): Promise<Response> {
-  return handleGetDeviceByIdentifier(request, env, userId, deviceIdentifier);
+export async function handleGetDevice(c: AppContext, deviceIdentifier: string): Promise<Response> {
+  return handleGetDeviceByIdentifier(c, deviceIdentifier);
 }
 
 // GET /api/devices/authorized
 // Returns known devices together with active 2FA remember-token expiry.
-export async function handleGetAuthorizedDevices(request: Request, env: Env, userId: string): Promise<Response> {
-  void request;
+export async function handleGetAuthorizedDevices(c: AppContext): Promise<Response> {
+  const { userId } = c.var;
+  void c.req.raw;
   const [devices, trusted, onlineDeviceIdentifiers] = await Promise.all([
-    deviceRepo(env.DB).getDevicesByUserId(userId),
-    deviceRepo(env.DB).getTrustedDeviceTokenSummariesByUserId(userId),
-    getOnlineUserDevices(env, userId),
+    deviceRepo(c.env.DB).getDevicesByUserId(userId),
+    deviceRepo(c.env.DB).getTrustedDeviceTokenSummariesByUserId(userId),
+    getOnlineUserDevices(c.env, userId),
   ]);
   const onlineSet = new Set(onlineDeviceIdentifiers);
 
@@ -312,62 +307,55 @@ export async function handleGetAuthorizedDevices(request: Request, env: Env, use
 }
 
 // DELETE /api/devices/authorized
-export async function handleRevokeAllTrustedDevices(request: Request, env: Env, userId: string): Promise<Response> {
-  void request;
-  const removed = await deviceRepo(env.DB).deleteTrustedTwoFactorTokensByUserId(userId);
+export async function handleRevokeAllTrustedDevices(c: AppContext): Promise<Response> {
+  const { userId } = c.var;
+  void c.req.raw;
+  const removed = await deviceRepo(c.env.DB).deleteTrustedTwoFactorTokensByUserId(userId);
   return jsonResponse({ success: true, removed });
 }
 
 // DELETE /api/devices/authorized/:deviceIdentifier
-export async function handleRevokeTrustedDevice(
-  request: Request,
-  env: Env,
-  userId: string,
-  deviceIdentifier: string,
-): Promise<Response> {
-  void request;
+export async function handleRevokeTrustedDevice(c: AppContext, deviceIdentifier: string): Promise<Response> {
+  const { userId } = c.var;
+  void c.req.raw;
   const normalized = String(deviceIdentifier || '').trim();
   if (!normalized) return errorResponse('Invalid device identifier', 400);
 
-  const removed = await deviceRepo(env.DB).deleteTrustedTwoFactorTokensByDevice(userId, normalized);
-  await writeAuditEvent(env.DB, {
+  const removed = await deviceRepo(c.env.DB).deleteTrustedTwoFactorTokensByDevice(userId, normalized);
+  await writeAuditEvent(c.env.DB, {
     actorUserId: userId,
     action: 'device.trust.revoke',
     category: 'device',
     level: 'security',
     targetType: 'device',
     targetId: normalized,
-    metadata: { removed, ...auditRequestMetadata(request) },
+    metadata: { removed, ...auditRequestMetadata(c.req.raw) },
   });
   return jsonResponse({ success: true, removed });
 }
 
 // POST /api/devices/authorized/:deviceIdentifier/permanent
 // Upgrades an existing active 2FA remember-token record to permanent trust.
-export async function handleTrustDevicePermanently(
-  request: Request,
-  env: Env,
-  userId: string,
-  deviceIdentifier: string,
-): Promise<Response> {
-  void request;
+export async function handleTrustDevicePermanently(c: AppContext, deviceIdentifier: string): Promise<Response> {
+  const { userId } = c.var;
+  void c.req.raw;
   const normalized = String(deviceIdentifier || '').trim();
   if (!normalized) return errorResponse('Invalid device identifier', 400);
 
-  const updated = await deviceRepo(env.DB).updateTrustedTwoFactorTokensExpiryByDevice(
+  const updated = await deviceRepo(c.env.DB).updateTrustedTwoFactorTokensExpiryByDevice(
     userId,
     normalized,
     PERMANENT_TRUST_EXPIRES_AT_MS,
   );
   if (!updated) return errorResponse('Device is not currently trusted', 409);
-  await writeAuditEvent(env.DB, {
+  await writeAuditEvent(c.env.DB, {
     actorUserId: userId,
     action: 'device.trust.permanent',
     category: 'device',
     level: 'security',
     targetType: 'device',
     targetId: normalized,
-    metadata: { updated, ...auditRequestMetadata(request) },
+    metadata: { updated, ...auditRequestMetadata(c.req.raw) },
   });
 
   return jsonResponse({
@@ -378,77 +366,70 @@ export async function handleTrustDevicePermanently(
 }
 
 // DELETE /api/devices/:deviceIdentifier
-export async function handleDeleteDevice(
-  request: Request,
-  env: Env,
-  userId: string,
-  deviceIdentifier: string,
-): Promise<Response> {
-  void request;
+export async function handleDeleteDevice(c: AppContext, deviceIdentifier: string): Promise<Response> {
+  const { userId } = c.var;
+  void c.req.raw;
   const normalized = String(deviceIdentifier || '').trim();
   if (!normalized) return errorResponse('Invalid device identifier', 400);
 
-  const device = await deviceRepo(env.DB).getDevice(userId, normalized);
-  await deviceRepo(env.DB).deleteTrustedTwoFactorTokensByDevice(userId, normalized);
-  await sessionRepo(env.DB).deleteRefreshTokensByDevice(userId, normalized);
-  const deleted = await deviceRepo(env.DB).deleteDevice(userId, normalized);
+  const device = await deviceRepo(c.env.DB).getDevice(userId, normalized);
+  await deviceRepo(c.env.DB).deleteTrustedTwoFactorTokensByDevice(userId, normalized);
+  await sessionRepo(c.env.DB).deleteRefreshTokensByDevice(userId, normalized);
+  const deleted = await deviceRepo(c.env.DB).deleteDevice(userId, normalized);
   if (deleted) {
-    await unregisterMobilePushDevice(env, device?.pushUuid);
+    await unregisterMobilePushDevice(c.env, device?.pushUuid);
     AuthService.invalidateDeviceCache(userId, normalized);
-    notifyUserLogout(env, userId, normalized);
+    notifyUserLogout(c.env, userId, normalized);
   }
-  await writeAuditEvent(env.DB, {
+  await writeAuditEvent(c.env.DB, {
     actorUserId: userId,
     action: 'device.delete',
     category: 'device',
     level: 'security',
     targetType: 'device',
     targetId: normalized,
-    metadata: { deleted, ...auditRequestMetadata(request) },
+    metadata: { deleted, ...auditRequestMetadata(c.req.raw) },
   });
   return jsonResponse({ success: deleted });
 }
 
 // PUT /api/devices/:deviceIdentifier/name
-export async function handleUpdateDeviceName(
-  request: Request,
-  env: Env,
-  userId: string,
-  deviceIdentifier: string,
-): Promise<Response> {
+export async function handleUpdateDeviceName(c: AppContext, deviceIdentifier: string): Promise<Response> {
+  const { userId } = c.var;
   const normalized = String(deviceIdentifier || '').trim();
   if (!normalized) return errorResponse('Invalid device identifier', 400);
 
-  const body = await parseBody(request, DeviceNameSchema, NAME_REQUIRED.error);
+  const body = await parseBody(c.req.raw, DeviceNameSchema, NAME_REQUIRED.error);
   if (body instanceof Response) return body;
   const { name } = body;
 
-  const updated = await deviceRepo(env.DB).updateDeviceName(userId, normalized, name);
+  const updated = await deviceRepo(c.env.DB).updateDeviceName(userId, normalized, name);
   if (!updated) return errorResponse('Device not found', 404);
 
-  const device = await deviceRepo(env.DB).getDevice(userId, normalized);
+  const device = await deviceRepo(c.env.DB).getDevice(userId, normalized);
   if (!device) return errorResponse('Device not found', 404);
-  await writeAuditEvent(env.DB, {
+  await writeAuditEvent(c.env.DB, {
     actorUserId: userId,
     action: 'device.name.update',
     category: 'device',
     level: 'info',
     targetType: 'device',
     targetId: normalized,
-    metadata: { name, ...auditRequestMetadata(request) },
+    metadata: { name, ...auditRequestMetadata(c.req.raw) },
   });
   return jsonResponse(buildDeviceResponse(device));
 }
 
 // DELETE /api/devices
-export async function handleDeleteAllDevices(request: Request, env: Env, userId: string): Promise<Response> {
-  const user = await userRepo(env.DB).getUserById(userId);
+export async function handleDeleteAllDevices(c: AppContext): Promise<Response> {
+  const { userId } = c.var;
+  const user = await userRepo(c.env.DB).getUserById(userId);
   if (!user) return errorResponse('User not found', 404);
 
-  const body = await parseBody(request, MasterPasswordSchema, PASSWORD_REQUIRED.error);
+  const body = await parseBody(c.req.raw, MasterPasswordSchema, PASSWORD_REQUIRED.error);
   if (body instanceof Response) return body;
   const { masterPasswordHash } = body;
-  const auth = new AuthService(env);
+  const auth = new AuthService(c.env);
   const passwordValid = await auth.verifyPassword(masterPasswordHash, user.masterPasswordHash, user.email);
   if (!passwordValid) {
     return errorResponse('Invalid password', 400);
@@ -457,60 +438,57 @@ export async function handleDeleteAllDevices(request: Request, env: Env, userId:
   const originalSecurityStamp = user.securityStamp;
   user.securityStamp = generateUUID();
   user.updatedAt = new Date().toISOString();
-  if (!(await userRepo(env.DB).saveUser(user, ['securityStamp'], originalSecurityStamp)))
+  if (!(await userRepo(c.env.DB).saveUser(user, ['securityStamp'], originalSecurityStamp)))
     return errorResponse('User verification failed.', 400);
   const [removedTrusted, removedSessions, removedDevices] = await Promise.all([
-    deviceRepo(env.DB).deleteTrustedTwoFactorTokensByUserId(userId),
-    sessionRepo(env.DB).deleteRefreshTokensByUserId(userId),
-    deviceRepo(env.DB).deleteDevicesByUserId(userId),
+    deviceRepo(c.env.DB).deleteTrustedTwoFactorTokensByUserId(userId),
+    sessionRepo(c.env.DB).deleteRefreshTokensByUserId(userId),
+    deviceRepo(c.env.DB).deleteDevicesByUserId(userId),
   ]);
   AuthService.invalidateUserCache(userId);
-  notifyUserLogout(env, userId, null);
-  await writeAuditEvent(env.DB, {
+  notifyUserLogout(c.env, userId, null);
+  await writeAuditEvent(c.env.DB, {
     actorUserId: userId,
     action: 'device.delete_all',
     category: 'device',
     level: 'security',
     targetType: 'user',
     targetId: userId,
-    metadata: { removedTrusted, removedSessions, removedDevices, ...auditRequestMetadata(request) },
+    metadata: { removedTrusted, removedSessions, removedDevices, ...auditRequestMetadata(c.req.raw) },
   });
   return jsonResponse({ success: true, removedTrusted, removedSessions: removedSessions ?? 0, removedDevices });
 }
 
 // PUT/POST /api/devices/identifier/:deviceIdentifier/keys
-export async function handleUpdateDeviceKeys(
-  request: Request,
-  env: Env,
-  userId: string,
-  deviceIdentifier: string,
-): Promise<Response> {
+export async function handleUpdateDeviceKeys(c: AppContext, deviceIdentifier: string): Promise<Response> {
+  const { userId } = c.var;
   const normalized = normalizeIdentifier(deviceIdentifier);
   if (!normalized) return errorResponse('Invalid device identifier', 400);
 
-  const keys = await parseBody(request, DeviceKeysSchema);
+  const keys = await parseBody(c.req.raw, DeviceKeysSchema);
   if (keys instanceof Response) return keys;
-  const device = await deviceRepo(env.DB).getDevice(userId, normalized);
+  const device = await deviceRepo(c.env.DB).getDevice(userId, normalized);
   if (!device) {
     return errorResponse('Device not found', 404);
   }
 
-  const updated = await deviceRepo(env.DB).updateDeviceKeys(userId, normalized, withStoredKeys(keys, device));
+  const updated = await deviceRepo(c.env.DB).updateDeviceKeys(userId, normalized, withStoredKeys(keys, device));
   if (!updated) {
     return errorResponse('Device not found', 404);
   }
 
-  const nextDevice = await deviceRepo(env.DB).getDevice(userId, normalized);
+  const nextDevice = await deviceRepo(c.env.DB).getDevice(userId, normalized);
   return jsonResponse(buildDeviceResponse(nextDevice || device));
 }
 
 // POST /api/devices/update-trust
-export async function handleUpdateDeviceTrust(request: Request, env: Env, userId: string): Promise<Response> {
-  const body = await parseBody(request, UpdateTrustSchema);
+export async function handleUpdateDeviceTrust(c: AppContext): Promise<Response> {
+  const { userId } = c.var;
+  const body = await parseBody(c.req.raw, UpdateTrustSchema);
   if (body instanceof Response) return body;
   const currentDeviceIdentifier =
-    normalizeIdentifier(request.headers.get('Device-Identifier')) ||
-    normalizeIdentifier(request.headers.get('X-Device-Identifier'));
+    normalizeIdentifier(c.req.raw.headers.get('Device-Identifier')) ||
+    normalizeIdentifier(c.req.raw.headers.get('X-Device-Identifier'));
   const requested = [
     ...(currentDeviceIdentifier && body.currentDevice
       ? [{ ...body.currentDevice, deviceId: currentDeviceIdentifier }]
@@ -520,47 +498,44 @@ export async function handleUpdateDeviceTrust(request: Request, env: Env, userId
 
   let updatedCount = 0;
   for (const { deviceId, ...keys } of requested) {
-    const stored = (await deviceRepo(env.DB).getDevice(userId, deviceId)) || undefined;
-    if (await deviceRepo(env.DB).updateDeviceKeys(userId, deviceId, withStoredKeys(keys, stored))) updatedCount++;
+    const stored = (await deviceRepo(c.env.DB).getDevice(userId, deviceId)) || undefined;
+    if (await deviceRepo(c.env.DB).updateDeviceKeys(userId, deviceId, withStoredKeys(keys, stored))) updatedCount++;
   }
 
   return jsonResponse({ success: true, updated: updatedCount });
 }
 
 // POST /api/devices/untrust
-export async function handleUntrustDevices(request: Request, env: Env, userId: string): Promise<Response> {
-  const body = await parseBody(request, z.object({ devices: z.array(z.coerce.string().trim()).default([]) }));
+export async function handleUntrustDevices(c: AppContext): Promise<Response> {
+  const { userId } = c.var;
+  const body = await parseBody(c.req.raw, z.object({ devices: z.array(z.coerce.string().trim()).default([]) }));
   if (body instanceof Response) return body;
   const { devices } = body;
-  const removed = await deviceRepo(env.DB).clearDeviceKeys(userId, devices);
+  const removed = await deviceRepo(c.env.DB).clearDeviceKeys(userId, devices);
   for (const deviceIdentifier of devices) {
     if (!deviceIdentifier) continue;
-    await deviceRepo(env.DB).deleteTrustedTwoFactorTokensByDevice(userId, deviceIdentifier);
+    await deviceRepo(c.env.DB).deleteTrustedTwoFactorTokensByDevice(userId, deviceIdentifier);
   }
-  await writeAuditEvent(env.DB, {
+  await writeAuditEvent(c.env.DB, {
     actorUserId: userId,
     action: 'device.trust.revoke_batch',
     category: 'device',
     level: 'security',
     targetType: 'user',
     targetId: userId,
-    metadata: { requested: devices.length, removed, ...auditRequestMetadata(request) },
+    metadata: { requested: devices.length, removed, ...auditRequestMetadata(c.req.raw) },
   });
   return jsonResponse({ success: true, removed });
 }
 
 // POST /api/devices/:deviceIdentifier/retrieve-keys
-export async function handleRetrieveDeviceKeys(
-  request: Request,
-  env: Env,
-  userId: string,
-  deviceIdentifier: string,
-): Promise<Response> {
-  void request;
+export async function handleRetrieveDeviceKeys(c: AppContext, deviceIdentifier: string): Promise<Response> {
+  const { userId } = c.var;
+  void c.req.raw;
   const normalized = normalizeIdentifier(deviceIdentifier);
   if (!normalized) return errorResponse('Invalid device identifier', 400);
 
-  const device = await deviceRepo(env.DB).getDevice(userId, normalized);
+  const device = await deviceRepo(c.env.DB).getDevice(userId, normalized);
   if (!device) {
     return errorResponse('Device not found', 404);
   }
@@ -589,59 +564,51 @@ export async function handleRetrieveDeviceKeys(
 }
 
 // POST /api/devices/:id/deactivate
-export async function handleDeactivateDevice(
-  request: Request,
-  env: Env,
-  userId: string,
-  deviceIdentifier: string,
-): Promise<Response> {
-  void request;
+export async function handleDeactivateDevice(c: AppContext, deviceIdentifier: string): Promise<Response> {
+  const { userId } = c.var;
+  void c.req.raw;
   const normalized = normalizeIdentifier(deviceIdentifier);
   if (!normalized) return errorResponse('Invalid device identifier', 400);
 
-  const device = await deviceRepo(env.DB).getDevice(userId, normalized);
-  await deviceRepo(env.DB).deleteTrustedTwoFactorTokensByDevice(userId, normalized);
-  await sessionRepo(env.DB).deleteRefreshTokensByDevice(userId, normalized);
-  const deleted = await deviceRepo(env.DB).deleteDevice(userId, normalized);
+  const device = await deviceRepo(c.env.DB).getDevice(userId, normalized);
+  await deviceRepo(c.env.DB).deleteTrustedTwoFactorTokensByDevice(userId, normalized);
+  await sessionRepo(c.env.DB).deleteRefreshTokensByDevice(userId, normalized);
+  const deleted = await deviceRepo(c.env.DB).deleteDevice(userId, normalized);
   if (deleted) {
-    await unregisterMobilePushDevice(env, device?.pushUuid);
+    await unregisterMobilePushDevice(c.env, device?.pushUuid);
     AuthService.invalidateDeviceCache(userId, normalized);
-    notifyUserLogout(env, userId, normalized);
+    notifyUserLogout(c.env, userId, normalized);
   }
-  await writeAuditEvent(env.DB, {
+  await writeAuditEvent(c.env.DB, {
     actorUserId: userId,
     action: 'device.deactivate',
     category: 'device',
     level: 'security',
     targetType: 'device',
     targetId: normalized,
-    metadata: { deleted, ...auditRequestMetadata(request) },
+    metadata: { deleted, ...auditRequestMetadata(c.req.raw) },
   });
   return jsonResponse({ success: deleted });
 }
 
 // PUT /api/devices/identifier/{deviceIdentifier}/token
 // Bitwarden mobile reports APNs/FCM push token updates to this endpoint.
-export async function handleUpdateDeviceToken(
-  request: Request,
-  env: Env,
-  userId: string,
-  deviceIdentifier: string,
-): Promise<Response> {
+export async function handleUpdateDeviceToken(c: AppContext, deviceIdentifier: string): Promise<Response> {
+  const { userId } = c.var;
   const normalized = normalizeIdentifier(deviceIdentifier);
   if (!normalized) return errorResponse('Invalid device identifier', 400);
 
-  const body = await parseBody(request, PushTokenSchema, PUSH_TOKEN_INVALID.error);
+  const body = await parseBody(c.req.raw, PushTokenSchema, PUSH_TOKEN_INVALID.error);
   if (body instanceof Response) return body;
   const { pushToken } = body;
 
-  const device = await deviceRepo(env.DB).getDevice(userId, normalized);
+  const device = await deviceRepo(c.env.DB).getDevice(userId, normalized);
   if (!device) return errorResponse('Device not found', 404);
 
   const pushUuid = device.pushUuid || generateUUID();
-  const updated = await deviceRepo(env.DB).updateDevicePushToken(userId, normalized, pushUuid, pushToken);
+  const updated = await deviceRepo(c.env.DB).updateDevicePushToken(userId, normalized, pushUuid, pushToken);
   if (updated) {
-    await registerMobilePushDevice(env, {
+    await registerMobilePushDevice(c.env, {
       userId,
       deviceIdentifier: normalized,
       type: device.type,
@@ -654,14 +621,10 @@ export async function handleUpdateDeviceToken(
 }
 
 // PUT/POST /api/devices/:deviceIdentifier/web-push-auth
-export async function handleUpdateDeviceWebPushAuth(
-  request: Request,
-  env: Env,
-  userId: string,
-  deviceIdentifier: string,
-): Promise<Response> {
-  void request;
-  void env;
+export async function handleUpdateDeviceWebPushAuth(c: AppContext, deviceIdentifier: string): Promise<Response> {
+  const { userId } = c.var;
+  void c.req.raw;
+  void c.env;
   void userId;
   void deviceIdentifier;
   return new Response(null, { status: 200 });

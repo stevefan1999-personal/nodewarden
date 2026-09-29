@@ -41,27 +41,17 @@ adminRoutes.on(
   },
 );
 
-adminRoutes.get('/api/admin/users', (c) => handleAdminListUsers(c.req.raw, c.env, c.get('currentUser')));
-adminRoutes.get('/api/admin/logs', (c) => handleAdminListAuditLogs(c.req.raw, c.env, c.get('currentUser')));
-adminRoutes.delete('/api/admin/logs', (c) => handleAdminClearAuditLogs(c.req.raw, c.env, c.get('currentUser')));
-adminRoutes.get('/api/admin/logs/settings', (c) =>
-  handleAdminGetAuditLogSettings(c.req.raw, c.env, c.get('currentUser')),
-);
-adminRoutes.on(['PUT', 'POST'], '/api/admin/logs/settings', (c) =>
-  handleAdminUpdateAuditLogSettings(c.req.raw, c.env, c.get('currentUser')),
-);
+adminRoutes.get('/api/admin/users', handleAdminListUsers);
+adminRoutes.get('/api/admin/logs', handleAdminListAuditLogs);
+adminRoutes.delete('/api/admin/logs', handleAdminClearAuditLogs);
+adminRoutes.get('/api/admin/logs/settings', handleAdminGetAuditLogSettings);
+adminRoutes.on(['PUT', 'POST'], '/api/admin/logs/settings', handleAdminUpdateAuditLogSettings);
 
 adminRoutes.route('/', adminBackupRoutes);
 
-adminRoutes.get('/api/admin/invites', (c) => handleAdminListInvites(c.req.raw, c.env, c.get('currentUser')));
-adminRoutes.post('/api/admin/invites', (c) => handleAdminCreateInvite(c.req.raw, c.env, c.get('currentUser')));
-adminRoutes.delete('/api/admin/invites', (c) => handleAdminDeleteAllInvites(c.req.raw, c.env, c.get('currentUser')));
-adminRoutes.delete('/api/admin/invites/:inviteCode', (c) =>
-  handleAdminDeleteInvite(c.req.raw, c.env, c.get('currentUser'), c.req.param('inviteCode')),
-);
-adminRoutes.on(['PUT', 'POST'], `${adminUser}/status`, (c) =>
-  handleAdminSetUserStatus(c.req.raw, c.env, c.get('currentUser'), c.req.param('userId')),
-);
-adminRoutes.delete(adminUser, (c) =>
-  handleAdminDeleteUser(c.req.raw, c.env, c.get('currentUser'), c.req.param('userId')),
-);
+adminRoutes.get('/api/admin/invites', handleAdminListInvites);
+adminRoutes.post('/api/admin/invites', handleAdminCreateInvite);
+adminRoutes.delete('/api/admin/invites', handleAdminDeleteAllInvites);
+adminRoutes.delete('/api/admin/invites/:inviteCode', (c) => handleAdminDeleteInvite(c, c.req.param('inviteCode')));
+adminRoutes.on(['PUT', 'POST'], `${adminUser}/status`, (c) => handleAdminSetUserStatus(c, c.req.param('userId')));
+adminRoutes.delete(adminUser, (c) => handleAdminDeleteUser(c, c.req.param('userId')));

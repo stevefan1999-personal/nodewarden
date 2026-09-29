@@ -1,3 +1,4 @@
+import type { AppContext } from '../router';
 import { z } from 'zod';
 import { Env, Send, SendAuthType, SendType } from '../types';
 import { recordSendEvent, recordSendEvents } from '../services/events';
@@ -161,19 +162,20 @@ async function processSendFileUpload(request: Request, env: Env, send: Send, fil
   return new Response(null, { status: 201 });
 }
 
-export async function handleGetSends(request: Request, env: Env, userId: string): Promise<Response> {
-  const url = new URL(request.url);
+export async function handleGetSends(c: AppContext): Promise<Response> {
+  const { userId } = c.var;
+  const url = new URL(c.req.raw.url);
   const pagination = parsePagination(url);
 
   let sends: Send[];
   let continuationToken: string | null = null;
   if (pagination) {
-    const pageRows = await sendRepo(env.DB).getSendsPage(userId, pagination.limit + 1, pagination.offset);
+    const pageRows = await sendRepo(c.env.DB).getSendsPage(userId, pagination.limit + 1, pagination.offset);
     const hasNext = pageRows.length > pagination.limit;
     sends = hasNext ? pageRows.slice(0, pagination.limit) : pageRows;
     continuationToken = hasNext ? encodeContinuationToken(pagination.offset + sends.length) : null;
   } else {
-    sends = await sendRepo(env.DB).getAllSends(userId);
+    sends = await sendRepo(c.env.DB).getAllSends(userId);
   }
 
   const sendResponses = sends.map(sendToResponse);
@@ -184,9 +186,10 @@ export async function handleGetSends(request: Request, env: Env, userId: string)
   });
 }
 
-export async function handleGetSend(request: Request, env: Env, userId: string, sendId: string): Promise<Response> {
-  void request;
-  const send = await sendRepo(env.DB).getSendForUser(sendId, userId);
+export async function handleGetSend(c: AppContext, sendId: string): Promise<Response> {
+  const { userId } = c.var;
+  void c.req.raw;
+  const send = await sendRepo(c.env.DB).getSendForUser(sendId, userId);
 
   if (!send || send.userId !== userId) {
     return errorResponse('Send not found', 404);
@@ -265,19 +268,21 @@ async function sendFileUploadResponse(request: Request, env: Env, send: Send, fi
   });
 }
 
-export async function handleCreateSend(request: Request, env: Env, userId: string): Promise<Response> {
-  const body = await parseBody(request, TextSendCreate);
+export async function handleCreateSend(c: AppContext): Promise<Response> {
+  const { userId } = c.var;
+  const body = await parseBody(c.req.raw, TextSendCreate);
   if (body instanceof Response) return body;
 
   const send = await parseNewSend(body, userId, SendType.Text, body.text);
   if (send instanceof Response) return send;
-  await saveSendAndNotify(request, env, send, 'created');
+  await saveSendAndNotify(c.req.raw, c.env, send, 'created');
   return jsonResponse(sendToResponse(send));
 }
 
-export async function handleCreateFileSendV2(request: Request, env: Env, userId: string): Promise<Response> {
-  const maxFileSize = getBlobStorageMaxBytes(env, LIMITS.send.maxFileSizeBytes);
-  const body = await parseBody(request, FileSendCreate);
+export async function handleCreateFileSendV2(c: AppContext): Promise<Response> {
+  const { userId } = c.var;
+  const maxFileSize = getBlobStorageMaxBytes(c.env, LIMITS.send.maxFileSizeBytes);
+  const body = await parseBody(c.req.raw, FileSendCreate);
   if (body instanceof Response) return body;
   if (body.fileLength > maxFileSize) return errorResponse('Send storage limit exceeded with this file', 400);
 
@@ -289,32 +294,22 @@ export async function handleCreateFileSendV2(request: Request, env: Env, userId:
     sizeName: formatSize(body.fileLength),
   });
   if (send instanceof Response) return send;
-  await saveSendAndNotify(request, env, send, 'created');
-  return sendFileUploadResponse(request, env, send, fileId);
+  await saveSendAndNotify(c.req.raw, c.env, send, 'created');
+  return sendFileUploadResponse(c.req.raw, c.env, send, fileId);
 }
 
-export async function handleGetSendFileUpload(
-  request: Request,
-  env: Env,
-  userId: string,
-  sendId: string,
-  fileId: string,
-): Promise<Response> {
-  const send = await sendRepo(env.DB).getSendForUser(sendId, userId);
+export async function handleGetSendFileUpload(c: AppContext, sendId: string, fileId: string): Promise<Response> {
+  const { userId } = c.var;
+  const send = await sendRepo(c.env.DB).getSendForUser(sendId, userId);
   if (!send || send.userId !== userId) return errorResponse('Send not found', 404);
   if (send.type !== SendType.File) return errorResponse('Send is not a file type send.', 400);
   if (!sendFileIdMatches(send, fileId)) return errorResponse('Send file does not match send data.', 400);
-  return sendFileUploadResponse(request, env, send, fileId);
+  return sendFileUploadResponse(c.req.raw, c.env, send, fileId);
 }
 
-export async function handleUploadSendFile(
-  request: Request,
-  env: Env,
-  userId: string,
-  sendId: string,
-  fileId: string,
-): Promise<Response> {
-  const send = await sendRepo(env.DB).getSendForUser(sendId, userId);
+export async function handleUploadSendFile(c: AppContext, sendId: string, fileId: string): Promise<Response> {
+  const { userId } = c.var;
+  const send = await sendRepo(c.env.DB).getSendForUser(sendId, userId);
   if (!send || send.userId !== userId) {
     return errorResponse('Send not found. Unable to save the file.', 404);
   }
@@ -322,21 +317,16 @@ export async function handleUploadSendFile(
     return errorResponse('Send is not a file type send.', 400);
   }
 
-  return processSendFileUpload(request, env, send, fileId);
+  return processSendFileUpload(c.req.raw, c.env, send, fileId);
 }
 
-export async function handlePublicUploadSendFile(
-  request: Request,
-  env: Env,
-  sendId: string,
-  fileId: string,
-): Promise<Response> {
-  const token = new URL(request.url).searchParams.get('token');
+export async function handlePublicUploadSendFile(c: AppContext, sendId: string, fileId: string): Promise<Response> {
+  const token = new URL(c.req.raw.url).searchParams.get('token');
   if (!token) {
     return errorResponse('Token required', 401);
   }
 
-  const claims = await verifySendFileUploadToken(token, env.JWT_SECRET);
+  const claims = await verifySendFileUploadToken(token, c.env.JWT_SECRET);
   if (!claims) {
     return errorResponse('Invalid or expired token', 401);
   }
@@ -344,7 +334,7 @@ export async function handlePublicUploadSendFile(
     return errorResponse('Token mismatch', 401);
   }
 
-  const send = await sendRepo(env.DB).getSendForUser(sendId, claims.userId);
+  const send = await sendRepo(c.env.DB).getSendForUser(sendId, claims.userId);
   if (!send || send.userId !== claims.userId) {
     return errorResponse('Send not found. Unable to save the file.', 404);
   }
@@ -352,16 +342,17 @@ export async function handlePublicUploadSendFile(
     return errorResponse('Send is not a file type send.', 400);
   }
 
-  return processSendFileUpload(request, env, send, fileId);
+  return processSendFileUpload(c.req.raw, c.env, send, fileId);
 }
 
-export async function handleUpdateSend(request: Request, env: Env, userId: string, sendId: string): Promise<Response> {
-  const send = await sendRepo(env.DB).getSendForUser(sendId, userId);
+export async function handleUpdateSend(c: AppContext, sendId: string): Promise<Response> {
+  const { userId } = c.var;
+  const send = await sendRepo(c.env.DB).getSendForUser(sendId, userId);
   if (!send || send.userId !== userId) {
     return errorResponse('Send not found', 404);
   }
 
-  const body = await parseBody(request, SendEdit);
+  const body = await parseBody(c.req.raw, SendEdit);
   if (body instanceof Response) return body;
   if (body.type !== undefined && body.type !== send.type) return errorResponse("Sends can't change type", 400);
   if (body.authType === SendAuthType.Email || body.emails)
@@ -381,26 +372,27 @@ export async function handleUpdateSend(request: Request, env: Env, userId: strin
   }
 
   send.updatedAt = new Date().toISOString();
-  await saveSendAndNotify(request, env, send, 'edited');
+  await saveSendAndNotify(c.req.raw, c.env, send, 'edited');
 
   return jsonResponse(sendToResponse(send));
 }
 
-export async function handleDeleteSend(request: Request, env: Env, userId: string, sendId: string): Promise<Response> {
-  const send = await sendRepo(env.DB).getSendForUser(sendId, userId);
+export async function handleDeleteSend(c: AppContext, sendId: string): Promise<Response> {
+  const { userId } = c.var;
+  const send = await sendRepo(c.env.DB).getSendForUser(sendId, userId);
   if (!send || send.userId !== userId) {
     return errorResponse('Send not found', 404);
   }
 
   const fileId = send.type === SendType.File ? parseStoredSendData(send).id : undefined;
-  if (fileId) await deleteBlobObject(env, getSendFileObjectKey(send.id, fileId));
+  if (fileId) await deleteBlobObject(c.env, getSendFileObjectKey(send.id, fileId));
 
-  await sendRepo(env.DB).deleteSend(sendId, userId);
-  const revisionDate = await revisionRepo(env.DB).updateRevisionDate(userId);
-  notifyUserVaultSync(env, userId, revisionDate, readActingDeviceIdentifier(request));
-  notifyUserSendDelete(env, { userId, sendId, revisionDate, contextId: readActingDeviceIdentifier(request) });
-  await recordSendEvent(env, request, send, 'deleted');
-  await writeDataAudit(env.DB, request, userId, 'send', 'send.delete', {
+  await sendRepo(c.env.DB).deleteSend(sendId, userId);
+  const revisionDate = await revisionRepo(c.env.DB).updateRevisionDate(userId);
+  notifyUserVaultSync(c.env, userId, revisionDate, readActingDeviceIdentifier(c.req.raw));
+  notifyUserSendDelete(c.env, { userId, sendId, revisionDate, contextId: readActingDeviceIdentifier(c.req.raw) });
+  await recordSendEvent(c.env, c.req.raw, send, 'deleted');
+  await writeDataAudit(c.env.DB, c.req.raw, userId, 'send', 'send.delete', {
     id: sendId,
     type: send.type,
   });
@@ -408,29 +400,30 @@ export async function handleDeleteSend(request: Request, env: Env, userId: strin
   return new Response(null, { status: 200 });
 }
 
-export async function handleBulkDeleteSends(request: Request, env: Env, userId: string): Promise<Response> {
-  const body = await parseBody(request, SendIds);
+export async function handleBulkDeleteSends(c: AppContext): Promise<Response> {
+  const { userId } = c.var;
+  const body = await parseBody(c.req.raw, SendIds);
   if (body instanceof Response) return body;
 
-  const sends = await sendRepo(env.DB).getSendsByIds(body.ids, userId);
+  const sends = await sendRepo(c.env.DB).getSendsByIds(body.ids, userId);
   for (const send of sends) {
     const fileId = send.type === SendType.File ? parseStoredSendData(send).id : undefined;
-    if (fileId) await deleteBlobObject(env, getSendFileObjectKey(send.id, fileId));
+    if (fileId) await deleteBlobObject(c.env, getSendFileObjectKey(send.id, fileId));
   }
 
-  const revisionDate = await sendRepo(env.DB).bulkDeleteSends(body.ids, userId);
+  const revisionDate = await sendRepo(c.env.DB).bulkDeleteSends(body.ids, userId);
   if (revisionDate) {
-    notifyUserVaultSync(env, userId, revisionDate, readActingDeviceIdentifier(request));
+    notifyUserVaultSync(c.env, userId, revisionDate, readActingDeviceIdentifier(c.req.raw));
     for (const send of sends) {
-      notifyUserSendDelete(env, {
+      notifyUserSendDelete(c.env, {
         userId,
         sendId: send.id,
         revisionDate,
-        contextId: readActingDeviceIdentifier(request),
+        contextId: readActingDeviceIdentifier(c.req.raw),
       });
     }
-    await recordSendEvents(env, request, userId, sends, 'deleted');
-    await writeDataAudit(env.DB, request, userId, 'send', 'send.delete.bulk', {
+    await recordSendEvents(c.env, c.req.raw, userId, sends, 'deleted');
+    await writeDataAudit(c.env.DB, c.req.raw, userId, 'send', 'send.delete.bulk', {
       count: sends.length,
       requestedCount: body.ids.length,
     });
@@ -439,21 +432,17 @@ export async function handleBulkDeleteSends(request: Request, env: Env, userId: 
   return new Response(null, { status: 200 });
 }
 
-export async function handleRemoveSendPassword(
-  request: Request,
-  env: Env,
-  userId: string,
-  sendId: string,
-): Promise<Response> {
-  const send = await sendRepo(env.DB).getSendForUser(sendId, userId);
+export async function handleRemoveSendPassword(c: AppContext, sendId: string): Promise<Response> {
+  const { userId } = c.var;
+  const send = await sendRepo(c.env.DB).getSendForUser(sendId, userId);
   if (!send || send.userId !== userId) {
     return errorResponse('Send not found', 404);
   }
 
   await setSendPassword(send, null);
   send.updatedAt = new Date().toISOString();
-  await saveSendAndNotify(request, env, send, 'edited');
-  await writeDataAudit(env.DB, request, userId, 'send', 'send.password.remove', {
+  await saveSendAndNotify(c.req.raw, c.env, send, 'edited');
+  await writeDataAudit(c.env.DB, c.req.raw, userId, 'send', 'send.password.remove', {
     id: send.id,
     type: send.type,
   });
@@ -461,13 +450,9 @@ export async function handleRemoveSendPassword(
   return jsonResponse(sendToResponse(send));
 }
 
-export async function handleRemoveSendAuth(
-  request: Request,
-  env: Env,
-  userId: string,
-  sendId: string,
-): Promise<Response> {
-  const send = await sendRepo(env.DB).getSendForUser(sendId, userId);
+export async function handleRemoveSendAuth(c: AppContext, sendId: string): Promise<Response> {
+  const { userId } = c.var;
+  const send = await sendRepo(c.env.DB).getSendForUser(sendId, userId);
   if (!send || send.userId !== userId) {
     return errorResponse('Send not found', 404);
   }
@@ -475,8 +460,8 @@ export async function handleRemoveSendAuth(
   send.authType = SendAuthType.None;
   send.emails = null;
   send.updatedAt = new Date().toISOString();
-  await saveSendAndNotify(request, env, send, 'edited');
-  await writeDataAudit(env.DB, request, userId, 'send', 'send.auth.remove', {
+  await saveSendAndNotify(c.req.raw, c.env, send, 'edited');
+  await writeDataAudit(c.env.DB, c.req.raw, userId, 'send', 'send.auth.remove', {
     id: send.id,
     type: send.type,
   });

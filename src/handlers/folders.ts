@@ -1,5 +1,6 @@
+import type { AppContext } from '../router';
 import { z } from 'zod';
-import { Env, Folder, FolderResponse } from '../types';
+import { Folder, FolderResponse } from '../types';
 import {
   notifyUserFolderCreate,
   notifyUserFolderDelete,
@@ -27,19 +28,20 @@ function folderToResponse(folder: Folder): FolderResponse {
 }
 
 // GET /api/folders
-export async function handleGetFolders(request: Request, env: Env, userId: string): Promise<Response> {
-  const url = new URL(request.url);
+export async function handleGetFolders(c: AppContext): Promise<Response> {
+  const { userId } = c.var;
+  const url = new URL(c.req.raw.url);
   const pagination = parsePagination(url);
 
   let folders: Folder[];
   let continuationToken: string | null = null;
   if (pagination) {
-    const pageRows = await folderRepo(env.DB).getFoldersPage(userId, pagination.limit + 1, pagination.offset);
+    const pageRows = await folderRepo(c.env.DB).getFoldersPage(userId, pagination.limit + 1, pagination.offset);
     const hasNext = pageRows.length > pagination.limit;
     folders = hasNext ? pageRows.slice(0, pagination.limit) : pageRows;
     continuationToken = hasNext ? encodeContinuationToken(pagination.offset + folders.length) : null;
   } else {
-    folders = await folderRepo(env.DB).getAllFolders(userId);
+    folders = await folderRepo(c.env.DB).getAllFolders(userId);
   }
 
   return jsonResponse({
@@ -50,8 +52,9 @@ export async function handleGetFolders(request: Request, env: Env, userId: strin
 }
 
 // GET /api/folders/:id
-export async function handleGetFolder(request: Request, env: Env, userId: string, id: string): Promise<Response> {
-  const folder = await folderRepo(env.DB).getFolderForUser(id, userId);
+export async function handleGetFolder(c: AppContext, id: string): Promise<Response> {
+  const { userId } = c.var;
+  const folder = await folderRepo(c.env.DB).getFolderForUser(id, userId);
 
   if (!folder || folder.userId !== userId) {
     return errorResponse('Folder not found', 404);
@@ -61,9 +64,10 @@ export async function handleGetFolder(request: Request, env: Env, userId: string
 }
 
 // POST /api/folders
-export async function handleCreateFolder(request: Request, env: Env, userId: string): Promise<Response> {
+export async function handleCreateFolder(c: AppContext): Promise<Response> {
+  const { userId } = c.var;
   const body = await parseBody(
-    request,
+    c.req.raw,
     z.object({
       name: z.string({ error: 'Name is required' }).min(1, { error: 'Name is required' }),
     }),
@@ -79,28 +83,29 @@ export async function handleCreateFolder(request: Request, env: Env, userId: str
     updatedAt: now,
   };
 
-  await folderRepo(env.DB).saveFolder(folder);
-  const revisionDate = await revisionRepo(env.DB).updateRevisionDate(userId);
-  notifyUserVaultSync(env, userId, revisionDate, readActingDeviceIdentifier(request));
-  notifyUserFolderCreate(env, {
+  await folderRepo(c.env.DB).saveFolder(folder);
+  const revisionDate = await revisionRepo(c.env.DB).updateRevisionDate(userId);
+  notifyUserVaultSync(c.env, userId, revisionDate, readActingDeviceIdentifier(c.req.raw));
+  notifyUserFolderCreate(c.env, {
     userId,
     folderId: folder.id,
     revisionDate,
-    contextId: readActingDeviceIdentifier(request),
+    contextId: readActingDeviceIdentifier(c.req.raw),
   });
 
   return jsonResponse(folderToResponse(folder), 200);
 }
 
 // PUT /api/folders/:id
-export async function handleUpdateFolder(request: Request, env: Env, userId: string, id: string): Promise<Response> {
-  const folder = await folderRepo(env.DB).getFolderForUser(id, userId);
+export async function handleUpdateFolder(c: AppContext, id: string): Promise<Response> {
+  const { userId } = c.var;
+  const folder = await folderRepo(c.env.DB).getFolderForUser(id, userId);
 
   if (!folder || folder.userId !== userId) {
     return errorResponse('Folder not found', 404);
   }
 
-  const body = await parseBody(request, z.object({ name: z.string().nullish() }));
+  const body = await parseBody(c.req.raw, z.object({ name: z.string().nullish() }));
   if (body instanceof Response) return body;
 
   if (body.name) {
@@ -108,33 +113,39 @@ export async function handleUpdateFolder(request: Request, env: Env, userId: str
   }
   folder.updatedAt = new Date().toISOString();
 
-  await folderRepo(env.DB).saveFolder(folder);
-  const revisionDate = await revisionRepo(env.DB).updateRevisionDate(userId);
-  notifyUserVaultSync(env, userId, revisionDate, readActingDeviceIdentifier(request));
-  notifyUserFolderUpdate(env, {
+  await folderRepo(c.env.DB).saveFolder(folder);
+  const revisionDate = await revisionRepo(c.env.DB).updateRevisionDate(userId);
+  notifyUserVaultSync(c.env, userId, revisionDate, readActingDeviceIdentifier(c.req.raw));
+  notifyUserFolderUpdate(c.env, {
     userId,
     folderId: folder.id,
     revisionDate,
-    contextId: readActingDeviceIdentifier(request),
+    contextId: readActingDeviceIdentifier(c.req.raw),
   });
 
   return jsonResponse(folderToResponse(folder));
 }
 
 // DELETE /api/folders/:id
-export async function handleDeleteFolder(request: Request, env: Env, userId: string, id: string): Promise<Response> {
-  const folder = await folderRepo(env.DB).getFolderForUser(id, userId);
+export async function handleDeleteFolder(c: AppContext, id: string): Promise<Response> {
+  const { userId } = c.var;
+  const folder = await folderRepo(c.env.DB).getFolderForUser(id, userId);
 
   if (!folder || folder.userId !== userId) {
     return errorResponse('Folder not found', 404);
   }
 
-  await folderRepo(env.DB).clearFolderFromCiphers(userId, id);
-  await folderRepo(env.DB).deleteFolder(id, userId);
-  const revisionDate = await revisionRepo(env.DB).updateRevisionDate(userId);
-  notifyUserVaultSync(env, userId, revisionDate, readActingDeviceIdentifier(request));
-  notifyUserFolderDelete(env, { userId, folderId: id, revisionDate, contextId: readActingDeviceIdentifier(request) });
-  await writeDataAudit(env.DB, request, userId, 'folder', 'folder.delete', {
+  await folderRepo(c.env.DB).clearFolderFromCiphers(userId, id);
+  await folderRepo(c.env.DB).deleteFolder(id, userId);
+  const revisionDate = await revisionRepo(c.env.DB).updateRevisionDate(userId);
+  notifyUserVaultSync(c.env, userId, revisionDate, readActingDeviceIdentifier(c.req.raw));
+  notifyUserFolderDelete(c.env, {
+    userId,
+    folderId: id,
+    revisionDate,
+    contextId: readActingDeviceIdentifier(c.req.raw),
+  });
+  await writeDataAudit(c.env.DB, c.req.raw, userId, 'folder', 'folder.delete', {
     id,
   });
 
@@ -142,31 +153,32 @@ export async function handleDeleteFolder(request: Request, env: Env, userId: str
 }
 
 // POST /api/folders/delete
-export async function handleBulkDeleteFolders(request: Request, env: Env, userId: string): Promise<Response> {
-  const body = await parseBody(request, z.object({ ids: nonEmptyIdList('Folder ids are required') }));
+export async function handleBulkDeleteFolders(c: AppContext): Promise<Response> {
+  const { userId } = c.var;
+  const body = await parseBody(c.req.raw, z.object({ ids: nonEmptyIdList('Folder ids are required') }));
   if (body instanceof Response) return body;
   const { ids } = body;
 
   const folders = (
     await Promise.all(
       ids.map(async (id) => {
-        const folder = await folderRepo(env.DB).getFolderForUser(id, userId);
+        const folder = await folderRepo(c.env.DB).getFolderForUser(id, userId);
         return folder;
       }),
     )
   ).filter((folder): folder is Folder => !!folder);
-  const revisionDate = await folderRepo(env.DB).bulkDeleteFolders(ids, userId);
+  const revisionDate = await folderRepo(c.env.DB).bulkDeleteFolders(ids, userId);
   if (revisionDate) {
-    notifyUserVaultSync(env, userId, revisionDate, readActingDeviceIdentifier(request));
+    notifyUserVaultSync(c.env, userId, revisionDate, readActingDeviceIdentifier(c.req.raw));
     for (const folder of folders) {
-      notifyUserFolderDelete(env, {
+      notifyUserFolderDelete(c.env, {
         userId,
         folderId: folder.id,
         revisionDate,
-        contextId: readActingDeviceIdentifier(request),
+        contextId: readActingDeviceIdentifier(c.req.raw),
       });
     }
-    await writeDataAudit(env.DB, request, userId, 'folder', 'folder.delete.bulk', {
+    await writeDataAudit(c.env.DB, c.req.raw, userId, 'folder', 'folder.delete.bulk', {
       count: ids.length,
     });
   }

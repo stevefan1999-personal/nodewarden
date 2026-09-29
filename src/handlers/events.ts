@@ -1,8 +1,8 @@
+import type { AppContext } from '../router';
 import { inArray } from 'drizzle-orm';
 import { z } from 'zod';
 import { getOrm, statementChunks } from '../db/client';
 import { ciphers } from '../db/schema';
-import type { Env, User } from '../types';
 import { errorResponse, parseBody } from '../utils/response';
 import { canAccessEventLogs, canViewCipher, hasFullCollectionAccess, isActiveMember } from '../services/org-authz';
 import { orgRepo } from '../services/storage-org-repo';
@@ -48,24 +48,19 @@ const ClientEvents = z
   .min(1, INVALID_EVENTS)
   .max(MAX_COLLECTED_EVENTS, INVALID_EVENTS);
 
-export async function handleEventRoute(
-  request: Request,
-  env: Env,
-  user: User,
-  path: string,
-  method: string,
-): Promise<Response | null> {
+export async function handleEventRoute(c: AppContext, path: string, method: string): Promise<Response | null> {
+  const { currentUser: user } = c.var;
   if (path === '/events/collect') {
     if (method !== 'POST') return errorResponse('Method not allowed', 405);
-    const input = await parseBody(request, ClientEvents, INVALID_EVENTS.error);
+    const input = await parseBody(c.req.raw, ClientEvents, INVALID_EVENTS.error);
     if (input instanceof Response) return input;
-    const memberships = (await orgRepo(env.DB).listMembershipsByUser(user.id)).filter(isActiveMember);
+    const memberships = (await orgRepo(c.env.DB).listMembershipsByUser(user.id)).filter(isActiveMember);
     // Charge before any lookup, counting the organization copies an export fans out to.
     const exportCopies =
       input.filter((event) => event.type === EventType.UserClientExportedVault).length * memberships.length;
     const batches = Math.ceil((input.length + exportCopies) / CLIENT_EVENT_UPLOAD_BATCH);
     if (batches > EVENT_BATCHES_PER_MINUTE) return errorResponse('Invalid events.', 400);
-    const budget = await new RateLimitService(env).consumeBudget(
+    const budget = await new RateLimitService(c.env).consumeBudget(
       `${user.id}:events`,
       EVENT_BATCHES_PER_MINUTE,
       batches,
@@ -79,12 +74,14 @@ export async function handleEventRoute(
       ),
     ];
     const readCiphers = (chunk: string[]) =>
-      getOrm(env.DB)
+      getOrm(c.env.DB)
         .select({ id: ciphers.id, organizationId: ciphers.organizationId })
         .from(ciphers)
         .where(inArray(ciphers.id, chunk));
     const cipherRows = (await Promise.all(statementChunks(ids, readCiphers).map(readCiphers))).flat();
-    const collections = await orgRepo(env.DB).listCipherCollectionIdsByCipherIds(cipherRows.map((cipher) => cipher.id));
+    const collections = await orgRepo(c.env.DB).listCipherCollectionIdsByCipherIds(
+      cipherRows.map((cipher) => cipher.id),
+    );
     const accessByOrg = new Map(
       await Promise.all(
         [...new Set(cipherRows.map((cipher) => cipher.organizationId))]
@@ -97,7 +94,7 @@ export async function handleEventRoute(
               [
                 orgId,
                 new Map(
-                  (await orgRepo(env.DB).listUserCollectionAccess(user.id, orgId)).map((access) => [
+                  (await orgRepo(c.env.DB).listUserCollectionAccess(user.id, orgId)).map((access) => [
                     access.collectionId,
                     access,
                   ]),
@@ -151,44 +148,52 @@ export async function handleEventRoute(
       }
     }
     // Unrecognized actions and inaccessible resources have the same acknowledged outcome.
-    await storeEvents(env, request, { userId: user.id }, records);
+    await storeEvents(c.env, c.req.raw, { userId: user.id }, records);
     return new Response(null, { status: 200 });
   }
   if (path === '/api/events')
     return method === 'GET'
-      ? listEventsResponse(request, env.DB, { personalUserId: user.id })
+      ? listEventsResponse(c.req.raw, c.env.DB, { personalUserId: user.id })
       : errorResponse('Method not allowed', 405);
   const cipherPath = path.match(/^\/api\/ciphers\/([a-f0-9-]+)\/events$/i);
   if (cipherPath) {
     if (method !== 'GET') return errorResponse('Method not allowed', 405);
-    const cipher = await cipherRepo(env.DB).getCipher(cipherPath[1]);
+    const cipher = await cipherRepo(c.env.DB).getCipher(cipherPath[1]);
     if (!cipher) return errorResponse('Not found', 404);
     if (cipher.organizationId) {
-      if (!canAccessEventLogs(await orgRepo(env.DB).getMembershipByUserAndOrg(user.id, cipher.organizationId)))
+      if (!canAccessEventLogs(await orgRepo(c.env.DB).getMembershipByUserAndOrg(user.id, cipher.organizationId)))
         return errorResponse('Not found', 404);
-      return listEventsResponse(request, env.DB, {
+      return listEventsResponse(c.req.raw, c.env.DB, {
         organizationId: cipher.organizationId,
         resourceType: 'cipher',
         resourceId: cipher.id,
       });
     }
     return cipher.userId === user.id
-      ? listEventsResponse(request, env.DB, { personalUserId: user.id, resourceType: 'cipher', resourceId: cipher.id })
+      ? listEventsResponse(c.req.raw, c.env.DB, {
+          personalUserId: user.id,
+          resourceType: 'cipher',
+          resourceId: cipher.id,
+        })
       : errorResponse('Not found', 404);
   }
   const orgPath = path.match(/^\/api\/organizations\/([a-f0-9-]+)(?:\/(users|sends)\/([a-f0-9-]+))?\/events$/i);
   if (!orgPath) return null;
   if (method !== 'GET') return errorResponse('Method not allowed', 405);
   const orgId = orgPath[1];
-  if (!canAccessEventLogs(await orgRepo(env.DB).getMembershipByUserAndOrg(user.id, orgId)))
+  if (!canAccessEventLogs(await orgRepo(c.env.DB).getMembershipByUserAndOrg(user.id, orgId)))
     return errorResponse('Not found', 404);
   if (orgPath[2] === 'users') {
-    const member = await orgRepo(env.DB).getMembership(orgPath[3]);
+    const member = await orgRepo(c.env.DB).getMembership(orgPath[3]);
     if (!member?.userId || member.orgId !== orgId) return errorResponse('Not found', 404);
-    return listEventsResponse(request, env.DB, { organizationId: orgId, actingUserId: member.userId });
+    return listEventsResponse(c.req.raw, c.env.DB, { organizationId: orgId, actingUserId: member.userId });
   }
   // As upstream GetSend: the rows are already scoped to this organization, so a deleted Send keeps its history.
   if (orgPath[2] === 'sends')
-    return listEventsResponse(request, env.DB, { organizationId: orgId, resourceType: 'send', resourceId: orgPath[3] });
-  return listEventsResponse(request, env.DB, { organizationId: orgId });
+    return listEventsResponse(c.req.raw, c.env.DB, {
+      organizationId: orgId,
+      resourceType: 'send',
+      resourceId: orgPath[3],
+    });
+  return listEventsResponse(c.req.raw, c.env.DB, { organizationId: orgId });
 }

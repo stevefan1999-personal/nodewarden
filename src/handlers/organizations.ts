@@ -1,3 +1,4 @@
+import type { AppContext } from '../router';
 import { z } from 'zod';
 import { twoFactorProviders } from '../services/two-factor-providers';
 import type { Env, User } from '../types';
@@ -158,11 +159,12 @@ export async function createOwnedOrganization(
   return org;
 }
 
-export async function handleCreateOrganization(request: Request, env: Env, user: User): Promise<Response> {
-  const body = await parseBody(request, CreateOrganizationRequest);
+export async function handleCreateOrganization(c: AppContext): Promise<Response> {
+  const { currentUser: user } = c.var;
+  const body = await parseBody(c.req.raw, CreateOrganizationRequest);
   if (body instanceof Response) return body;
 
-  const org = await createOwnedOrganization(env.DB, user, {
+  const org = await createOwnedOrganization(c.env.DB, user, {
     name: body.name,
     billingEmail: body.billingEmail || user.email,
     collectionName: body.collectionName || 'Default Collection',
@@ -174,48 +176,41 @@ export async function handleCreateOrganization(request: Request, env: Env, user:
   return jsonResponse(organizationResponse(org));
 }
 
-export async function handleGetOrganization(
-  _request: Request,
-  env: Env,
-  userId: string,
-  orgId: string,
-): Promise<Response> {
-  const member = await requireMember(env.DB, userId, orgId);
+export async function handleGetOrganization(c: AppContext, orgId: string): Promise<Response> {
+  const { userId } = c.var;
+  const member = await requireMember(c.env.DB, userId, orgId);
   if (member instanceof Response) return member;
-  const org = await orgRepo(env.DB).getOrganization(orgId);
+  const org = await orgRepo(c.env.DB).getOrganization(orgId);
   if (!org) return errorResponse('Organization not found', 404);
   return jsonResponse(organizationResponse(org));
 }
 
-export async function handleUpdateOrganization(
-  request: Request,
-  env: Env,
-  userId: string,
-  orgId: string,
-): Promise<Response> {
-  const member = await requireMember(env.DB, userId, orgId);
+export async function handleUpdateOrganization(c: AppContext, orgId: string): Promise<Response> {
+  const { userId } = c.var;
+  const member = await requireMember(c.env.DB, userId, orgId);
   if (member instanceof Response) return member;
   if (member.type > MembershipType.Admin) return errorResponse('Access denied', 403);
-  const org = await orgRepo(env.DB).getOrganization(orgId);
+  const org = await orgRepo(c.env.DB).getOrganization(orgId);
   if (!org) return errorResponse('Organization not found', 404);
-  const body = await parseBody(request, z.object({ name: optionalText, billingEmail: optionalText }));
+  const body = await parseBody(c.req.raw, z.object({ name: optionalText, billingEmail: optionalText }));
   if (body instanceof Response) return body;
   const previousSettings = [org.name, org.billingEmail];
   org.name = body.name || org.name;
   org.billingEmail = body.billingEmail || org.billingEmail;
   org.updatedAt = new Date().toISOString();
-  await orgRepo(env.DB).updateOrganization(org);
+  await orgRepo(c.env.DB).updateOrganization(org);
   if (org.name !== previousSettings[0] || org.billingEmail !== previousSettings[1]) {
-    await recordEvents(env, request, { userId }, [{ type: EventType.OrganizationUpdated, organizationId: orgId }]);
+    await recordEvents(c.env, c.req.raw, { userId }, [{ type: EventType.OrganizationUpdated, organizationId: orgId }]);
   }
   return jsonResponse(organizationResponse(org));
 }
 
-export async function handleDeleteOrganization(env: Env, userId: string, orgId: string): Promise<Response> {
-  const member = await requireMember(env.DB, userId, orgId);
+export async function handleDeleteOrganization(c: AppContext, orgId: string): Promise<Response> {
+  const { userId } = c.var;
+  const member = await requireMember(c.env.DB, userId, orgId);
   if (member instanceof Response) return member;
   if (!canDeleteOrganization(member)) return errorResponse('Only an owner can delete the organization', 403);
-  await deleteOrganizationAccount(env, orgId, {
+  await deleteOrganizationAccount(c.env, orgId, {
     actorUserId: userId,
     action: 'organization.delete',
     category: 'security',
@@ -226,19 +221,15 @@ export async function handleDeleteOrganization(env: Env, userId: string, orgId: 
   return jsonResponse({});
 }
 
-export async function handleLeaveOrganization(
-  request: Request,
-  env: Env,
-  userId: string,
-  orgId: string,
-): Promise<Response> {
-  const member = await requireMember(env.DB, userId, orgId);
+export async function handleLeaveOrganization(c: AppContext, orgId: string): Promise<Response> {
+  const { userId } = c.var;
+  const member = await requireMember(c.env.DB, userId, orgId);
   if (member instanceof Response) return member;
-  if (member.type === MembershipType.Owner && (await orgRepo(env.DB).countConfirmedOwners(orgId)) <= 1) {
+  if (member.type === MembershipType.Owner && (await orgRepo(c.env.DB).countConfirmedOwners(orgId)) <= 1) {
     return errorResponse('The last owner cannot leave', 400);
   }
-  await orgRepo(env.DB).applyMembershipAction(orgId, [member.id], 'remove');
-  await recordEvents(env, request, { userId }, [
+  await orgRepo(c.env.DB).applyMembershipAction(orgId, [member.id], 'remove');
+  await recordEvents(c.env, c.req.raw, { userId }, [
     {
       type: EventType.OrganizationUserLeft,
       organizationId: orgId,
@@ -250,34 +241,31 @@ export async function handleLeaveOrganization(
   return jsonResponse({});
 }
 
-export async function handlePostOrganizationKeys(
-  request: Request,
-  env: Env,
-  userId: string,
-  orgId: string,
-): Promise<Response> {
-  const member = await requireMember(env.DB, userId, orgId);
+export async function handlePostOrganizationKeys(c: AppContext, orgId: string): Promise<Response> {
+  const { userId } = c.var;
+  const member = await requireMember(c.env.DB, userId, orgId);
   if (member instanceof Response) return member;
   if (member.type > MembershipType.Admin) return errorResponse('Access denied', 403);
-  const org = await orgRepo(env.DB).getOrganization(orgId);
+  const org = await orgRepo(c.env.DB).getOrganization(orgId);
   if (!org) return errorResponse('Organization not found', 404);
-  const body = await parseBody(request, OrganizationKeysRequest);
+  const body = await parseBody(c.req.raw, OrganizationKeysRequest);
   if (body instanceof Response) return body;
   const previousKeys = [org.publicKey, org.privateKey];
   org.publicKey = body.publicKey || org.publicKey;
   org.privateKey = body.encryptedPrivateKey || org.privateKey;
   org.updatedAt = new Date().toISOString();
-  await orgRepo(env.DB).updateOrganization(org);
+  await orgRepo(c.env.DB).updateOrganization(org);
   if (org.publicKey !== previousKeys[0] || org.privateKey !== previousKeys[1]) {
-    await recordEvents(env, request, { userId }, [{ type: EventType.OrganizationUpdated, organizationId: orgId }]);
+    await recordEvents(c.env, c.req.raw, { userId }, [{ type: EventType.OrganizationUpdated, organizationId: orgId }]);
   }
   return jsonResponse({ publicKey: org.publicKey, privateKey: org.privateKey, object: 'organizationKeys' });
 }
 
-export async function handleGetOrganizationKeys(env: Env, userId: string, orgId: string): Promise<Response> {
-  const member = await requireMember(env.DB, userId, orgId);
+export async function handleGetOrganizationKeys(c: AppContext, orgId: string): Promise<Response> {
+  const { userId } = c.var;
+  const member = await requireMember(c.env.DB, userId, orgId);
   if (member instanceof Response) return member;
-  const org = await orgRepo(env.DB).getOrganization(orgId);
+  const org = await orgRepo(c.env.DB).getOrganization(orgId);
   if (!org) return errorResponse('Organization not found', 404);
   return jsonResponse({ publicKey: org.publicKey, privateKey: org.privateKey, object: 'organizationKeys' });
 }
@@ -299,13 +287,14 @@ function collectionJson(
   };
 }
 
-export async function handleListAllCollections(env: Env, userId: string): Promise<Response> {
-  const memberships = await orgRepo(env.DB).listMembershipsByUser(userId);
+export async function handleListAllCollections(c: AppContext): Promise<Response> {
+  const { userId } = c.var;
+  const memberships = await orgRepo(c.env.DB).listMembershipsByUser(userId);
   const data = [];
   for (const member of memberships) {
     if (!isActiveMember(member)) continue;
-    const collections = await orgRepo(env.DB).listCollectionsByOrg(member.orgId);
-    const assigned = await orgRepo(env.DB).listUserCollectionAccess(userId, member.orgId);
+    const collections = await orgRepo(c.env.DB).listCollectionsByOrg(member.orgId);
+    const assigned = await orgRepo(c.env.DB).listUserCollectionAccess(userId, member.orgId);
     const assignedMap = new Map(assigned.map((item) => [item.collectionId, item]));
     for (const collection of collections) {
       const permission = resolveCollectionPermission(member, assignedMap.get(collection.id) || null);
@@ -322,12 +311,13 @@ export async function handleListAllCollections(env: Env, userId: string): Promis
   return jsonResponse({ data, object: 'list', continuationToken: null });
 }
 
-export async function handleListOrgCollections(env: Env, userId: string, orgId: string): Promise<Response> {
-  if (!orgId) return handleListAllCollections(env, userId);
-  const member = await requireMember(env.DB, userId, orgId);
+export async function handleListOrgCollections(c: AppContext, orgId: string): Promise<Response> {
+  const { userId } = c.var;
+  if (!orgId) return handleListAllCollections(c);
+  const member = await requireMember(c.env.DB, userId, orgId);
   if (member instanceof Response) return member;
-  const collections = await orgRepo(env.DB).listCollectionsByOrg(orgId);
-  const assigned = await orgRepo(env.DB).listUserCollectionAccess(userId, orgId);
+  const collections = await orgRepo(c.env.DB).listCollectionsByOrg(orgId);
+  const assigned = await orgRepo(c.env.DB).listUserCollectionAccess(userId, orgId);
   const assignedMap = new Map(assigned.map((item) => [item.collectionId, item]));
   const visible = collections.filter((collection) => hasFullCollectionAccess(member) || assignedMap.has(collection.id));
   return jsonResponse({
@@ -381,14 +371,15 @@ async function actorCollectionAccess(
 
 // Upstream GetManyWithDetails: every collection for those who may read all access, otherwise only
 // the collections the member manages.
-export async function handleListOrgCollectionDetails(env: Env, userId: string, orgId: string): Promise<Response> {
-  const member = await requireMember(env.DB, userId, orgId);
+export async function handleListOrgCollectionDetails(c: AppContext, orgId: string): Promise<Response> {
+  const { userId } = c.var;
+  const member = await requireMember(c.env.DB, userId, orgId);
   if (member instanceof Response) return member;
-  const collections = await orgRepo(env.DB).listCollectionsByOrg(orgId);
+  const collections = await orgRepo(c.env.DB).listCollectionsByOrg(orgId);
   const accessById = new Map(
-    (await orgRepo(env.DB).listUserCollectionAccess(userId, orgId)).map((item) => [item.collectionId, item]),
+    (await orgRepo(c.env.DB).listUserCollectionAccess(userId, orgId)).map((item) => [item.collectionId, item]),
   );
-  const grants = await orgRepo(env.DB).listCollectionAccessGrants(orgId);
+  const grants = await orgRepo(c.env.DB).listCollectionAccessGrants(orgId);
   // The 9.0 member-access report maps grants in the client; AccessReports needs this bulk metadata
   // even though upstream's old collection gate omits it. Single-resource and write gates stay separate.
   const canReadReports = resolvePermissions(member).accessReports;
@@ -431,27 +422,27 @@ async function collectionGrants(db: D1Database, orgId: string, collectionId: str
 }
 
 export async function handleGetOrgCollectionDetails(
-  env: Env,
-  userId: string,
+  c: AppContext,
   orgId: string,
   collectionId: string,
 ): Promise<Response> {
-  const target = await authorizedCollection(env.DB, userId, orgId, collectionId, 'readWithAccess');
+  const { userId } = c.var;
+  const target = await authorizedCollection(c.env.DB, userId, orgId, collectionId, 'readWithAccess');
   if (target instanceof Response) return target;
-  const grants = await collectionGrants(env.DB, orgId, collectionId);
+  const grants = await collectionGrants(c.env.DB, orgId, collectionId);
   return jsonResponse(collectionAccessDetailsJson(target.collection, target.member, target.access, grants));
 }
 
 // Upstream GetUsers: a bare SelectionReadOnlyResponseModel array, not a list envelope.
 export async function handleListOrgCollectionUsers(
-  env: Env,
-  userId: string,
+  c: AppContext,
   orgId: string,
   collectionId: string,
 ): Promise<Response> {
-  const target = await authorizedCollection(env.DB, userId, orgId, collectionId, 'readAccess');
+  const { userId } = c.var;
+  const target = await authorizedCollection(c.env.DB, userId, orgId, collectionId, 'readAccess');
   if (target instanceof Response) return target;
-  return jsonResponse((await collectionGrants(env.DB, orgId, collectionId)).users);
+  return jsonResponse((await collectionGrants(c.env.DB, orgId, collectionId)).users);
 }
 
 // Upstream Post and Put answer with the saved collection's fresh access details when the actor may
@@ -481,16 +472,12 @@ async function savedCollectionJson(
   });
 }
 
-export async function handleCreateOrgCollection(
-  request: Request,
-  env: Env,
-  userId: string,
-  orgId: string,
-): Promise<Response> {
-  const member = await requireMember(env.DB, userId, orgId);
+export async function handleCreateOrgCollection(c: AppContext, orgId: string): Promise<Response> {
+  const { userId } = c.var;
+  const member = await requireMember(c.env.DB, userId, orgId);
   if (member instanceof Response) return member;
   if (!canCreateCollection(member)) return errorResponse('Access denied', 403);
-  const body = await parseBody(request, CollectionRequest.extend({ name: requiredText('Name is required') }));
+  const body = await parseBody(c.req.raw, CollectionRequest.extend({ name: requiredText('Name is required') }));
   if (body instanceof Response) return body;
   const now = new Date().toISOString();
   const collection = {
@@ -501,35 +488,30 @@ export async function handleCreateOrgCollection(
     createdAt: now,
     updatedAt: now,
   };
-  await orgRepo(env.DB).saveCollection(collection);
-  await applyCollectionAccess(env.DB, orgId, collection.id, body);
-  await recordEvents(env, request, { userId }, [
+  await orgRepo(c.env.DB).saveCollection(collection);
+  await applyCollectionAccess(c.env.DB, orgId, collection.id, body);
+  await recordEvents(c.env, c.req.raw, { userId }, [
     { type: EventType.CollectionCreated, organizationId: orgId, resourceType: 'collection', resourceId: collection.id },
   ]);
-  await orgRepo(env.DB).bumpOrgMemberRevisions(orgId);
-  return jsonResponse(await savedCollectionJson(env.DB, userId, member, collection));
+  await orgRepo(c.env.DB).bumpOrgMemberRevisions(orgId);
+  return jsonResponse(await savedCollectionJson(c.env.DB, userId, member, collection));
 }
 
-export async function handleUpdateOrgCollection(
-  request: Request,
-  env: Env,
-  userId: string,
-  orgId: string,
-  collectionId: string,
-): Promise<Response> {
-  const target = await authorizedCollection(env.DB, userId, orgId, collectionId, 'update');
+export async function handleUpdateOrgCollection(c: AppContext, orgId: string, collectionId: string): Promise<Response> {
+  const { userId } = c.var;
+  const target = await authorizedCollection(c.env.DB, userId, orgId, collectionId, 'update');
   if (target instanceof Response) return target;
   const { member, collection } = target;
-  const body = await parseBody(request, CollectionRequest);
+  const body = await parseBody(c.req.raw, CollectionRequest);
   if (body instanceof Response) return body;
   const previousSettings = [collection.name, collection.externalId];
   collection.name = body.name || collection.name;
   collection.externalId = body.externalId || collection.externalId;
   collection.updatedAt = new Date().toISOString();
-  await orgRepo(env.DB).saveCollection(collection);
-  const accessChanged = await applyCollectionAccess(env.DB, collection.orgId, collection.id, body);
+  await orgRepo(c.env.DB).saveCollection(collection);
+  const accessChanged = await applyCollectionAccess(c.env.DB, collection.orgId, collection.id, body);
   if (accessChanged || collection.name !== previousSettings[0] || collection.externalId !== previousSettings[1]) {
-    await recordEvents(env, request, { userId }, [
+    await recordEvents(c.env, c.req.raw, { userId }, [
       {
         type: EventType.CollectionUpdated,
         organizationId: orgId,
@@ -538,26 +520,21 @@ export async function handleUpdateOrgCollection(
       },
     ]);
   }
-  await orgRepo(env.DB).bumpOrgMemberRevisions(orgId);
-  return jsonResponse(await savedCollectionJson(env.DB, userId, member, collection));
+  await orgRepo(c.env.DB).bumpOrgMemberRevisions(orgId);
+  return jsonResponse(await savedCollectionJson(c.env.DB, userId, member, collection));
 }
 
-export async function handleDeleteOrgCollection(
-  request: Request,
-  env: Env,
-  userId: string,
-  orgId: string,
-  collectionId: string,
-): Promise<Response> {
-  const member = await requireMember(env.DB, userId, orgId);
+export async function handleDeleteOrgCollection(c: AppContext, orgId: string, collectionId: string): Promise<Response> {
+  const { userId } = c.var;
+  const member = await requireMember(c.env.DB, userId, orgId);
   if (member instanceof Response) return member;
-  const collection = await orgRepo(env.DB).getCollection(collectionId);
+  const collection = await orgRepo(c.env.DB).getCollection(collectionId);
   if (!collection || collection.orgId !== orgId) return errorResponse('Collection not found', 404);
   if (!hasFullCollectionAccess(member) && !resolvePermissions(member).deleteAnyCollection) {
     return errorResponse('Access denied', 403);
   }
-  await orgRepo(env.DB).deleteCollection(collectionId);
-  await recordEvents(env, request, { userId }, [
+  await orgRepo(c.env.DB).deleteCollection(collectionId);
+  await recordEvents(c.env, c.req.raw, { userId }, [
     {
       type: EventType.CollectionDeleted,
       organizationId: collection.orgId,
@@ -565,7 +542,7 @@ export async function handleDeleteOrgCollection(
       resourceId: collection.id,
     },
   ]);
-  await orgRepo(env.DB).bumpOrgMemberRevisions(orgId);
+  await orgRepo(c.env.DB).bumpOrgMemberRevisions(orgId);
   return jsonResponse({});
 }
 
@@ -729,16 +706,12 @@ function memberMiniDetails(item: MembershipRecord, account: Pick<User, 'name' | 
   };
 }
 
-export async function handleListMembers(
-  env: Env,
-  userId: string,
-  orgId: string,
-  includeGroups = false,
-): Promise<Response> {
-  const member = await requireMember(env.DB, userId, orgId);
+export async function handleListMembers(c: AppContext, orgId: string, includeGroups = false): Promise<Response> {
+  const { userId } = c.var;
+  const member = await requireMember(c.env.DB, userId, orgId);
   if (member instanceof Response) return member;
-  const groupsByMember = includeGroups ? await orgRepo(env.DB).listMembershipGroupIdsByOrg(orgId) : null;
-  const data = (await orgRepo(env.DB).listMembershipsWithAccountsByOrg(orgId)).map(
+  const groupsByMember = includeGroups ? await orgRepo(c.env.DB).listMembershipGroupIdsByOrg(orgId) : null;
+  const data = (await orgRepo(c.env.DB).listMembershipsWithAccountsByOrg(orgId)).map(
     ({ item, account, hasTwoFactorPasskey }) => ({
       ...memberMiniDetails(item, account),
       ...(groupsByMember ? { groups: groupsByMember.get(item.id) || [] } : {}),
@@ -757,10 +730,11 @@ export async function handleListMembers(
 // Upstream OrganizationUsersController.GetMiniDetails: open to every confirmed member because
 // official web's collection, group, event log and sponsorship dialogs all look members up here,
 // so it carries no keys, permissions or 2FA state.
-export async function handleListMemberMiniDetails(env: Env, userId: string, orgId: string): Promise<Response> {
-  const member = await requireMember(env.DB, userId, orgId);
+export async function handleListMemberMiniDetails(c: AppContext, orgId: string): Promise<Response> {
+  const { userId } = c.var;
+  const member = await requireMember(c.env.DB, userId, orgId);
   if (member instanceof Response) return member;
-  const data = (await orgRepo(env.DB).listMembershipsWithAccountsByOrg(orgId)).map(({ item, account }) => ({
+  const data = (await orgRepo(c.env.DB).listMembershipsWithAccountsByOrg(orgId)).map(({ item, account }) => ({
     ...memberMiniDetails(item, account),
     object: 'organizationUserUserMiniDetails',
   }));
@@ -769,22 +743,17 @@ export async function handleListMemberMiniDetails(env: Env, userId: string, orgI
 
 // Upstream OrganizationUsersController.Get: the OrganizationUserDetailsResponseModel that official
 // web's edit-member dialog loads with includeGroups=true before it can open.
-export async function handleGetMember(
-  request: Request,
-  env: Env,
-  userId: string,
-  orgId: string,
-  memberId: string,
-): Promise<Response> {
-  const actor = await requireMember(env.DB, userId, orgId);
+export async function handleGetMember(c: AppContext, orgId: string, memberId: string): Promise<Response> {
+  const { userId } = c.var;
+  const actor = await requireMember(c.env.DB, userId, orgId);
   if (actor instanceof Response) return actor;
   if (!canManageMembers(actor)) return errorResponse('Access denied', 403);
-  const membership = await orgRepo(env.DB).getMembership(memberId);
+  const membership = await orgRepo(c.env.DB).getMembership(memberId);
   if (!membership || membership.orgId !== orgId) return errorResponse('Member not found', 404);
-  const account = membership.userId ? await userRepo(env.DB).getUserById(membership.userId) : null;
+  const account = membership.userId ? await userRepo(c.env.DB).getUserById(membership.userId) : null;
   const type = clientMembershipType(membership.type);
-  const collections = await orgRepo(env.DB).listMemberCollectionAccess(membership);
-  const includeGroups = new URL(request.url).searchParams.get('includeGroups') === 'true';
+  const collections = await orgRepo(c.env.DB).listMemberCollectionAccess(membership);
+  const includeGroups = new URL(c.req.raw.url).searchParams.get('includeGroups') === 'true';
   return jsonResponse({
     id: membership.id,
     userId: membership.userId,
@@ -801,21 +770,22 @@ export async function handleGetMember(
     ssoExternalId: null,
     collections: collections.map(({ collectionId, ...flags }) => ({ id: collectionId, ...flags })),
     // Upstream omits groups unless asked for them.
-    ...(includeGroups ? { groups: await orgRepo(env.DB).listMembershipGroupIds(membership.id) } : {}),
+    ...(includeGroups ? { groups: await orgRepo(c.env.DB).listMembershipGroupIds(membership.id) } : {}),
     creationDate: membership.createdAt,
     object: 'organizationUserDetails',
   });
 }
 
-export async function handleInviteMembers(request: Request, env: Env, user: User, orgId: string): Promise<Response> {
-  const member = await requireMember(env.DB, user.id, orgId);
+export async function handleInviteMembers(c: AppContext, orgId: string): Promise<Response> {
+  const { currentUser: user } = c.var;
+  const member = await requireMember(c.env.DB, user.id, orgId);
   if (member instanceof Response) return member;
   if (!canManageMembers(member)) return errorResponse('Access denied', 403);
-  const body = await parseBody(request, MemberInviteRequest);
+  const body = await parseBody(c.req.raw, MemberInviteRequest);
   if (body instanceof Response) return body;
-  const change = await readMemberChange(env.DB, orgId, body);
+  const change = await readMemberChange(c.env.DB, orgId, body);
   if (!change.ok) return errorResponse(change.message, change.status);
-  const collections = await authorizeMemberCollections(env.DB, user.id, member, null, change.collections);
+  const collections = await authorizeMemberCollections(c.env.DB, user.id, member, null, change.collections);
   if (collections instanceof Response) return collections;
   // Upstream InviteUsersAsync runs the same role guard; an invite has no current role, so the
   // requested one stands on both sides.
@@ -825,7 +795,7 @@ export async function handleInviteMembers(request: Request, env: Env, user: User
   // org by its invited or bound account email (SelectKnownEmailsAsync), so a re-invite neither mails
   // nor adds a row that accept would refuse. Nothing left to invite still succeeds, as upstream.
   const knownEmails = new Set(
-    (await orgRepo(env.DB).listMembershipsWithAccountsByOrg(orgId)).flatMap(({ item, account }) => [
+    (await orgRepo(c.env.DB).listMembershipsWithAccountsByOrg(orgId)).flatMap(({ item, account }) => [
       item.email?.toLowerCase(),
       account?.email.toLowerCase(),
     ]),
@@ -837,9 +807,9 @@ export async function handleInviteMembers(request: Request, env: Env, user: User
     .filter((email) => !knownEmails.has(email))
     .map((email) => ({ id: generateUUID(), email, invitedByEmail: user.email }));
   if (!invites.length) return jsonResponse({});
-  const mailed = await mailOrganizationInvites(request, env, orgId, user.id, invites);
+  const mailed = await mailOrganizationInvites(c.req.raw, c.env, orgId, user.id, invites);
   if (!mailed.ok) return errorResponse(mailed.message, mailed.status, mailed.headers);
-  await orgRepo(env.DB).insertInvitedMemberships(
+  await orgRepo(c.env.DB).insertInvitedMemberships(
     invites.map(({ id, email }) => ({
       id,
       userId: null,
@@ -860,8 +830,8 @@ export async function handleInviteMembers(request: Request, env: Env, user: User
     { ...change, collections },
   );
   await recordEvents(
-    env,
-    request,
+    c.env,
+    c.req.raw,
     { userId: user.id },
     invites.map((invite) => ({
       type: EventType.OrganizationUserInvited,
@@ -870,7 +840,7 @@ export async function handleInviteMembers(request: Request, env: Env, user: User
       resourceId: invite.id,
     })),
   );
-  await orgRepo(env.DB).bumpOrgMemberRevisions(orgId);
+  await orgRepo(c.env.DB).bumpOrgMemberRevisions(orgId);
   return jsonResponse({});
 }
 
@@ -939,30 +909,25 @@ export async function mailOrganizationInvites(
   return { ok: true };
 }
 
-export async function handleAcceptInvite(
-  request: Request,
-  env: Env,
-  user: User,
-  orgId: string,
-  memberId: string,
-): Promise<Response> {
-  const membership = await orgRepo(env.DB).getMembership(memberId);
+export async function handleAcceptInvite(c: AppContext, orgId: string, memberId: string): Promise<Response> {
+  const { currentUser: user } = c.var;
+  const membership = await orgRepo(c.env.DB).getMembership(memberId);
   if (!membership || membership.orgId !== orgId) return errorResponse('Organization user mismatch', 404);
   // The emailed token is the only proof that this user owns the invited mailbox (upstream
   // OrganizationUserAcceptRequestModel.Token is [Required]).
-  const body = await parseBody(request, z.object({ token: requiredText('The Token field is required.') }));
+  const body = await parseBody(c.req.raw, z.object({ token: requiredText('The Token field is required.') }));
   if (body instanceof Response) return body;
-  const tokenCheck = await verifyOrgInviteToken(body.token, env.JWT_SECRET, membership.id, membership.email);
+  const tokenCheck = await verifyOrgInviteToken(body.token, c.env.JWT_SECRET, membership.id, membership.email);
   if (!tokenCheck.ok) return errorResponse(tokenCheck.message, 400);
-  const organization = await orgRepo(env.DB).getOrganization(orgId);
+  const organization = await orgRepo(c.env.DB).getOrganization(orgId);
   const check = acceptInviteCheck(
     membership,
     user.email,
-    await orgRepo(env.DB).getMembershipByUserAndOrg(user.id, orgId),
+    await orgRepo(c.env.DB).getMembershipByUserAndOrg(user.id, orgId),
     organization?.name ?? '',
   );
   if (!check.ok) return errorResponse(check.message, 400);
-  await orgRepo(env.DB).saveAcceptedMembership({
+  await orgRepo(c.env.DB).saveAcceptedMembership({
     ...check.member,
     userId: user.id,
     email: user.email,
@@ -970,9 +935,9 @@ export async function handleAcceptInvite(
     updatedAt: new Date().toISOString(),
   });
   // The invitee now sees the org in their profile, so their cached sync must refresh.
-  await orgRepo(env.DB).bumpOrgMemberRevisions(orgId);
+  await orgRepo(c.env.DB).bumpOrgMemberRevisions(orgId);
   runInBackground('organization-user-accepted', async () => {
-    for (const { item, account } of await orgRepo(env.DB).listMembershipsWithAccountsByOrg(orgId)) {
+    for (const { item, account } of await orgRepo(c.env.DB).listMembershipsWithAccountsByOrg(orgId)) {
       const email = account?.email || item.email;
       if (
         item.status !== MembershipStatus.Confirmed ||
@@ -981,7 +946,7 @@ export async function handleAcceptInvite(
         !email
       )
         continue;
-      await sendMail(env, email, 'organizationUserAccepted', {
+      await sendMail(c.env, email, 'organizationUserAccepted', {
         organizationName: organization?.name || '',
         memberName: user.name || user.email,
       });
@@ -1030,19 +995,15 @@ function bulkResultsResponse(results: Array<{ id: string; error: string }>): Res
 
 // Upstream OrganizationUsersController.UserPublicKeys: official web's bulk confirm dialog wraps the
 // org key with each selected member's public key before it posts the confirm.
-export async function handleListMemberPublicKeys(
-  request: Request,
-  env: Env,
-  userId: string,
-  orgId: string,
-): Promise<Response> {
-  const actor = await requireMember(env.DB, userId, orgId);
+export async function handleListMemberPublicKeys(c: AppContext, orgId: string): Promise<Response> {
+  const { userId } = c.var;
+  const actor = await requireMember(c.env.DB, userId, orgId);
   if (actor instanceof Response) return actor;
   if (!canManageMembers(actor)) return errorResponse('Access denied', 403);
-  const body = await parseBody(request, BulkIdsRequest);
+  const body = await parseBody(c.req.raw, BulkIdsRequest);
   if (body instanceof Response) return body;
   const { ids } = body;
-  const keys = await orgRepo(env.DB).listAcceptedMemberPublicKeys(orgId, ids);
+  const keys = await orgRepo(c.env.DB).listAcceptedMemberPublicKeys(orgId, ids);
   return jsonResponse({
     data: keys.map(({ publicKey, ...member }) => ({
       ...member,
@@ -1054,24 +1015,19 @@ export async function handleListMemberPublicKeys(
   });
 }
 
-export async function handleConfirmMember(
-  request: Request,
-  env: Env,
-  userId: string,
-  orgId: string,
-  memberId: string,
-): Promise<Response> {
-  const actor = await requireMember(env.DB, userId, orgId);
+export async function handleConfirmMember(c: AppContext, orgId: string, memberId: string): Promise<Response> {
+  const { userId } = c.var;
+  const actor = await requireMember(c.env.DB, userId, orgId);
   if (actor instanceof Response) return actor;
   if (!canManageMembers(actor)) return errorResponse('Access denied', 403);
-  const check = confirmMemberCheck(await orgRepo(env.DB).getMembership(memberId), orgId);
+  const check = confirmMemberCheck(await orgRepo(c.env.DB).getMembership(memberId), orgId);
   if (!check.ok) return errorResponse(check.message, 400);
-  const body = await parseBody(request, z.object({ key: requiredText('Key is required') }));
+  const body = await parseBody(c.req.raw, z.object({ key: requiredText('Key is required') }));
   if (body instanceof Response) return body;
   const confirmed = confirmedWithKey(check, body.key);
   if (!confirmed.ok) return errorResponse(confirmed.message, 400);
-  await orgRepo(env.DB).saveMembership(confirmed.member);
-  await recordEvents(env, request, { userId }, [
+  await orgRepo(c.env.DB).saveMembership(confirmed.member);
+  await recordEvents(c.env, c.req.raw, { userId }, [
     {
       type: EventType.OrganizationUserConfirmed,
       organizationId: orgId,
@@ -1080,8 +1036,8 @@ export async function handleConfirmMember(
       userId: confirmed.member.userId,
     },
   ]);
-  await orgRepo(env.DB).bumpOrgMemberRevisions(orgId);
-  notifyConfirmedMembers(request, env, orgId, [confirmed.member]);
+  await orgRepo(c.env.DB).bumpOrgMemberRevisions(orgId);
+  notifyConfirmedMembers(c.req.raw, c.env, orgId, [confirmed.member]);
   return jsonResponse({});
 }
 
@@ -1099,23 +1055,21 @@ function confirmedWithKey(check: MemberCheck, key: string): MemberCheck {
 // the confirmed rows are saved together. Upstream drops entries it will not confirm; every entry
 // gets a result here, and the org's rows are read once, so another org's member reads like an id
 // that does not exist.
-export async function handleBulkConfirmMembers(
-  request: Request,
-  env: Env,
-  userId: string,
-  orgId: string,
-): Promise<Response> {
-  const actor = await requireMember(env.DB, userId, orgId);
+export async function handleBulkConfirmMembers(c: AppContext, orgId: string): Promise<Response> {
+  const { userId } = c.var;
+  const actor = await requireMember(c.env.DB, userId, orgId);
   if (actor instanceof Response) return actor;
   if (!canManageMembers(actor)) return errorResponse('Access denied', 403);
   const body = await parseBody(
-    request,
+    c.req.raw,
     z.object({
       keys: z.array(z.object({ id: z.string(), key: z.string().trim() }), { error: 'The Keys field is required.' }),
     }),
   );
   if (body instanceof Response) return body;
-  const membersById = new Map((await orgRepo(env.DB).listMembershipsByOrg(orgId)).map((member) => [member.id, member]));
+  const membersById = new Map(
+    (await orgRepo(c.env.DB).listMembershipsByOrg(orgId)).map((member) => [member.id, member]),
+  );
   // Upstream's ToDictionary rejects a repeated id; here the last key sent for an id wins, so each
   // member is confirmed once.
   const keysById = new Map(body.keys.map(({ id, key }) => [id, key]));
@@ -1125,10 +1079,10 @@ export async function handleBulkConfirmMembers(
   }));
   const confirmed = results.flatMap(({ check }) => (check.ok ? [check.member] : []));
   if (confirmed.length) {
-    await orgRepo(env.DB).saveMemberships(confirmed);
+    await orgRepo(c.env.DB).saveMemberships(confirmed);
     await recordEvents(
-      env,
-      request,
+      c.env,
+      c.req.raw,
       { userId },
       confirmed.map((member) => ({
         type: EventType.OrganizationUserConfirmed,
@@ -1138,8 +1092,8 @@ export async function handleBulkConfirmMembers(
         userId: member.userId,
       })),
     );
-    await orgRepo(env.DB).bumpOrgMemberRevisions(orgId);
-    notifyConfirmedMembers(request, env, orgId, confirmed);
+    await orgRepo(c.env.DB).bumpOrgMemberRevisions(orgId);
+    notifyConfirmedMembers(c.req.raw, c.env, orgId, confirmed);
   }
   return bulkResultsResponse(results.map(({ id, check }) => ({ id, error: check.ok ? '' : check.message })));
 }
@@ -1157,19 +1111,14 @@ function isReinvitable(
 
 // A resend mails the row a fresh token through mailOrganizationInvites, so it spends the inviter's
 // budget like an invite and recovers an invite whose token has expired.
-export async function handleReinviteMember(
-  request: Request,
-  env: Env,
-  userId: string,
-  orgId: string,
-  memberId: string,
-): Promise<Response> {
-  const actor = await requireMember(env.DB, userId, orgId);
+export async function handleReinviteMember(c: AppContext, orgId: string, memberId: string): Promise<Response> {
+  const { userId } = c.var;
+  const actor = await requireMember(c.env.DB, userId, orgId);
   if (actor instanceof Response) return actor;
   if (!canManageMembers(actor)) return errorResponse('Access denied', 403);
-  const membership = await orgRepo(env.DB).getMembership(memberId);
+  const membership = await orgRepo(c.env.DB).getMembership(memberId);
   if (!isReinvitable(membership, orgId)) return errorResponse(REINVITE_INVALID, 400);
-  const mailed = await mailOrganizationInvites(request, env, orgId, userId, [membership]);
+  const mailed = await mailOrganizationInvites(c.req.raw, c.env, orgId, userId, [membership]);
   if (!mailed.ok) return errorResponse(mailed.message, mailed.status, mailed.headers);
   return jsonResponse({});
 }
@@ -1177,45 +1126,38 @@ export async function handleReinviteMember(
 // Every requested id gets a result and the Invited rows go out in one budgeted send, so a batch
 // over the budget mails nothing. Upstream drops missing ids and reports another org's rows; both
 // read as "User invalid." here, since only the org's own rows are loaded.
-export async function handleBulkReinviteMembers(
-  request: Request,
-  env: Env,
-  userId: string,
-  orgId: string,
-): Promise<Response> {
-  const actor = await requireMember(env.DB, userId, orgId);
+export async function handleBulkReinviteMembers(c: AppContext, orgId: string): Promise<Response> {
+  const { userId } = c.var;
+  const actor = await requireMember(c.env.DB, userId, orgId);
   if (actor instanceof Response) return actor;
   if (!canManageMembers(actor)) return errorResponse('Access denied', 403);
-  const body = await parseBody(request, BulkIdsRequest);
+  const body = await parseBody(c.req.raw, BulkIdsRequest);
   if (body instanceof Response) return body;
   const { ids } = body;
-  const membersById = new Map((await orgRepo(env.DB).listMembershipsByOrg(orgId)).map((member) => [member.id, member]));
+  const membersById = new Map(
+    (await orgRepo(c.env.DB).listMembershipsByOrg(orgId)).map((member) => [member.id, member]),
+  );
   const targets = [...new Set(ids)].map((id) => ({ id, membership: membersById.get(id) ?? null }));
   const invites = targets.flatMap(({ membership }) => (isReinvitable(membership, orgId) ? [membership] : []));
-  const mailed = await mailOrganizationInvites(request, env, orgId, userId, invites);
+  const mailed = await mailOrganizationInvites(c.req.raw, c.env, orgId, userId, invites);
   if (!mailed.ok) return errorResponse(mailed.message, mailed.status, mailed.headers);
   return bulkResultsResponse(
     targets.map(({ id, membership }) => ({ id, error: isReinvitable(membership, orgId) ? '' : REINVITE_INVALID })),
   );
 }
 
-export async function handleEditMember(
-  request: Request,
-  env: Env,
-  userId: string,
-  orgId: string,
-  memberId: string,
-): Promise<Response> {
-  const actor = await requireMember(env.DB, userId, orgId);
+export async function handleEditMember(c: AppContext, orgId: string, memberId: string): Promise<Response> {
+  const { userId } = c.var;
+  const actor = await requireMember(c.env.DB, userId, orgId);
   if (actor instanceof Response) return actor;
   if (!canManageMembers(actor)) return errorResponse('Access denied', 403);
-  const membership = await orgRepo(env.DB).getMembership(memberId);
+  const membership = await orgRepo(c.env.DB).getMembership(memberId);
   if (!membership || membership.orgId !== orgId) return errorResponse('Member not found', 404);
-  const body = await parseBody(request, MemberUpdateRequest);
+  const body = await parseBody(c.req.raw, MemberUpdateRequest);
   if (body instanceof Response) return body;
-  const change = await readMemberChange(env.DB, orgId, body);
+  const change = await readMemberChange(c.env.DB, orgId, body);
   if (!change.ok) return errorResponse(change.message, change.status);
-  const collections = await authorizeMemberCollections(env.DB, userId, actor, membership, change.collections);
+  const collections = await authorizeMemberCollections(c.env.DB, userId, actor, membership, change.collections);
   if (collections instanceof Response) return collections;
   const roleCheck = memberRoleChangeCheck(
     actor,
@@ -1230,15 +1172,15 @@ export async function handleEditMember(
   const isConfirmedOwner = membership.type === MembershipType.Owner && membership.status === MembershipStatus.Confirmed;
   if (
     change.type !== MembershipType.Owner &&
-    !((await orgRepo(env.DB).countConfirmedOwners(membership.orgId)) > (isConfirmedOwner ? 1 : 0))
+    !((await orgRepo(c.env.DB).countConfirmedOwners(membership.orgId)) > (isConfirmedOwner ? 1 : 0))
   ) {
     return errorResponse('Organization must have at least one confirmed owner.', 400);
   }
   const previousType = membership.type;
   const previousPermissions = JSON.stringify(membership.permissions);
   const previousAccessAll = membership.accessAll;
-  const previousCollections = collections ? await orgRepo(env.DB).listMemberCollectionAccess(membership) : [];
-  const previousGroups = change.groupIds ? await orgRepo(env.DB).listMembershipGroupIds(membership.id) : [];
+  const previousCollections = collections ? await orgRepo(c.env.DB).listMemberCollectionAccess(membership) : [];
+  const previousGroups = change.groupIds ? await orgRepo(c.env.DB).listMembershipGroupIds(membership.id) : [];
   membership.type = change.type;
   membership.permissions = storedPermissions(change);
   // Upstream's update request has no AccessAll: Owners and Admins get full access from their type,
@@ -1248,7 +1190,7 @@ export async function handleEditMember(
   membership.updatedAt = new Date().toISOString();
   // Upstream skips groups on a restricted self-edit rather than failing it, as groups carry collection access.
   const groupIds = restrictsEditingSelf(actor, membership) ? undefined : change.groupIds;
-  await orgRepo(env.DB).saveMembershipWithAccess(membership, { collections, groupIds });
+  await orgRepo(c.env.DB).saveMembershipWithAccess(membership, { collections, groupIds });
   const memberChanged =
     previousType !== membership.type ||
     previousPermissions !== JSON.stringify(membership.permissions) ||
@@ -1260,7 +1202,7 @@ export async function handleEditMember(
   // Upstream's member update logs OrganizationUser_Updated even when only groups change; it reserves
   // OrganizationUser_UpdatedGroups for the group endpoints.
   if (memberChanged || groupsChanged) {
-    await recordEvents(env, request, { userId }, [
+    await recordEvents(c.env, c.req.raw, { userId }, [
       {
         type: EventType.OrganizationUserUpdated,
         organizationId: orgId,
@@ -1270,7 +1212,7 @@ export async function handleEditMember(
       },
     ]);
   }
-  await orgRepo(env.DB).bumpOrgMemberRevisions(orgId);
+  await orgRepo(c.env.DB).bumpOrgMemberRevisions(orgId);
   return jsonResponse({});
 }
 
@@ -1333,18 +1275,13 @@ async function applyMemberAction(
   return results;
 }
 
-export async function handleBulkMemberAction(
-  request: Request,
-  env: Env,
-  userId: string,
-  orgId: string,
-  action: MemberAction,
-): Promise<Response> {
-  const body = await parseBody(request, BulkIdsRequest);
+export async function handleBulkMemberAction(c: AppContext, orgId: string, action: MemberAction): Promise<Response> {
+  const { userId } = c.var;
+  const body = await parseBody(c.req.raw, BulkIdsRequest);
   if (body instanceof Response) return body;
   const { ids } = body;
   if (!ids.every(isUUID)) return errorResponse('The Ids field must contain valid GUIDs.', 400);
-  const results = await applyMemberAction(request, env, userId, orgId, ids, action);
+  const results = await applyMemberAction(c.req.raw, c.env, userId, orgId, ids, action);
   return results instanceof Response ? results : bulkResultsResponse(results);
 }
 
@@ -1385,10 +1322,11 @@ export const handleRestoreMember = (
   memberId: string,
 ): Promise<Response> => handleMemberAction(request, env, userId, orgId, memberId, 'restore');
 
-export async function handleListGroups(env: Env, userId: string, orgId: string): Promise<Response> {
-  const member = await requireMember(env.DB, userId, orgId);
+export async function handleListGroups(c: AppContext, orgId: string): Promise<Response> {
+  const { userId } = c.var;
+  const member = await requireMember(c.env.DB, userId, orgId);
   if (member instanceof Response) return member;
-  const groups = await orgRepo(env.DB).listGroupsByOrg(orgId);
+  const groups = await orgRepo(c.env.DB).listGroupsByOrg(orgId);
   const data = [];
   for (const group of groups) {
     data.push({
@@ -1398,25 +1336,20 @@ export async function handleListGroups(env: Env, userId: string, orgId: string):
       accessAll: group.accessAll,
       externalId: group.externalId,
       collections: [],
-      users: await orgRepo(env.DB).listGroupMemberIds(group.id),
+      users: await orgRepo(c.env.DB).listGroupMemberIds(group.id),
       object: 'groupDetails',
     });
   }
   return jsonResponse({ data, object: 'list', continuationToken: null });
 }
 
-export async function handleSaveGroup(
-  request: Request,
-  env: Env,
-  userId: string,
-  orgId: string,
-  groupId?: string,
-): Promise<Response> {
-  const member = await requireMember(env.DB, userId, orgId);
+export async function handleSaveGroup(c: AppContext, orgId: string, groupId?: string): Promise<Response> {
+  const { userId } = c.var;
+  const member = await requireMember(c.env.DB, userId, orgId);
   if (member instanceof Response) return member;
   if (!canManageGroups(member)) return errorResponse('Access denied', 403);
   const body = await parseBody(
-    request,
+    c.req.raw,
     z.object({
       name: optionalText,
       accessAll: z.boolean().nullish(),
@@ -1426,12 +1359,12 @@ export async function handleSaveGroup(
   );
   if (body instanceof Response) return body;
   const now = new Date().toISOString();
-  const existing = groupId ? await orgRepo(env.DB).getGroup(groupId) : null;
+  const existing = groupId ? await orgRepo(c.env.DB).getGroup(groupId) : null;
   if (groupId && (!existing || existing.orgId !== orgId)) return errorResponse('Group not found', 404);
   const users = body.users ?? [];
   // Upstream ValidateMemberAccessAsync: missing and foreign membership ids fail alike, before any
   // write, so the response cannot probe other organizations. Like upstream, skip it without users.
-  const orgMemberships = users.length ? await orgRepo(env.DB).listMembershipsByOrg(orgId) : [];
+  const orgMemberships = users.length ? await orgRepo(c.env.DB).listMembershipsByOrg(orgId) : [];
   if (users.length) {
     const orgMembershipIds = new Set(orgMemberships.map((membership) => membership.id));
     if (users.some((id) => !orgMembershipIds.has(id))) return errorResponse('Resource not found.', 404);
@@ -1445,9 +1378,9 @@ export async function handleSaveGroup(
     createdAt: existing?.createdAt || now,
     updatedAt: now,
   };
-  const previousUsers = existing ? await orgRepo(env.DB).listGroupMemberIds(group.id) : [];
-  await orgRepo(env.DB).saveGroup(group);
-  if (users.length || !existing) await orgRepo(env.DB).replaceGroupMembers(group.id, users);
+  const previousUsers = existing ? await orgRepo(c.env.DB).listGroupMemberIds(group.id) : [];
+  await orgRepo(c.env.DB).saveGroup(group);
+  if (users.length || !existing) await orgRepo(c.env.DB).replaceGroupMembers(group.id, users);
   const previousUserIds = new Set(previousUsers);
   const currentUserIds = new Set(users.length || !existing ? users : previousUsers);
   const changedUsers = orgMemberships.filter(
@@ -1459,7 +1392,7 @@ export async function handleSaveGroup(
     existing.name !== group.name ||
     existing.accessAll !== group.accessAll ||
     existing.externalId !== group.externalId;
-  await recordEvents(env, request, { userId }, [
+  await recordEvents(c.env, c.req.raw, { userId }, [
     ...(groupChanged
       ? [
           {
@@ -1478,7 +1411,7 @@ export async function handleSaveGroup(
       userId: membership.userId,
     })),
   ]);
-  await orgRepo(env.DB).bumpOrgMemberRevisions(orgId);
+  await orgRepo(c.env.DB).bumpOrgMemberRevisions(orgId);
   return jsonResponse({
     id: group.id,
     organizationId: group.orgId,
@@ -1489,40 +1422,37 @@ export async function handleSaveGroup(
   });
 }
 
-export async function handleDeleteGroup(
-  request: Request,
-  env: Env,
-  userId: string,
-  orgId: string,
-  groupId: string,
-): Promise<Response> {
-  const member = await requireMember(env.DB, userId, orgId);
+export async function handleDeleteGroup(c: AppContext, orgId: string, groupId: string): Promise<Response> {
+  const { userId } = c.var;
+  const member = await requireMember(c.env.DB, userId, orgId);
   if (member instanceof Response) return member;
   if (!canManageGroups(member)) return errorResponse('Access denied', 403);
-  const group = await orgRepo(env.DB).getGroup(groupId);
+  const group = await orgRepo(c.env.DB).getGroup(groupId);
   if (!group || group.orgId !== orgId) return errorResponse('Group not found', 404);
-  await orgRepo(env.DB).deleteGroup(groupId);
-  await recordEvents(env, request, { userId }, [
+  await orgRepo(c.env.DB).deleteGroup(groupId);
+  await recordEvents(c.env, c.req.raw, { userId }, [
     { type: EventType.GroupDeleted, organizationId: group.orgId, resourceType: 'group', resourceId: group.id },
   ]);
-  await orgRepo(env.DB).bumpOrgMemberRevisions(orgId);
+  await orgRepo(c.env.DB).bumpOrgMemberRevisions(orgId);
   return jsonResponse({});
 }
 
-export async function handleListPolicies(env: Env, userId: string, orgId: string): Promise<Response> {
-  const member = await requireMember(env.DB, userId, orgId);
+export async function handleListPolicies(c: AppContext, orgId: string): Promise<Response> {
+  const { userId } = c.var;
+  const member = await requireMember(c.env.DB, userId, orgId);
   if (member instanceof Response) return member;
-  const policies = await orgRepo(env.DB).listPoliciesByOrg(orgId);
+  const policies = await orgRepo(c.env.DB).listPoliciesByOrg(orgId);
   return jsonResponse({ data: policies.map(policyResponse), object: 'list', continuationToken: null });
 }
 
 // Official web's policy drawer loads one policy here. Upstream PolicyQuery synthesizes a disabled
 // status with empty data when no row exists, so the drawer opens with the toggle off.
-export async function handleGetPolicy(env: Env, userId: string, orgId: string, policyType: number): Promise<Response> {
-  const member = await requireMember(env.DB, userId, orgId);
+export async function handleGetPolicy(c: AppContext, orgId: string, policyType: number): Promise<Response> {
+  const { userId } = c.var;
+  const member = await requireMember(c.env.DB, userId, orgId);
   if (member instanceof Response) return member;
   if (!canManagePolicies(member)) return errorResponse('Access denied', 403);
-  const policy = await orgRepo(env.DB).getPolicy(orgId, policyType);
+  const policy = await orgRepo(c.env.DB).getPolicy(orgId, policyType);
   return jsonResponse(
     policy
       ? policyResponse(policy)
@@ -1547,19 +1477,14 @@ const SavePolicyRequest = policyState
   .extend({ policy: policyState.optional() })
   .transform(({ policy, ...flat }) => policy ?? flat);
 
-export async function handlePutPolicy(
-  request: Request,
-  env: Env,
-  userId: string,
-  orgId: string,
-  policyType: number,
-): Promise<Response> {
-  const member = await requireMember(env.DB, userId, orgId);
+export async function handlePutPolicy(c: AppContext, orgId: string, policyType: number): Promise<Response> {
+  const { userId } = c.var;
+  const member = await requireMember(c.env.DB, userId, orgId);
   if (member instanceof Response) return member;
   if (!canManagePolicies(member)) return errorResponse('Access denied', 403);
-  const source = await parseBody(request, SavePolicyRequest);
+  const source = await parseBody(c.req.raw, SavePolicyRequest);
   if (source instanceof Response) return source;
-  const existing = await orgRepo(env.DB).getPolicy(orgId, policyType);
+  const existing = await orgRepo(c.env.DB).getPolicy(orgId, policyType);
   const policy = {
     id: existing?.id || generateUUID(),
     orgId,
@@ -1568,17 +1493,17 @@ export async function handlePutPolicy(
     data: source.data,
     updatedAt: new Date().toISOString(),
   };
-  await orgRepo(env.DB).savePolicy(policy);
+  await orgRepo(c.env.DB).savePolicy(policy);
   if (
     !existing ||
     existing.enabled !== policy.enabled ||
     JSON.stringify(existing.data) !== JSON.stringify(policy.data)
   ) {
-    await recordEvents(env, request, { userId }, [
+    await recordEvents(c.env, c.req.raw, { userId }, [
       { type: EventType.PolicyUpdated, organizationId: orgId, resourceType: 'policy', resourceId: policy.id },
     ]);
   }
-  await orgRepo(env.DB).bumpOrgMemberRevisions(orgId);
+  await orgRepo(c.env.DB).bumpOrgMemberRevisions(orgId);
   return jsonResponse(policyResponse(policy));
 }
 
@@ -1593,28 +1518,23 @@ const SecretVerificationRequest = z
   .object({ masterPasswordHash: z.string().nullish(), secret: z.string().nullish() })
   .transform((body) => ('masterPasswordHash' in body ? body.masterPasswordHash : body.secret)?.trim() ?? '');
 
-export async function handleOrgApiKey(
-  request: Request,
-  env: Env,
-  userId: string,
-  orgId: string,
-  rotate: boolean,
-): Promise<Response> {
-  const member = await requireMember(env.DB, userId, orgId);
+export async function handleOrgApiKey(c: AppContext, orgId: string, rotate: boolean): Promise<Response> {
+  const { userId } = c.var;
+  const member = await requireMember(c.env.DB, userId, orgId);
   if (member instanceof Response) return member;
   if (member.type > MembershipType.Admin) return errorResponse('Access denied', 403);
-  const secret = await parseBody(request, SecretVerificationRequest);
+  const secret = await parseBody(c.req.raw, SecretVerificationRequest);
   if (secret instanceof Response) return secret;
   if (!secret) return errorResponse('masterPasswordHash is required', 400);
-  const user = await userRepo(env.DB).getUserById(userId);
+  const user = await userRepo(c.env.DB).getUserById(userId);
   if (!user) return errorResponse('User not found', 404);
-  if (!(await new AuthService(env).verifyPassword(secret, user.masterPasswordHash, user.email))) {
+  if (!(await new AuthService(c.env).verifyPassword(secret, user.masterPasswordHash, user.email))) {
     return errorResponse('Invalid password', 400);
   }
 
   // Only the hash is persisted, so an existing key can never be displayed again:
   // a non-rotating read has nothing to hand back and must be rotated instead.
-  const existing = await orgRepo(env.DB).getOrganizationApiKey(orgId);
+  const existing = await orgRepo(c.env.DB).getOrganizationApiKey(orgId);
   if (!rotate && existing) {
     return errorResponse(
       'The organization API key is only shown when it is created or rotated. Rotate it to get a new key.',
@@ -1624,7 +1544,7 @@ export async function handleOrgApiKey(
 
   const apiKey = generateUUID().replace(/-/g, '') + generateUUID().replace(/-/g, '');
   const revisionDate = new Date().toISOString();
-  await orgRepo(env.DB).saveOrganizationApiKey({
+  await orgRepo(c.env.DB).saveOrganizationApiKey({
     id: existing?.id || generateUUID(),
     orgId,
     type: 0,
@@ -1634,12 +1554,13 @@ export async function handleOrgApiKey(
   return jsonResponse({ apiKey, revisionDate, object: 'organizationApiKey' });
 }
 
-export async function handleRotateScimKey(env: Env, userId: string, orgId: string): Promise<Response> {
-  const member = await requireMember(env.DB, userId, orgId);
+export async function handleRotateScimKey(c: AppContext, orgId: string): Promise<Response> {
+  const { userId } = c.var;
+  const member = await requireMember(c.env.DB, userId, orgId);
   if (member instanceof Response) return member;
   if (!canManageScim(member)) return errorResponse('Access denied', 403);
   const token = `scim.${orgId}.${generateUUID().replace(/-/g, '')}`;
-  await orgRepo(env.DB).saveScimToken(orgId, await hashApiKey(token), new Date().toISOString());
+  await orgRepo(c.env.DB).saveScimToken(orgId, await hashApiKey(token), new Date().toISOString());
   return jsonResponse({ token, object: 'organizationScimKey' });
 }
 
@@ -1653,8 +1574,9 @@ export async function verifyScimBearer(db: D1Database, orgId: string, authorizat
   return verifyApiKey(token, stored);
 }
 
-export async function handleGetAutoEnrollStatus(env: Env, userId: string, orgId: string): Promise<Response> {
-  const member = await orgRepo(env.DB).getMembershipByUserAndOrg(userId, orgId);
+export async function handleGetAutoEnrollStatus(c: AppContext, orgId: string): Promise<Response> {
+  const { userId } = c.var;
+  const member = await orgRepo(c.env.DB).getMembershipByUserAndOrg(userId, orgId);
   return jsonResponse({
     id: orgId,
     resetPasswordEnabled: false,
@@ -1667,8 +1589,9 @@ export function emptyCollectionAccess(): CollectionAccess[] {
   return [];
 }
 
-export async function handleEnableSecretsManager(env: Env, userId: string, orgId: string): Promise<Response> {
-  const member = await requireMember(env.DB, userId, orgId);
+export async function handleEnableSecretsManager(c: AppContext, orgId: string): Promise<Response> {
+  const { userId } = c.var;
+  const member = await requireMember(c.env.DB, userId, orgId);
   if (member instanceof Response) return member;
   if (!canManageMembers(member)) return errorResponse('Access denied', 403);
   return new Response(null, { status: 200 });

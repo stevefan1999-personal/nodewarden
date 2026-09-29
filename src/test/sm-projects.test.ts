@@ -4,7 +4,7 @@ import test from 'node:test';
 import { eq } from 'drizzle-orm';
 import { getOrm } from '../db/client';
 import { orgGroupMembers, orgGroups, smProjectGroups, smProjects } from '../db/schema';
-import { authedFetch, createTestEnv } from './support/env';
+import { authedFetch, contextFor, createTestEnv } from './support/env';
 import { ENCRYPTED_FIELD, postJson, seedMember, seedSmOrg, smUser } from './support/sm';
 import { orgRepo } from '../services/storage-org-repo';
 
@@ -73,6 +73,6 @@ test('project updates cannot resurrect a concurrently deleted row and reject nul
     await orm.delete(smProjects).where(eq(smProjects.id, p.id));
     return { name: ENCRYPTED_FIELD } as T;
   };
-  assert.equal((await handleProject(request, env, await smUser(env, owner), p.id)).status, 404);
+  assert.equal((await handleProject(contextFor(env, request, await smUser(env, owner)), p.id)).status, 404);
   assert.equal(await orm.select().from(smProjects).where(eq(smProjects.id, p.id)).get(), undefined);
 });

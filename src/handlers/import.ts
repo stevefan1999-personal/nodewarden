@@ -1,10 +1,10 @@
+import type { AppContext } from '../router';
 import { z } from 'zod';
 import { LIMITS } from '../config/limits';
 import { getOrm, type Orm } from '../db/client';
 import { ciphers as cipherTable, folders as folderTable } from '../db/schema';
 import { notifyUserVaultSync } from '../durable/notifications-hub';
 import type {
-  Env,
   Cipher,
   CipherBankAccount,
   CipherDriversLicense,
@@ -130,12 +130,13 @@ async function runOrmBatch(
 }
 
 // POST /api/ciphers/import - Bitwarden client import endpoint
-export async function handleCiphersImport(request: Request, env: Env, userId: string): Promise<Response> {
-  const orm = getOrm(env.DB);
-  const url = new URL(request.url);
+export async function handleCiphersImport(c: AppContext): Promise<Response> {
+  const { userId } = c.var;
+  const orm = getOrm(c.env.DB);
+  const url = new URL(c.req.raw.url);
   const returnCipherMap = url.searchParams.get('returnCipherMap') === '1';
 
-  const body = await parseBody(request, CiphersImportBody);
+  const body = await parseBody(c.req.raw, CiphersImportBody);
   if (body instanceof Response) return body;
   const { folders, ciphers, folderRelationships } = body;
 
@@ -189,7 +190,7 @@ export async function handleCiphersImport(request: Request, env: Env, userId: st
       cipherFolderMap.set(rel.key, folderId);
     }
   }
-  const existingFolderIds = new Set((await folderRepo(env.DB).getAllFolders(userId)).map((folder) => folder.id));
+  const existingFolderIds = new Set((await folderRepo(c.env.DB).getAllFolders(userId)).map((folder) => folder.id));
 
   // Create ciphers
   const cipherRows: Cipher[] = [];
@@ -262,8 +263,8 @@ export async function handleCiphersImport(request: Request, env: Env, userId: st
   }
 
   // Update revision date
-  const revisionDate = await revisionRepo(env.DB).updateRevisionDate(userId);
-  notifyUserVaultSync(env, userId, revisionDate, readActingDeviceIdentifier(request));
+  const revisionDate = await revisionRepo(c.env.DB).updateRevisionDate(userId);
+  notifyUserVaultSync(c.env, userId, revisionDate, readActingDeviceIdentifier(c.req.raw));
 
   if (returnCipherMap) {
     return jsonResponse({

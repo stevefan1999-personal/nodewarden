@@ -1,4 +1,5 @@
-import { Env, SyncResponse, CipherResponse, FolderResponse, ProfileResponse } from '../types';
+import type { AppContext } from '../router';
+import { SyncResponse, CipherResponse, FolderResponse, ProfileResponse } from '../types';
 import { errorResponse } from '../utils/response';
 import { cipherToResponse, isCipherResponseSyncCompatible, shouldPreserveRepairableCipherUris } from './ciphers';
 import { sendToResponse } from './sends';
@@ -25,19 +26,20 @@ import { userRepo } from '../services/storage-user-repo';
 // would otherwise make official apps fail after an HTTP 200 sync.
 // Keep this aligned with src/handlers/ciphers.ts when adding new vault fields.
 // GET /api/sync
-export async function handleSync(request: Request, env: Env, userId: string): Promise<Response> {
-  const url = new URL(request.url);
+export async function handleSync(c: AppContext): Promise<Response> {
+  const { userId } = c.var;
+  const url = new URL(c.req.raw.url);
   const excludeDomainsParam = url.searchParams.get('excludeDomains');
   const excludeDomains = excludeDomainsParam !== null && /^(1|true|yes)$/i.test(excludeDomainsParam);
   const excludeSendsParam = url.searchParams.get('excludeSends');
   const excludeSends = excludeSendsParam !== null && /^(1|true|yes)$/i.test(excludeSendsParam);
-  const preserveRepairableUris = shouldPreserveRepairableCipherUris(request);
+  const preserveRepairableUris = shouldPreserveRepairableCipherUris(c.req.raw);
 
   // Read the revision before the user row: writers change the row first and bump the
   // revision second, so a body cached under a revision can never predate that revision.
   const [revisionDate, accountPasskeys] = await Promise.all([
-    revisionRepo(env.DB).getRevisionDate(userId),
-    passkeyRepo(env.DB).listAccountPasskeyCredentialsByUserId(userId),
+    revisionRepo(c.env.DB).getRevisionDate(userId),
+    passkeyRepo(c.env.DB).listAccountPasskeyCredentialsByUserId(userId),
   ]);
   const accountPasskeyCacheTag = accountPasskeys
     .map((credential) =>
@@ -62,21 +64,21 @@ export async function handleSync(request: Request, env: Env, userId: string): Pr
     return new Response(cachedResponse.body, cachedResponse);
   }
 
-  const user = await userRepo(env.DB).getUserById(userId);
+  const user = await userRepo(c.env.DB).getUserById(userId);
   if (!user) {
     return errorResponse('User not found', 404);
   }
 
   const [ciphers, folders, sends, personalAttachments, domainSettings, orgCiphersForAttachments] = await Promise.all([
-    cipherRepo(env.DB).getAllCiphers(userId),
-    folderRepo(env.DB).getAllFolders(userId),
-    excludeSends ? Promise.resolve([]) : sendRepo(env.DB).getAllSends(userId),
-    attachmentRepo(env.DB).getAttachmentsByUserId(userId),
-    excludeDomains ? Promise.resolve(null) : domainRulesRepo(env.DB).getUserDomainSettings(userId),
-    orgRepo(env.DB).listAccessibleOrgCiphers(userId),
+    cipherRepo(c.env.DB).getAllCiphers(userId),
+    folderRepo(c.env.DB).getAllFolders(userId),
+    excludeSends ? Promise.resolve([]) : sendRepo(c.env.DB).getAllSends(userId),
+    attachmentRepo(c.env.DB).getAttachmentsByUserId(userId),
+    excludeDomains ? Promise.resolve(null) : domainRulesRepo(c.env.DB).getUserDomainSettings(userId),
+    orgRepo(c.env.DB).listAccessibleOrgCiphers(userId),
   ]);
   const attachmentsByCipher = new Map(personalAttachments);
-  const extraAttachmentMap = await attachmentRepo(env.DB).getAttachmentsByCipherIds(
+  const extraAttachmentMap = await attachmentRepo(c.env.DB).getAttachmentsByCipherIds(
     orgCiphersForAttachments.map((cipher) => cipher.id),
   );
   for (const [cipherId, attachments] of extraAttachmentMap.entries()) {
@@ -88,16 +90,16 @@ export async function handleSync(request: Request, env: Env, userId: string): Pr
   const userDecryptionOptions = buildUserDecryptionOptions(user, webAuthnPrfOptions[0] || null);
   const validFolderIds = new Set(folders.map((folder) => folder.id));
 
-  const profile: ProfileResponse = await buildProfileResponse(user, env);
+  const profile: ProfileResponse = await buildProfileResponse(user, c.env);
   const orgCiphers = orgCiphersForAttachments;
   const visibleOrgCiphers = [];
   const collectionDetails = [];
-  const policies = await orgRepo(env.DB).listEnabledPoliciesForUser(userId);
-  const memberships = await orgRepo(env.DB).listMembershipsByUser(userId);
+  const policies = await orgRepo(c.env.DB).listEnabledPoliciesForUser(userId);
+  const memberships = await orgRepo(c.env.DB).listMembershipsByUser(userId);
   for (const member of memberships) {
     if (member.status !== 2) continue;
-    const collections = await orgRepo(env.DB).listCollectionsByOrg(member.orgId);
-    const assigned = await orgRepo(env.DB).listUserCollectionAccess(userId, member.orgId);
+    const collections = await orgRepo(c.env.DB).listCollectionsByOrg(member.orgId);
+    const assigned = await orgRepo(c.env.DB).listUserCollectionAccess(userId, member.orgId);
     const assignedMap = new Map(assigned.map((item) => [item.collectionId, item]));
     for (const collection of collections) {
       const permission = resolveCollectionPermission(member, assignedMap.get(collection.id) || null);

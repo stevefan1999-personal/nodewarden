@@ -1,3 +1,4 @@
+import type { AppContext } from '../router';
 import { AuthService } from '../services/auth';
 import { isAuthRequestExpired, authRequestRepo } from '../services/storage-auth-request-repo';
 import type { Env, JWTPayload } from '../types';
@@ -16,15 +17,15 @@ async function authenticateAccessToken(request: Request, env: Env): Promise<JWTP
   return auth.verifyAccessToken(`Bearer ${accessToken}`);
 }
 
-export async function handleNotificationsNegotiate(request: Request, env: Env): Promise<Response> {
-  const payload = await authenticateAccessToken(request, env);
+export async function handleNotificationsNegotiate(c: AppContext): Promise<Response> {
+  const payload = await authenticateAccessToken(c.req.raw, c.env);
   if (!payload?.sub) return errorResponse('Unauthorized', 401);
 
   // Issue the single-use connection token the WebSocket upgrade presents instead of the access JWT.
   const expiresAt = Date.now() + WEBSOCKET_CONNECTION_TOKEN_TTL_MS;
-  const connectionToken = await createWebSocketConnectionToken(payload.sub, expiresAt, env.JWT_SECRET);
-  const id = env.NOTIFICATIONS_HUB.idFromName(payload.sub);
-  const stub = env.NOTIFICATIONS_HUB.get(id);
+  const connectionToken = await createWebSocketConnectionToken(payload.sub, expiresAt, c.env.JWT_SECRET);
+  const id = c.env.NOTIFICATIONS_HUB.idFromName(payload.sub);
+  const stub = c.env.NOTIFICATIONS_HUB.get(id);
   const response = await stub.fetch('https://notifications/internal/ws-token', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -53,24 +54,24 @@ export async function handleNotificationsNegotiate(request: Request, env: Env): 
   );
 }
 
-export async function handleNotificationsHub(request: Request, env: Env): Promise<Response> {
-  if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') {
+export async function handleNotificationsHub(c: AppContext): Promise<Response> {
+  if (c.req.raw.headers.get('Upgrade')?.toLowerCase() !== 'websocket') {
     return errorResponse('Expected websocket', 426);
   }
   // Never accept an access JWT from the URL: URLs are routinely retained by logs,
   // browser history, proxies, monitoring, and error tracking systems.
   let payload: JWTPayload | null;
-  if (request.headers.has('Authorization')) {
-    payload = await authenticateAccessToken(request, env);
+  if (c.req.raw.headers.has('Authorization')) {
+    payload = await authenticateAccessToken(c.req.raw, c.env);
   } else {
     // Without the header, consume the single-use connection token from negotiate (SignalR sends it as id).
-    const token = String(new URL(request.url).searchParams.get('id') || '').trim();
-    const claims = await verifyWebSocketConnectionToken(token, env.JWT_SECRET);
+    const token = String(new URL(c.req.raw.url).searchParams.get('id') || '').trim();
+    const claims = await verifyWebSocketConnectionToken(token, c.env.JWT_SECRET);
     if (!claims) return errorResponse('Unauthorized', 401);
 
     // Verify the signed routing claim before selecting a Durable Object. Otherwise an
     // attacker could activate arbitrary object names with forged token prefixes.
-    const tokenHub = env.NOTIFICATIONS_HUB.get(env.NOTIFICATIONS_HUB.idFromName(claims.userId));
+    const tokenHub = c.env.NOTIFICATIONS_HUB.get(c.env.NOTIFICATIONS_HUB.idFromName(claims.userId));
     const response = await tokenHub.fetch('https://notifications/internal/ws-token/consume', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -92,32 +93,32 @@ export async function handleNotificationsHub(request: Request, env: Env): Promis
   if (!payload?.sub) return errorResponse('Unauthorized', 401);
 
   const userId = payload.sub;
-  const id = env.NOTIFICATIONS_HUB.idFromName(userId);
-  const stub = env.NOTIFICATIONS_HUB.get(id);
-  const forwardedUrl = new URL(request.url);
+  const id = c.env.NOTIFICATIONS_HUB.idFromName(userId);
+  const stub = c.env.NOTIFICATIONS_HUB.get(id);
+  const forwardedUrl = new URL(c.req.raw.url);
   forwardedUrl.searchParams.set('nw_uid', userId);
   if (payload.did) {
     forwardedUrl.searchParams.set('nw_did', payload.did);
   }
-  return stub.fetch(new Request(forwardedUrl.toString(), request));
+  return stub.fetch(new Request(forwardedUrl.toString(), c.req.raw));
 }
 
-export async function handleAnonymousNotificationsHub(request: Request, env: Env): Promise<Response> {
-  const url = new URL(request.url);
+export async function handleAnonymousNotificationsHub(c: AppContext): Promise<Response> {
+  const url = new URL(c.req.raw.url);
   const authRequestId = String(url.searchParams.get('Token') || url.searchParams.get('token') || '').trim();
   if (!authRequestId) return errorResponse('Token is required', 400);
-  if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') {
+  if (c.req.raw.headers.get('Upgrade')?.toLowerCase() !== 'websocket') {
     return errorResponse('Expected websocket', 426);
   }
 
-  const authRequest = await authRequestRepo(env.DB).getAuthRequestById(authRequestId);
+  const authRequest = await authRequestRepo(c.env.DB).getAuthRequestById(authRequestId);
   if (!authRequest || isAuthRequestExpired(authRequest)) {
     return errorResponse('Not found', 404);
   }
 
-  const id = env.NOTIFICATIONS_HUB.idFromName(authRequestId);
-  const stub = env.NOTIFICATIONS_HUB.get(id);
-  const forwardedUrl = new URL(request.url);
+  const id = c.env.NOTIFICATIONS_HUB.idFromName(authRequestId);
+  const stub = c.env.NOTIFICATIONS_HUB.get(id);
+  const forwardedUrl = new URL(c.req.raw.url);
   forwardedUrl.searchParams.set('nw_auth_request_id', authRequestId);
-  return stub.fetch(new Request(forwardedUrl.toString(), request));
+  return stub.fetch(new Request(forwardedUrl.toString(), c.req.raw));
 }

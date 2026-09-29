@@ -1,5 +1,6 @@
+import type { AppContext } from '../router';
 import { z } from 'zod';
-import type { Env, User } from '../types';
+import type { User } from '../types';
 import { errorResponse, jsonResponse, parseBody } from '../utils/response';
 import { organizationResponse } from '../utils/org-response';
 import { buildNodeWardenEnterpriseLicense, parseOrganizationLicense } from '../services/enterprise-license';
@@ -26,15 +27,12 @@ export function enterpriseLicenseFileResponse(user: User): Response {
   });
 }
 
-export async function handleCreateSelfHostedOrganizationLicense(
-  request: Request,
-  env: Env,
-  user: User,
-): Promise<Response> {
-  const contentType = String(request.headers.get('Content-Type') || '');
+export async function handleCreateSelfHostedOrganizationLicense(c: AppContext): Promise<Response> {
+  const { currentUser: user } = c.var;
+  const contentType = String(c.req.raw.headers.get('Content-Type') || '');
   let form: { license: unknown; key: string; collectionName: string };
   if (contentType.includes('multipart/form-data') || contentType.includes('application/x-www-form-urlencoded')) {
-    const formData = await request.formData();
+    const formData = await c.req.raw.formData();
     // The Workers FormData types omit the File entries a multipart upload carries.
     const licenseField = (formData.get('license') ?? formData.get('License')) as Blob | string | null;
     const text = typeof licenseField === 'string' ? licenseField : ((await licenseField?.text()) ?? '');
@@ -46,7 +44,7 @@ export async function handleCreateSelfHostedOrganizationLicense(
       collectionName: String(formData.get('collectionName') || formData.get('CollectionName') || 'Default Collection'),
     };
   } else {
-    const body = await parseBody(request, LicenseJsonRequest);
+    const body = await parseBody(c.req.raw, LicenseJsonRequest);
     if (body instanceof Response) return body;
     form = {
       license: body.license || body,
@@ -56,7 +54,7 @@ export async function handleCreateSelfHostedOrganizationLicense(
   }
   if (!form.key) return errorResponse('Organization key is required', 400);
   const parsed = parseOrganizationLicense(form.license, user.name || 'Organization');
-  const org = await createOwnedOrganization(env.DB, user, {
+  const org = await createOwnedOrganization(c.env.DB, user, {
     name: parsed.name,
     billingEmail: parsed.billingEmail || user.email,
     collectionName: form.collectionName || 'Default Collection',
@@ -66,26 +64,24 @@ export async function handleCreateSelfHostedOrganizationLicense(
 }
 
 // The uploaded license changes nothing, since every organization runs as Enterprise, so its body is never read.
-export async function handleUpdateSelfHostedOrganizationLicense(
-  env: Env,
-  user: User,
-  orgId: string,
-): Promise<Response> {
-  const member = await orgRepo(env.DB).getMembershipByUserAndOrg(user.id, orgId);
+export async function handleUpdateSelfHostedOrganizationLicense(c: AppContext, orgId: string): Promise<Response> {
+  const { currentUser: user } = c.var;
+  const member = await orgRepo(c.env.DB).getMembershipByUserAndOrg(user.id, orgId);
   if (!isActiveMember(member) || !canDeleteOrganization(member)) {
     return errorResponse('Organization not found', 404);
   }
-  const org = await orgRepo(env.DB).getOrganization(orgId);
+  const org = await orgRepo(c.env.DB).getOrganization(orgId);
   if (!org) return errorResponse('Organization not found', 404);
   return jsonResponse(organizationResponse(org));
 }
 
-export async function handleSyncSelfHostedOrganizationLicense(env: Env, user: User, orgId: string): Promise<Response> {
-  const member = await orgRepo(env.DB).getMembershipByUserAndOrg(user.id, orgId);
+export async function handleSyncSelfHostedOrganizationLicense(c: AppContext, orgId: string): Promise<Response> {
+  const { currentUser: user } = c.var;
+  const member = await orgRepo(c.env.DB).getMembershipByUserAndOrg(user.id, orgId);
   if (!isActiveMember(member) || !canDeleteOrganization(member)) {
     return errorResponse('Organization not found', 404);
   }
-  const org = await orgRepo(env.DB).getOrganization(orgId);
+  const org = await orgRepo(c.env.DB).getOrganization(orgId);
   if (!org) return errorResponse('Organization not found', 404);
   return jsonResponse(organizationResponse(org));
 }

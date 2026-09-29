@@ -50,108 +50,76 @@ const project = '/api/projects/:projectId{[a-f0-9-]+}';
 const serviceAccount = '/api/service-accounts/:serviceAccountId{[a-f0-9-]+}';
 const org = '/api/organizations/:orgId{[a-f0-9-]+}';
 
-secretsManagerRoutes.get(`${secret}/trash`, (c) =>
-  handleSecretsTrash(c.req.raw, c.env, c.get('principal'), c.req.param('secretId'), undefined),
-);
+secretsManagerRoutes.get(`${secret}/trash`, (c) => handleSecretsTrash(c, c.req.param('secretId'), undefined));
 secretsManagerRoutes.post(`${secret}/trash/:action{(?:empty|restore)}`, (c) =>
-  handleSecretsTrash(
-    c.req.raw,
-    c.env,
-    c.get('principal'),
-    c.req.param('secretId'),
-    c.req.param('action') as 'empty' | 'restore',
-  ),
+  handleSecretsTrash(c, c.req.param('secretId'), c.req.param('action') as 'empty' | 'restore'),
 );
-secretsManagerRoutes.get(`${secret}/access-policies`, (c) =>
-  handleSecretPolicies(c.env, c.get('principal'), c.req.param('secretId')),
-);
+secretsManagerRoutes.get(`${secret}/access-policies`, (c) => handleSecretPolicies(c, c.req.param('secretId')));
 secretsManagerRoutes.on(['GET', 'PUT'], `${project}/access-policies/service-accounts`, (c) =>
-  handleMachinePolicies(c.req.raw, c.env, c.get('principal'), 'project', c.req.param('projectId')),
+  handleMachinePolicies(c, 'project', c.req.param('projectId')),
 );
 secretsManagerRoutes.on(['GET', 'PUT'], `${serviceAccount}/granted-policies`, (c) =>
-  handleMachinePolicies(c.req.raw, c.env, c.get('principal'), 'serviceAccount', c.req.param('serviceAccountId')),
+  handleMachinePolicies(c, 'serviceAccount', c.req.param('serviceAccountId')),
 );
 secretsManagerRoutes.on(['GET', 'PUT'], `${project}/access-policies/people`, (c) =>
-  handlePeoplePolicies(c.req.raw, c.env, c.get('principal'), 'project', c.req.param('projectId')),
+  handlePeoplePolicies(c, 'project', c.req.param('projectId')),
 );
 secretsManagerRoutes.on(['GET', 'PUT'], `${serviceAccount}/access-policies/people`, (c) =>
-  handlePeoplePolicies(c.req.raw, c.env, c.get('principal'), 'serviceAccount', c.req.param('serviceAccountId')),
+  handlePeoplePolicies(c, 'serviceAccount', c.req.param('serviceAccountId')),
 );
 secretsManagerRoutes.get(
   '/api/organization/:orgId{[a-f0-9-]+}/:kind{(?:projects|secrets|service-account)}/:id{[a-f0-9-]+}/events',
   (c) =>
     handleSmEvents(
-      c.req.raw,
-      c.env,
-      c.get('principal'),
+      c,
       c.req.param('kind') as 'projects' | 'secrets' | 'service-account',
       c.req.param('id'),
       c.req.param('orgId'),
     ),
 );
 secretsManagerRoutes.get('/api/sm/events/service-accounts/:serviceAccountId{[a-f0-9-]+}', (c) =>
-  handleSmEvents(c.req.raw, c.env, c.get('principal'), 'service-account', c.req.param('serviceAccountId')),
+  handleSmEvents(c, 'service-account', c.req.param('serviceAccountId')),
 );
 
-secretsManagerRoutes.post('/api/service-accounts/delete', (c) =>
-  handleDeleteServiceAccounts(c.req.raw, c.env, c.get('principal')),
-);
+secretsManagerRoutes.post('/api/service-accounts/delete', handleDeleteServiceAccounts);
 secretsManagerRoutes.on(['GET', 'PUT'], serviceAccount, (c) =>
-  handleServiceAccount(c.req.raw, c.env, c.get('principal'), c.req.param('serviceAccountId'), false),
+  handleServiceAccount(c, c.req.param('serviceAccountId'), false),
 );
 secretsManagerRoutes.get(`${serviceAccount}/sm-counts`, (c) =>
-  handleServiceAccount(c.req.raw, c.env, c.get('principal'), c.req.param('serviceAccountId'), true),
+  handleServiceAccount(c, c.req.param('serviceAccountId'), true),
 );
 secretsManagerRoutes.post(`${serviceAccount}/access-tokens/revoke`, (c) =>
-  handleRevokeAccessTokens(c.req.raw, c.env, c.get('principal'), c.req.param('serviceAccountId')),
+  handleRevokeAccessTokens(c, c.req.param('serviceAccountId')),
 );
-secretsManagerRoutes.post('/api/projects/delete', (c) => handleDeleteProjects(c.req.raw, c.env, c.get('principal')));
-secretsManagerRoutes.post('/api/secrets/get-by-ids', (c) => handleSecretsByIds(c.req.raw, c.env, c.get('principal')));
-secretsManagerRoutes.get(`${project}/secrets`, (c) =>
-  handleProjectSecrets(c.env, c.get('principal'), c.req.param('projectId')),
-);
-secretsManagerRoutes.on(['GET', 'PUT'], project, (c) =>
-  handleProject(c.req.raw, c.env, c.get('principal'), c.req.param('projectId'), false),
-);
-secretsManagerRoutes.get(`${project}/sm-counts`, (c) =>
-  handleProject(c.req.raw, c.env, c.get('principal'), c.req.param('projectId'), true),
-);
-secretsManagerRoutes.post('/api/secrets/delete', (c) => handleDeleteSecrets(c.req.raw, c.env, c.get('principal')));
-secretsManagerRoutes.get(secret, (c) => handleGetSecret(c.req.raw, c.env, c.get('principal'), c.req.param('secretId')));
-secretsManagerRoutes.put(secret, (c) =>
-  handleUpdateSecret(c.req.raw, c.env, c.get('principal'), c.req.param('secretId')),
-);
+secretsManagerRoutes.post('/api/projects/delete', handleDeleteProjects);
+secretsManagerRoutes.post('/api/secrets/get-by-ids', handleSecretsByIds);
+secretsManagerRoutes.get(`${project}/secrets`, (c) => handleProjectSecrets(c, c.req.param('projectId')));
+secretsManagerRoutes.on(['GET', 'PUT'], project, (c) => handleProject(c, c.req.param('projectId'), false));
+secretsManagerRoutes.get(`${project}/sm-counts`, (c) => handleProject(c, c.req.param('projectId'), true));
+secretsManagerRoutes.post('/api/secrets/delete', handleDeleteSecrets);
+secretsManagerRoutes.get(secret, (c) => handleGetSecret(c, c.req.param('secretId')));
+secretsManagerRoutes.put(secret, (c) => handleUpdateSecret(c, c.req.param('secretId')));
 secretsManagerRoutes.get(`${serviceAccount}/access-tokens`, (c) =>
-  handleListAccessTokens(c.env, c.get('principal'), c.req.param('serviceAccountId')),
+  handleListAccessTokens(c, c.req.param('serviceAccountId')),
 );
 secretsManagerRoutes.post(`${serviceAccount}/access-tokens`, (c) =>
-  handleCreateAccessToken(c.req.raw, c.env, c.get('principal'), c.req.param('serviceAccountId')),
+  handleCreateAccessToken(c, c.req.param('serviceAccountId')),
 );
 
 secretsManagerRoutes.get(`${org}/access-policies/service-accounts/potential-grantees`, (c) =>
-  handlePotentialMachines(c.env, c.get('principal'), c.req.param('orgId'), 'serviceAccounts'),
+  handlePotentialMachines(c, c.req.param('orgId'), 'serviceAccounts'),
 );
 secretsManagerRoutes.get(`${org}/access-policies/projects/potential-grantees`, (c) =>
-  handlePotentialMachines(c.env, c.get('principal'), c.req.param('orgId'), 'projects'),
+  handlePotentialMachines(c, c.req.param('orgId'), 'projects'),
 );
 secretsManagerRoutes.get(`${org}/access-policies/people/potential-grantees`, (c) =>
-  handlePotentialPeople(c.env, c.get('principal'), c.req.param('orgId')),
+  handlePotentialPeople(c, c.req.param('orgId')),
 );
-secretsManagerRoutes.get(`${org}/sm-counts`, (c) => handleSmCounts(c.env, c.get('principal'), c.req.param('orgId')));
-secretsManagerRoutes.get(`${org}/secrets`, (c) => handleListSecrets(c.env, c.get('principal'), c.req.param('orgId')));
-secretsManagerRoutes.post(`${org}/secrets`, (c) =>
-  handleCreateSecret(c.req.raw, c.env, c.get('principal'), c.req.param('orgId')),
-);
-secretsManagerRoutes.get(`${org}/secrets/sync`, (c) =>
-  handleSecretsSync(c.req.raw, c.env, c.get('principal'), c.req.param('orgId')),
-);
-secretsManagerRoutes.get(`${org}/projects`, (c) => handleListProjects(c.env, c.get('principal'), c.req.param('orgId')));
-secretsManagerRoutes.post(`${org}/projects`, (c) =>
-  handleCreateProject(c.req.raw, c.env, c.get('principal'), c.req.param('orgId')),
-);
-secretsManagerRoutes.get(`${org}/service-accounts`, (c) =>
-  handleListServiceAccounts(c.env, c.get('principal'), c.req.param('orgId')),
-);
-secretsManagerRoutes.post(`${org}/service-accounts`, (c) =>
-  handleCreateServiceAccount(c.req.raw, c.env, c.get('principal'), c.req.param('orgId')),
-);
+secretsManagerRoutes.get(`${org}/sm-counts`, (c) => handleSmCounts(c, c.req.param('orgId')));
+secretsManagerRoutes.get(`${org}/secrets`, (c) => handleListSecrets(c, c.req.param('orgId')));
+secretsManagerRoutes.post(`${org}/secrets`, (c) => handleCreateSecret(c, c.req.param('orgId')));
+secretsManagerRoutes.get(`${org}/secrets/sync`, (c) => handleSecretsSync(c, c.req.param('orgId')));
+secretsManagerRoutes.get(`${org}/projects`, (c) => handleListProjects(c, c.req.param('orgId')));
+secretsManagerRoutes.post(`${org}/projects`, (c) => handleCreateProject(c, c.req.param('orgId')));
+secretsManagerRoutes.get(`${org}/service-accounts`, (c) => handleListServiceAccounts(c, c.req.param('orgId')));
+secretsManagerRoutes.post(`${org}/service-accounts`, (c) => handleCreateServiceAccount(c, c.req.param('orgId')));

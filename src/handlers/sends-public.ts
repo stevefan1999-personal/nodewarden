@@ -1,3 +1,4 @@
+import type { AppContext } from '../router';
 import { Env, Send, SendType } from '../types';
 import { recordSendEvent } from '../services/events';
 import { RateLimitService, getClientIdentifier } from '../services/ratelimit';
@@ -102,82 +103,72 @@ async function sendFileDownloadResponse(
   });
 }
 
-export async function handleAccessSend(request: Request, env: Env, accessId: string): Promise<Response> {
+export async function handleAccessSend(c: AppContext, accessId: string): Promise<Response> {
   const sendId = fromAccessId(accessId);
-  const send = sendId ? await sendRepo(env.DB).getSend(sendId) : null;
+  const send = sendId ? await sendRepo(c.env.DB).getSend(sendId) : null;
   if (!send || !isSendAvailable(send)) return errorResponse(SEND_INACCESSIBLE_MSG, 404);
 
-  const rejected = await authorizeSendByPassword(request, env, send);
+  const rejected = await authorizeSendByPassword(c.req.raw, c.env, send);
   if (rejected) return rejected;
 
   if (send.type === SendType.Text) {
-    const touched = await touchSendAccess(request, env, send);
+    const touched = await touchSendAccess(c.req.raw, c.env, send);
     if (touched) return touched;
   }
 
-  return jsonResponse(sendToAccessResponse(send, await getCreatorIdentifier(env.DB, send)));
+  return jsonResponse(sendToAccessResponse(send, await getCreatorIdentifier(c.env.DB, send)));
 }
 
-export async function handleAccessSendFile(
-  request: Request,
-  env: Env,
-  idOrAccessId: string,
-  fileId: string,
-): Promise<Response> {
-  const send = await resolveSendFromIdOrAccessId(env.DB, idOrAccessId);
+export async function handleAccessSendFile(c: AppContext, idOrAccessId: string, fileId: string): Promise<Response> {
+  const send = await resolveSendFromIdOrAccessId(c.env.DB, idOrAccessId);
   if (!send || !isSendAvailable(send) || send.type !== SendType.File || !sendFileIdMatches(send, fileId)) {
     return errorResponse(SEND_INACCESSIBLE_MSG, 404);
   }
 
-  const rejected = await authorizeSendByPassword(request, env, send);
+  const rejected = await authorizeSendByPassword(c.req.raw, c.env, send);
   if (rejected) return rejected;
 
-  const touched = await touchSendAccess(request, env, send);
+  const touched = await touchSendAccess(c.req.raw, c.env, send);
   if (touched) return touched;
 
-  return sendFileDownloadResponse(request, send, fileId, env.JWT_SECRET);
+  return sendFileDownloadResponse(c.req.raw, send, fileId, c.env.JWT_SECRET);
 }
 
-export async function handleAccessSendV2(request: Request, env: Env): Promise<Response> {
-  const auth = await authorizeSendByToken(request, env);
+export async function handleAccessSendV2(c: AppContext): Promise<Response> {
+  const auth = await authorizeSendByToken(c.req.raw, c.env);
   if (auth instanceof Response) return auth;
   const { send } = auth;
 
   if (send.type === SendType.Text) {
-    const touched = await touchSendAccess(request, env, send);
+    const touched = await touchSendAccess(c.req.raw, c.env, send);
     if (touched) return touched;
   }
 
-  return jsonResponse(sendToAccessResponse(send, await getCreatorIdentifier(env.DB, send)));
+  return jsonResponse(sendToAccessResponse(send, await getCreatorIdentifier(c.env.DB, send)));
 }
 
-export async function handleAccessSendFileV2(request: Request, env: Env, fileId: string): Promise<Response> {
-  const auth = await authorizeSendByToken(request, env);
+export async function handleAccessSendFileV2(c: AppContext, fileId: string): Promise<Response> {
+  const auth = await authorizeSendByToken(c.req.raw, c.env);
   if (auth instanceof Response) return auth;
   const { send, secret } = auth;
   if (send.type !== SendType.File || !sendFileIdMatches(send, fileId)) {
     return errorResponse(SEND_INACCESSIBLE_MSG, 404);
   }
 
-  const touched = await touchSendAccess(request, env, send);
+  const touched = await touchSendAccess(c.req.raw, c.env, send);
   if (touched) return touched;
 
-  return sendFileDownloadResponse(request, send, fileId, secret);
+  return sendFileDownloadResponse(c.req.raw, send, fileId, secret);
 }
 
-export async function handleDownloadSendFile(
-  request: Request,
-  env: Env,
-  sendId: string,
-  fileId: string,
-): Promise<Response> {
-  const url = new URL(request.url);
+export async function handleDownloadSendFile(c: AppContext, sendId: string, fileId: string): Promise<Response> {
+  const url = new URL(c.req.raw.url);
   const token = url.searchParams.get('t') || url.searchParams.get('token');
   if (!token) {
     return errorResponse('Token required', 401);
   }
 
-  const claims = await verifySendFileDownloadToken(token, env.JWT_SECRET);
+  const claims = await verifySendFileDownloadToken(token, c.env.JWT_SECRET);
   if (!claims) {
     return errorResponse('Invalid or expired token', 401);
   }
@@ -185,7 +176,7 @@ export async function handleDownloadSendFile(
     return errorResponse('Token mismatch', 401);
   }
 
-  const send = await sendRepo(env.DB).getSend(sendId);
+  const send = await sendRepo(c.env.DB).getSend(sendId);
   if (!send || !isSendAvailable(send) || send.type !== SendType.File) {
     return errorResponse(SEND_INACCESSIBLE_MSG, 404);
   }
@@ -194,12 +185,12 @@ export async function handleDownloadSendFile(
     return errorResponse(SEND_INACCESSIBLE_MSG, 404);
   }
 
-  const firstUse = await attachmentTokenRepo(env.DB).consumeAttachmentDownloadToken(`send:${claims.jti}`, claims.exp);
+  const firstUse = await attachmentTokenRepo(c.env.DB).consumeAttachmentDownloadToken(`send:${claims.jti}`, claims.exp);
   if (!firstUse) {
     return errorResponse('Invalid or expired token', 401);
   }
 
-  const object = await getBlobObject(env, getSendFileObjectKey(sendId, fileId));
+  const object = await getBlobObject(c.env, getSendFileObjectKey(sendId, fileId));
   if (!object) {
     return errorResponse('Send file not found', 404);
   }

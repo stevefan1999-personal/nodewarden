@@ -1,3 +1,4 @@
+import type { AppContext } from '../router';
 import { decode, verify } from 'hono/jwt';
 import { signHs256Jwt } from '../utils/jwt';
 import { readEnvConfig } from '../config/env';
@@ -24,16 +25,16 @@ export async function userRequiresSso(env: Env, userId: string): Promise<boolean
   return policies.some((policy) => policy.type === PolicyType.RequireSso && policy.enabled);
 }
 
-export async function handleSsoPrevalidate(env: Env): Promise<Response> {
-  if (!isSsoEnabled(env)) return errorResponse('SSO is not enabled', 404);
+export async function handleSsoPrevalidate(c: AppContext): Promise<Response> {
+  if (!isSsoEnabled(c.env)) return errorResponse('SSO is not enabled', 404);
   const now = Math.floor(Date.now() / 1000);
-  const token = await signHs256Jwt({ sub: 'nodewarden-sso', nbf: now, exp: now + 120 }, env.JWT_SECRET);
+  const token = await signHs256Jwt({ sub: 'nodewarden-sso', nbf: now, exp: now + 120 }, c.env.JWT_SECRET);
   return jsonResponse({ token });
 }
 
-export async function handleSsoAuthorize(request: Request, env: Env): Promise<Response> {
-  if (!isSsoEnabled(env)) return errorResponse('SSO is not enabled', 404);
-  const url = new URL(request.url);
+export async function handleSsoAuthorize(c: AppContext): Promise<Response> {
+  if (!isSsoEnabled(c.env)) return errorResponse('SSO is not enabled', 404);
+  const url = new URL(c.req.raw.url);
   const state = url.searchParams.get('state') || generateUUID();
   const codeChallenge = url.searchParams.get('code_challenge');
   const clientId = url.searchParams.get('client_id') || 'web';
@@ -54,7 +55,7 @@ export async function handleSsoAuthorize(request: Request, env: Env): Promise<Re
   if (!redirectUri) return errorResponse('Invalid redirect_uri', 400);
 
   const now = new Date().toISOString();
-  await orgRepo(env.DB).saveSsoAuth({
+  await orgRepo(c.env.DB).saveSsoAuth({
     state,
     codeChallenge,
     redirectUri,
@@ -63,13 +64,13 @@ export async function handleSsoAuthorize(request: Request, env: Env): Promise<Re
     createdAt: now,
     updatedAt: now,
   });
-  if (env.CACHE_KV) {
-    await env.CACHE_KV.put(`sso:state:${state}`, JSON.stringify({ redirectUri, clientId, codeChallenge }), {
+  if (c.env.CACHE_KV) {
+    await c.env.CACHE_KV.put(`sso:state:${state}`, JSON.stringify({ redirectUri, clientId, codeChallenge }), {
       expirationTtl: 600,
     });
   }
 
-  const config = readEnvConfig(env);
+  const config = readEnvConfig(c.env);
   const { authorization_endpoint: authorizationEndpoint } = await discoverOidcConfig(config.SSO_AUTHORITY);
   const target = new URL(authorizationEndpoint || `${config.SSO_AUTHORITY}/authorize`);
   target.searchParams.set('response_type', 'code');
@@ -84,15 +85,15 @@ export async function handleSsoAuthorize(request: Request, env: Env): Promise<Re
   return Response.redirect(target.toString(), 302);
 }
 
-export async function handleOidcSignin(request: Request, env: Env): Promise<Response> {
-  const url = new URL(request.url);
+export async function handleOidcSignin(c: AppContext): Promise<Response> {
+  const url = new URL(c.req.raw.url);
   const state = url.searchParams.get('state') || '';
   const code = url.searchParams.get('code');
   const error = url.searchParams.get('error');
-  const session = await orgRepo(env.DB).getSsoAuth(state);
+  const session = await orgRepo(c.env.DB).getSsoAuth(state);
   if (!session) return errorResponse('Unknown SSO state', 400);
   const now = new Date().toISOString();
-  await orgRepo(env.DB).saveSsoAuth({
+  await orgRepo(c.env.DB).saveSsoAuth({
     ...session,
     codeChallenge: session.codeChallenge,
     redirectUri: session.redirectUri,

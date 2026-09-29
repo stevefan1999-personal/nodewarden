@@ -15,7 +15,7 @@ import {
 import { handleUpdateSecret } from '../handlers/secrets-manager';
 import { orgRepo } from '../services/storage-org-repo';
 import { smRepo } from '../services/storage-secret-repo';
-import { authedFetch, createTestEnv } from './support/env';
+import { authedFetch, contextFor, createTestEnv } from './support/env';
 import { ENCRYPTED_FIELD, postJson, seedMember, seedSmOrg, smUser } from './support/sm';
 
 const FIELDS = { key: ENCRYPTED_FIELD, value: ENCRYPTED_FIELD, note: ENCRYPTED_FIELD };
@@ -245,7 +245,7 @@ test('a stale secret snapshot aborts new and removed policies together with its 
       accessPoliciesRequests: policies([policy(bMember.id, true)], [], [policy(machine.id)]),
     } as T;
   };
-  assert.equal((await handleUpdateSecret(put, env, await smUser(env, owner), secret.id)).status, 404);
+  assert.equal((await handleUpdateSecret(contextFor(env, put, await smUser(env, owner)), secret.id)).status, 404);
   const persisted = (await smRepo(env.DB).getSecret(secret.id))!;
   assert.equal(persisted.deletedAt, before);
   assert.equal(persisted.value, ENCRYPTED_FIELD);

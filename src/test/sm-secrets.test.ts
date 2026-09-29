@@ -18,7 +18,7 @@ import {
 import { handleDeleteSecrets, handleUpdateSecret } from '../handlers/secrets-manager';
 import { orgRepo } from '../services/storage-org-repo';
 import { smRepo } from '../services/storage-secret-repo';
-import { abortWrites, authedFetch, createTestEnv } from './support/env';
+import { abortWrites, authedFetch, contextFor, createTestEnv } from './support/env';
 import { ENCRYPTED_FIELD, postJson, seedMember, seedSmOrg, smUser } from './support/sm';
 
 const FIELDS = { key: ENCRYPTED_FIELD, value: ENCRYPTED_FIELD, note: ENCRYPTED_FIELD };
@@ -213,7 +213,7 @@ test('secret PUT never revives a trashed or deleted row, or rewrites an unchange
     await orm.update(smSecrets).set({ deletedAt }).where(eq(smSecrets.id, trashed.id));
     return { ...FIELDS, projectIds: [newProject.id] } as T;
   };
-  assert.equal((await handleUpdateSecret(put, env, await smUser(env, owner), trashed.id)).status, 404);
+  assert.equal((await handleUpdateSecret(contextFor(env, put, await smUser(env, owner)), trashed.id)).status, 404);
   const persisted = await smRepo(env.DB).getSecret(trashed.id);
   assert.equal(persisted!.deletedAt, deletedAt);
   assert.deepEqual(persisted!.projectIds, [oldProject.id]);
@@ -224,7 +224,7 @@ test('secret PUT never revives a trashed or deleted row, or rewrites an unchange
     await orm.delete(smSecrets).where(eq(smSecrets.id, removed.id));
     return { ...FIELDS, projectIds: [oldProject.id] } as T;
   };
-  assert.equal((await handleUpdateSecret(put, env, await smUser(env, owner), removed.id)).status, 404);
+  assert.equal((await handleUpdateSecret(contextFor(env, put, await smUser(env, owner)), removed.id)).status, 404);
   assert.equal(await smRepo(env.DB).getSecret(removed.id), null);
 
   const moved = await secret([oldProject.id]);
@@ -232,7 +232,7 @@ test('secret PUT never revives a trashed or deleted row, or rewrites an unchange
     await orm.update(smSecretProjects).set({ projectId: newProject.id }).where(eq(smSecretProjects.secretId, moved.id));
     return { ...FIELDS, projectIds: [oldProject.id] } as T;
   };
-  assert.equal((await handleUpdateSecret(put, env, await smUser(env, owner), moved.id)).status, 404);
+  assert.equal((await handleUpdateSecret(contextFor(env, put, await smUser(env, owner)), moved.id)).status, 404);
   assert.deepEqual((await smRepo(env.DB).getSecret(moved.id))!.projectIds, [newProject.id]);
 });
 
@@ -263,7 +263,7 @@ test('150-secret bulk delete chunks parameters and rolls back every chunk and SA
   );
   const deleteRequest = () => new Request('https://vault.example.test', { method: 'POST', body: JSON.stringify(ids) });
   await assert.rejects(
-    async () => handleDeleteSecrets(deleteRequest(), env, await smUser(env, owner)),
+    async () => handleDeleteSecrets(contextFor(env, deleteRequest(), await smUser(env, owner))),
     /test bulk rollback/,
   );
   assert.equal(await orm.$count(smSecrets, isNotNull(smSecrets.deletedAt)), 0);
@@ -302,7 +302,7 @@ test('a stale member edit cannot overwrite a secret after its project moved or w
       else await orm.delete(smProjects).where(eq(smProjects.id, source.id));
       return { ...FIELDS, value: changed, projectIds: move ? [source.id] : [readable.id] } as T;
     };
-    assert.equal((await handleUpdateSecret(put, env, await smUser(env, a), target.id)).status, 404);
+    assert.equal((await handleUpdateSecret(contextFor(env, put, await smUser(env, a)), target.id)).status, 404);
     const persisted = await smRepo(env.DB).getSecret(target.id);
     assert.equal(persisted!.value, ENCRYPTED_FIELD);
     assert.deepEqual(persisted!.projectIds, move ? [hidden.id] : []);

@@ -1,5 +1,5 @@
+import type { AppContext } from '../router';
 import { z } from 'zod';
-import type { Env } from '../types';
 import {
   buildDomainsResponse,
   customRulesToActiveEquivalentDomains,
@@ -19,8 +19,9 @@ import { domainRulesRepo } from '../services/storage-domain-rules-repo';
 // normalizers drop malformed entries, so a body that is not a JSON object changes nothing.
 const DomainsBody = z.record(z.string(), z.unknown()).catch({});
 
-export async function handleGetDomains(env: Env, userId: string): Promise<Response> {
-  const settings = await domainRulesRepo(env.DB).getUserDomainSettings(userId);
+export async function handleGetDomains(c: AppContext): Promise<Response> {
+  const { userId } = c.var;
+  const settings = await domainRulesRepo(c.env.DB).getUserDomainSettings(userId);
   return jsonResponse(
     buildDomainsResponse(
       settings.equivalentDomains,
@@ -30,9 +31,10 @@ export async function handleGetDomains(env: Env, userId: string): Promise<Respon
   );
 }
 
-export async function handleUpdateDomains(request: Request, env: Env, userId: string): Promise<Response> {
-  const payload = DomainsBody.parse(normalizeJsonKeys(await request.json().catch(() => null)));
-  const current = await domainRulesRepo(env.DB).getUserDomainSettings(userId);
+export async function handleUpdateDomains(c: AppContext): Promise<Response> {
+  const { userId } = c.var;
+  const payload = DomainsBody.parse(normalizeJsonKeys(await c.req.raw.json().catch(() => null)));
+  const current = await domainRulesRepo(c.env.DB).getUserDomainSettings(userId);
   const customEquivalentDomains =
     payload.customEquivalentDomains !== undefined
       ? normalizeCustomEquivalentDomains(payload.customEquivalentDomains)
@@ -48,14 +50,14 @@ export async function handleUpdateDomains(request: Request, env: Env, userId: st
   const excludedGlobalEquivalentDomains =
     excludedTypes === undefined ? current.excludedGlobalEquivalentDomains : normalizeExcludedGlobalTypes(excludedTypes);
 
-  await domainRulesRepo(env.DB).saveUserDomainSettings(
+  await domainRulesRepo(c.env.DB).saveUserDomainSettings(
     userId,
     equivalentDomains,
     customEquivalentDomains,
     excludedGlobalEquivalentDomains,
   );
 
-  const settings = await domainRulesRepo(env.DB).getUserDomainSettings(userId);
+  const settings = await domainRulesRepo(c.env.DB).getUserDomainSettings(userId);
   if (!settings) {
     return errorResponse('Domain settings unavailable', 500);
   }

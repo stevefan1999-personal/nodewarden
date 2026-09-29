@@ -1,3 +1,4 @@
+import type { AppContext } from '../router';
 import { EventType, recordUserEvent } from '../services/events';
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
@@ -452,9 +453,9 @@ async function completeLogin(
 }
 
 // POST /identity/connect/token
-export async function handleToken(request: Request, env: Env): Promise<Response> {
-  const auth = new AuthService(env);
-  const rateLimit = new RateLimitService(env);
+export async function handleToken(c: AppContext): Promise<Response> {
+  const auth = new AuthService(c.env);
+  const rateLimit = new RateLimitService(c.env);
 
   async function recordFailedTwoFactorAndBuildResponse(
     rateLimit: RateLimitService,
@@ -462,40 +463,40 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
     user: User,
     providerType: number,
   ): Promise<Response> {
-    await recordUserEvent(env, request, user.id, EventType.UserFailedLogIn2fa);
-    notifyFailedTwoFactor(env, request, user, providerType);
+    await recordUserEvent(c.env, c.req.raw, user.id, EventType.UserFailedLogIn2fa);
+    notifyFailedTwoFactor(c.env, c.req.raw, user, providerType);
     return recordFailedLoginAndBuildResponse(rateLimit, loginIdentifier, 'Two-step token is invalid. Try again.');
   }
 
   // An unreadable payload parses as null, which the schema answers as 'Invalid request payload'.
-  const parsed = TokenRequestSchema.safeParse(await readFormOrJson(request).catch(() => null));
+  const parsed = TokenRequestSchema.safeParse(await readFormOrJson(c.req.raw).catch(() => null));
   if (!parsed.success) return tokenRequestError(parsed.error);
   let body = parsed.data;
   let viaSsoShim = false;
   let ssoContinuation: SsoContinuation | null = null;
-  const clientIdentifier = getClientIdentifier(request);
+  const clientIdentifier = getClientIdentifier(c.req.raw);
   if (!clientIdentifier && body.grant_type !== 'refresh_token') {
-    await writeAuditEvent(env.DB, {
+    await writeAuditEvent(c.env.DB, {
       action: 'auth.client_ip.missing',
       category: 'auth',
       level: 'error',
       targetType: 'tokenEndpoint',
-      metadata: { grantType: body.grant_type, reason: 'client_ip_missing', ...auditRequestMetadata(request) },
+      metadata: { grantType: body.grant_type, reason: 'client_ip_missing', ...auditRequestMetadata(c.req.raw) },
     });
     return identityErrorResponse('Authentication is temporarily unavailable', 'temporarily_unavailable', 503, {
       'Retry-After': '5',
     });
   }
 
-  if (body.grant_type === 'authorization_code' && isSsoEnabled(env)) {
+  if (body.grant_type === 'authorization_code' && isSsoEnabled(c.env)) {
     const { code } = body;
-    const context = await ssoContinuationContext(env, request, body, code);
-    const continuation = await getSsoContinuation(env.DB, context);
+    const context = await ssoContinuationContext(c.env, c.req.raw, body, code);
+    const continuation = await getSsoContinuation(c.env.DB, context);
     if (continuation === null)
       return identityErrorResponse('SSO sign-in expired or was already completed', 'invalid_grant', 400);
     let user: User | null;
     if (continuation) {
-      user = await userRepo(env.DB).getUserById(continuation.userId);
+      user = await userRepo(c.env.DB).getUserById(continuation.userId);
       if (
         !user ||
         user.status !== 'active' ||
@@ -505,10 +506,10 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
         return identityErrorResponse('SSO sign-in is no longer valid', 'invalid_grant', 400);
       ssoContinuation = continuation;
     } else {
-      const claims = await exchangeOidcCode(env, code, new URL(request.url).origin, body.code_verifier);
+      const claims = await exchangeOidcCode(c.env, code, new URL(c.req.raw.url).origin, body.code_verifier);
       if (!claims) return identityErrorResponse('SSO exchange failed', 'invalid_grant', 400);
-      const linked = await orgRepo(env.DB).getSsoUserByIdentifier(claims.identifier);
-      user = linked ? await userRepo(env.DB).getUserById(linked.userId) : null;
+      const linked = await orgRepo(c.env.DB).getSsoUserByIdentifier(claims.identifier);
+      user = linked ? await userRepo(c.env.DB).getUserById(linked.userId) : null;
       // Adopting an existing local account by email address is only safe when the
       // provider vouches for the address; otherwise anyone who can claim that email
       // at the IdP inherits the local vault.
@@ -519,16 +520,16 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
           400,
         );
       }
-      if (!user) user = await userRepo(env.DB).getUser(claims.email);
+      if (!user) user = await userRepo(c.env.DB).getUser(claims.email);
       if (!user) {
-        if (!readEnvConfig(env).SSO_SIGNUPS) {
+        if (!readEnvConfig(c.env).SSO_SIGNUPS) {
           return identityErrorResponse('SSO sign-up is disabled', 'invalid_grant', 400);
         }
         return identityErrorResponse('Create a local account first, then link SSO', 'invalid_grant', 400);
       }
-      await orgRepo(env.DB).saveSsoUser(user.id, claims.identifier, new Date().toISOString());
+      await orgRepo(c.env.DB).saveSsoUser(user.id, claims.identifier, new Date().toISOString());
       if (user.status !== 'active') return identityErrorResponse('Account is disabled', 'invalid_grant', 400);
-      ssoContinuation = await saveSsoContinuation(env.DB, context, user);
+      ssoContinuation = await saveSsoContinuation(c.env.DB, context, user);
       if (!ssoContinuation) return identityErrorResponse('SSO sign-in is already in progress', 'invalid_grant', 400);
     }
     // The verified SSO user continues as a password grant carrying the server-side hash.
@@ -547,14 +548,14 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
   if (body.grant_type === 'password') {
     // Login with password
     const { username: email, password: passwordHash } = body;
-    const deviceInfo = readAuthRequestDeviceInfo(body, request);
+    const deviceInfo = readAuthRequestDeviceInfo(body, c.req.raw);
     const loginIdentifier = await loginRateLimitKey(clientIdentifier!, grantType, email);
 
     // Check login lockout before user lookup to reduce user-enumeration signal
     const locked = await loginLockoutResponse(rateLimit, loginIdentifier);
     if (locked) return locked;
 
-    const user = await userRepo(env.DB).getUser(email);
+    const user = await userRepo(c.env.DB).getUser(email);
     if (!user) {
       await rateLimit.recordFailedLogin(loginIdentifier);
       return identityErrorResponse('Username or password is incorrect. Try again', 'invalid_grant', 400);
@@ -562,8 +563,8 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
     if (user.status !== 'active') {
       await rateLimit.recordFailedLogin(loginIdentifier);
       await recordLoginFailure(
-        env,
-        request,
+        c.env,
+        c.req.raw,
         user,
         grantType,
         deviceInfo.deviceIdentifier,
@@ -578,8 +579,8 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
         user.email !== ssoContinuation.email)
     )
       return identityErrorResponse('SSO sign-in is no longer valid', 'invalid_grant', 400);
-    if (await userRequiresSso(env, user.id)) {
-      if (!viaSsoShim && isSsoEnabled(env)) {
+    if (await userRequiresSso(c.env, user.id)) {
+      if (!viaSsoShim && isSsoEnabled(c.env)) {
         return identityErrorResponse('SSO sign-in is required', 'invalid_grant', 400);
       }
     }
@@ -589,7 +590,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
     let valid = false;
     const normalizedAuthRequestId = body.authRequest ?? '';
     if (normalizedAuthRequestId) {
-      const authRequest = await authRequestRepo(env.DB).getAuthRequestByIdForUser(normalizedAuthRequestId, user.id);
+      const authRequest = await authRequestRepo(c.env.DB).getAuthRequestByIdForUser(normalizedAuthRequestId, user.id);
       valid = isAuthRequestLoginApproved(authRequest, user.id, passwordHash);
       if (valid) {
         validatedAuthRequestId = authRequest!.id;
@@ -600,8 +601,8 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
     }
     if (!valid) {
       await recordLoginFailure(
-        env,
-        request,
+        c.env,
+        c.req.raw,
         user,
         grantType,
         deviceInfo.deviceIdentifier,
@@ -620,7 +621,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
     const effectiveTotpSecret = user.totpSecret && isTotpEnabled(user.totpSecret) ? user.totpSecret : null;
     const effectiveYubiKeyPublicIds = userYubiKeyPublicIds(user);
     const hasTwoFactorPasskey =
-      (await passkeyRepo(env.DB).countAccountPasskeyCredentialsByUserId(user.id, 'twoFactor')) > 0;
+      (await passkeyRepo(c.env.DB).countAccountPasskeyCredentialsByUserId(user.id, 'twoFactor')) > 0;
     const enabledProviders = twoFactorProviders(user, hasTwoFactorPasskey);
     if (enabledProviders.length > 0) {
       const normalizedTwoFactorProvider = body.twoFactorProvider ?? '';
@@ -634,13 +635,13 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
       // Upstream-compatible behavior: if 2FA is required and either provider or token is missing,
       // respond with a 2FA challenge payload.
       if (!hasProvider || !hasToken) {
-        return await twoFactorRequiredResponse(request, env, env.DB, user, 'Two factor required.');
+        return await twoFactorRequiredResponse(c.req.raw, c.env, c.env.DB, user, 'Two factor required.');
       }
 
       let passedByRememberToken = false;
       if (normalizedTwoFactorProvider === String(TWO_FACTOR_PROVIDER_REMEMBER)) {
         if (deviceInfo.deviceIdentifier) {
-          const trustedUserId = await deviceRepo(env.DB).getTrustedTwoFactorDeviceTokenUserId(
+          const trustedUserId = await deviceRepo(c.env.DB).getTrustedTwoFactorDeviceTokenUserId(
             normalizedTwoFactorToken,
             deviceInfo.deviceIdentifier,
           );
@@ -649,7 +650,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
 
         // Remember token missing/invalid/expired should re-enter the 2FA challenge flow.
         if (!passedByRememberToken) {
-          return await twoFactorRequiredResponse(request, env, env.DB, user, 'Two factor required.');
+          return await twoFactorRequiredResponse(c.req.raw, c.env, c.env.DB, user, 'Two factor required.');
         }
       } else if (normalizedTwoFactorProvider === String(TWO_FACTOR_PROVIDER_AUTHENTICATOR)) {
         if (!effectiveTotpSecret) {
@@ -669,7 +670,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
             Number(normalizedTwoFactorProvider),
           );
         }
-        const consumed = await totpReplayRepo(env.DB).consumeTotpLoginCounter(user.id, matchedCounter);
+        const consumed = await totpReplayRepo(c.env.DB).consumeTotpLoginCounter(user.id, matchedCounter);
         if (!consumed) {
           return recordFailedTwoFactorAndBuildResponse(
             rateLimit,
@@ -682,7 +683,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
         if (
           !user.twoFactorEmail ||
           !(await redeemEmailOtp(
-            env,
+            c.env,
             { purpose: 'two-factor-login', subject: user.id, binding: user.securityStamp },
             normalizedTwoFactorToken,
           ))
@@ -699,10 +700,10 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
             Number(normalizedTwoFactorProvider),
           );
         }
-        let credentials = await getYubicoCredentials(env.DB);
+        let credentials = await getYubicoCredentials(c.env.DB);
         let initializedWithCurrentOtp = false;
         if (!credentials) {
-          const initialized = await initializeYubicoCredentialsOnce(env.DB, user.email, normalizedTwoFactorToken);
+          const initialized = await initializeYubicoCredentialsOnce(c.env.DB, user.email, normalizedTwoFactorToken);
           if (!initialized) {
             return recordFailedTwoFactorAndBuildResponse(
               rateLimit,
@@ -714,7 +715,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
           credentials = initialized.credentials;
           initializedWithCurrentOtp = initialized.created;
         }
-        if (!initializedWithCurrentOtp && !(await verifyYubicoOtp(env, normalizedTwoFactorToken, credentials))) {
+        if (!initializedWithCurrentOtp && !(await verifyYubicoOtp(c.env, normalizedTwoFactorToken, credentials))) {
           return recordFailedTwoFactorAndBuildResponse(
             rateLimit,
             loginIdentifier,
@@ -743,7 +744,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
           );
         }
         try {
-          await assertTwoFactorPasskeyCredential(request, env, env.DB, user, deviceResponse);
+          await assertTwoFactorPasskeyCredential(c.req.raw, c.env, c.env.DB, user, deviceResponse);
         } catch {
           return recordFailedTwoFactorAndBuildResponse(
             rateLimit,
@@ -783,7 +784,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
       }
     }
 
-    const mail = readMailConfig(env);
+    const mail = readMailConfig(c.env);
     if (
       mail.kind === 'enabled' &&
       mail.newDeviceVerification &&
@@ -795,21 +796,23 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
     ) {
       const otp = body.newDeviceOtp ?? '';
       if (otp) {
-        if (!(await redeemEmailOtp(env, { purpose: 'new-device', subject: user.id, binding: user.securityStamp }, otp)))
+        if (
+          !(await redeemEmailOtp(c.env, { purpose: 'new-device', subject: user.id, binding: user.securityStamp }, otp))
+        )
           return deviceErrorResponse('invalid_otp');
-        await markEmailVerified(env, user.id);
+        await markEmailVerified(c.env, user.id);
       } else if (
         (
-          await getOrm(env.DB)
+          await getOrm(c.env.DB)
             .select({ userId: devices.userId })
             .from(devices)
             .where(eq(devices.userId, user.id))
             .limit(1)
         ).length &&
         (!deviceInfo.deviceIdentifier ||
-          !(await deviceRepo(env.DB).isKnownDevice(user.id, deviceInfo.deviceIdentifier)))
+          !(await deviceRepo(c.env.DB).isKnownDevice(user.id, deviceInfo.deviceIdentifier)))
       ) {
-        notifyNewDeviceVerification(env, request, user, deviceInfo.deviceType);
+        notifyNewDeviceVerification(c.env, c.req.raw, user, deviceInfo.deviceType);
         return deviceErrorResponse('required');
       }
     }
@@ -819,10 +822,10 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
       ? { recoveryCode: createRecoveryCode(), securityStamp: generateUUID() }
       : undefined;
     if (ssoContinuation) {
-      if (!(await consumeSsoContinuation(env.DB, ssoContinuation, user, recovery)))
+      if (!(await consumeSsoContinuation(c.env.DB, ssoContinuation, user, recovery)))
         return identityErrorResponse('SSO sign-in expired or was already completed', 'invalid_grant', 400);
     } else if (recovery) {
-      const [cleared] = await getOrm(env.DB).batch(twoFactorClearStatements(env.DB, user.id, recovery, user));
+      const [cleared] = await getOrm(c.env.DB).batch(twoFactorClearStatements(c.env.DB, user.id, recovery, user));
       if (!cleared.meta.changes)
         return recordFailedTwoFactorAndBuildResponse(
           rateLimit,
@@ -834,14 +837,14 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
     if (recovery) {
       user.securityStamp = recovery.securityStamp;
       AuthService.invalidateUserCache(user.id);
-      await recordUserEvent(env, request, user.id, EventType.UserRecovered2fa);
-      notifyMail(env, user.email, 'twoFactorRecovered', {
+      await recordUserEvent(c.env, c.req.raw, user.id, EventType.UserRecovered2fa);
+      notifyMail(c.env, user.email, 'twoFactorRecovered', {
         time: new Date().toISOString(),
-        ip: getClientIdentifier(request) ?? 'Unknown',
+        ip: getClientIdentifier(c.req.raw) ?? 'Unknown',
       });
     }
     if (trustedTwoFactorTokenToReturn && deviceInfo.deviceIdentifier) {
-      await deviceRepo(env.DB).saveTrustedTwoFactorDeviceToken(
+      await deviceRepo(c.env.DB).saveTrustedTwoFactorDeviceToken(
         trustedTwoFactorTokenToReturn,
         user.id,
         deviceInfo.deviceIdentifier,
@@ -850,17 +853,17 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
     }
 
     // Persist device only after successful password + (optional) 2FA verification.
-    const deviceSession = await persistLoginDevice(env, request, user, deviceInfo, body);
+    const deviceSession = await persistLoginDevice(c.env, c.req.raw, user, deviceInfo, body);
 
     // Successful login - clear failed attempts
     await rateLimit.clearLoginAttempts(loginIdentifier);
     if (validatedAuthRequestId) {
-      await authRequestRepo(env.DB).markAuthRequestAuthenticated(validatedAuthRequestId);
+      await authRequestRepo(c.env.DB).markAuthRequestAuthenticated(validatedAuthRequestId);
     }
 
     return completeLogin(
-      request,
-      env,
+      c.req.raw,
+      c.env,
       { user, body, deviceInfo, deviceSession, grantType },
       { twoFactorToken: trustedTwoFactorTokenToReturn, key: authRequestLoginKey },
     );
@@ -882,14 +885,14 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
 
     let asserted: Awaited<ReturnType<typeof assertAccountPasskeyCredential>>;
     try {
-      asserted = await assertAccountPasskeyCredential(request, env, env.DB, {
+      asserted = await assertAccountPasskeyCredential(c.req.raw, c.env, c.env.DB, {
         token,
         deviceResponse,
         scope: 'Authentication',
       });
     } catch (error) {
       await rateLimit.recordFailedLogin(loginIdentifier);
-      await writeAuditEvent(env.DB, {
+      await writeAuditEvent(c.env.DB, {
         actorUserId: null,
         action: 'auth.passkey.login.failed',
         category: 'auth',
@@ -899,7 +902,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
         metadata: {
           grantType,
           reason: error instanceof Error ? error.message : 'assertion_failed',
-          ...auditRequestMetadata(request),
+          ...auditRequestMetadata(c.req.raw),
         },
       });
       return identityErrorResponse('Passkey is invalid. Try again', 'invalid_grant', 400);
@@ -911,14 +914,14 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
       return identityErrorResponse('Account is disabled', 'invalid_grant', 400);
     }
 
-    const deviceInfo = readAuthRequestDeviceInfo(body, request);
-    const deviceSession = await persistLoginDevice(env, request, user, deviceInfo, body);
+    const deviceInfo = readAuthRequestDeviceInfo(body, c.req.raw);
+    const deviceSession = await persistLoginDevice(c.env, c.req.raw, user, deviceInfo, body);
 
     await rateLimit.clearLoginAttempts(loginIdentifier);
 
     return completeLogin(
-      request,
-      env,
+      c.req.raw,
+      c.env,
       { user, body, deviceInfo, deviceSession, grantType },
       { prfOption: buildAccountPasskeyTokenUserDecryptionOption(credential) },
       { action: 'auth.passkey.login.success', targetType: 'accountPasskey', targetId: credential.id },
@@ -926,13 +929,13 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
   } else if (body.grant_type === 'client_credentials') {
     // Login with client credentials
     const { client_id: clientId, client_secret: clientSecret, scope } = body;
-    const deviceInfo = readAuthRequestDeviceInfo(body, request);
+    const deviceInfo = readAuthRequestDeviceInfo(body, c.req.raw);
 
     if (scope === 'api.secrets' || isUUID(String(clientId))) {
       const loginIdentifier = await loginRateLimitKey(clientIdentifier!, grantType, clientId.toLowerCase());
       const loginCheck = await rateLimit.checkLoginAttempt(loginIdentifier);
       if (!loginCheck.allowed) return identityErrorResponse('Too many failed login attempts.', 'TooManyRequests', 429);
-      const token = await smRepo(env.DB).getAccessTokenWithAccount(clientId.toLowerCase());
+      const token = await smRepo(c.env.DB).getAccessTokenWithAccount(clientId.toLowerCase());
       if (
         !token ||
         !token.key ||
@@ -957,7 +960,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
           client_id: token.id,
           scope: ['api.secrets'],
         },
-        env.JWT_SECRET,
+        c.env.JWT_SECRET,
       );
       return identityJsonResponse({
         access_token: accessToken,
@@ -978,7 +981,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
     const locked = await loginLockoutResponse(rateLimit, loginIdentifier);
     if (locked) return locked;
 
-    const user = await userRepo(env.DB).getUserById(uid);
+    const user = await userRepo(c.env.DB).getUserById(uid);
     if (!user) {
       await rateLimit.recordFailedLogin(loginIdentifier);
       return identityErrorResponse('ClientId or clientSecret is incorrect. Try again', 'invalid_grant', 400);
@@ -986,8 +989,8 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
     if (user.status !== 'active') {
       await rateLimit.recordFailedLogin(loginIdentifier);
       await recordLoginFailure(
-        env,
-        request,
+        c.env,
+        c.req.raw,
         user,
         grantType,
         deviceInfo.deviceIdentifier,
@@ -999,8 +1002,8 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
     if (!user.apiKey || !(await verifyApiKey(clientSecret, user.apiKey))) {
       await rateLimit.recordFailedLogin(loginIdentifier);
       await recordLoginFailure(
-        env,
-        request,
+        c.env,
+        c.req.raw,
         user,
         grantType,
         deviceInfo.deviceIdentifier,
@@ -1010,12 +1013,12 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
     }
 
     // Persist device only after successful client credential verification.
-    const deviceSession = await persistLoginDevice(env, request, user, deviceInfo, body);
+    const deviceSession = await persistLoginDevice(c.env, c.req.raw, user, deviceInfo, body);
 
     // Successful login - clear failed attempts
     await rateLimit.clearLoginAttempts(loginIdentifier);
 
-    return completeLogin(request, env, { user, body, deviceInfo, deviceSession, grantType });
+    return completeLogin(c.req.raw, c.env, { user, body, deviceInfo, deviceSession, grantType });
   } else if (body.grant_type === 'send_access') {
     const sendAccessLimit = await rateLimit.consumeBudget(
       `${clientIdentifier}:public`,
@@ -1050,7 +1053,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
     const password = body.password || null;
 
     const result = await issueSendAccessToken(
-      env,
+      c.env,
       sendId,
       passwordHashB64,
       password,
@@ -1071,8 +1074,8 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
   } else if (body.grant_type === 'refresh_token') {
     const refreshToken =
       body.refresh_token ||
-      (shouldUseWebSession(request)
-        ? parse(request.headers.get('Cookie') ?? '', WEB_REFRESH_COOKIE)[WEB_REFRESH_COOKIE]
+      (shouldUseWebSession(c.req.raw)
+        ? parse(c.req.raw.headers.get('Cookie') ?? '', WEB_REFRESH_COOKIE)[WEB_REFRESH_COOKIE]
         : null);
     if (!refreshToken) {
       return identityErrorResponse('Refresh token is required', 'invalid_request', 400);
@@ -1101,7 +1104,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
         );
       }
     } catch (error) {
-      await writeAuditEvent(env.DB, {
+      await writeAuditEvent(c.env.DB, {
         action: 'auth.refresh.failed.rate_limit_unavailable',
         category: 'auth',
         level: 'error',
@@ -1110,7 +1113,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
           grantType,
           reason: 'rate_limit_unavailable',
           error: error instanceof Error ? error.message : String(error),
-          ...auditRequestMetadata(request),
+          ...auditRequestMetadata(c.req.raw),
         },
       });
       return identityErrorResponse('Session refresh is temporarily unavailable', 'temporarily_unavailable', 503, {
@@ -1119,7 +1122,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
     }
 
     if (!clientIdentifier) {
-      await writeAuditEvent(env.DB, {
+      await writeAuditEvent(c.env.DB, {
         action: 'auth.client_ip.missing',
         category: 'auth',
         level: 'warn',
@@ -1127,8 +1130,8 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
         metadata: {
           grantType,
           reason: 'client_ip_missing',
-          webSession: shouldUseWebSession(request),
-          ...auditRequestMetadata(request),
+          webSession: shouldUseWebSession(c.req.raw),
+          ...auditRequestMetadata(c.req.raw),
         },
       });
     }
@@ -1137,7 +1140,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
     try {
       result = await auth.refreshAccessTokenDetailed(refreshToken);
     } catch (error) {
-      await writeAuditEvent(env.DB, {
+      await writeAuditEvent(c.env.DB, {
         action: 'auth.refresh.failed.temporarily_unavailable',
         category: 'auth',
         level: 'error',
@@ -1146,8 +1149,8 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
           grantType,
           reason: 'storage_or_worker_error',
           error: error instanceof Error ? error.message : String(error),
-          webSession: shouldUseWebSession(request),
-          ...auditRequestMetadata(request),
+          webSession: shouldUseWebSession(c.req.raw),
+          ...auditRequestMetadata(c.req.raw),
         },
       });
       return identityErrorResponse('Session refresh is temporarily unavailable', 'temporarily_unavailable', 503, {
@@ -1155,7 +1158,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
       });
     }
     if (!result.ok) {
-      await writeAuditEvent(env.DB, {
+      await writeAuditEvent(c.env.DB, {
         actorUserId: result.userId ?? null,
         action: `auth.refresh.failed.${result.reason}`,
         category: 'auth',
@@ -1165,31 +1168,31 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
         metadata: {
           grantType,
           reason: result.reason,
-          webSession: shouldUseWebSession(request),
-          ...auditRequestMetadata(request),
+          webSession: shouldUseWebSession(c.req.raw),
+          ...auditRequestMetadata(c.req.raw),
         },
       });
       const invalidResponse = identityErrorResponse('Invalid refresh token', 'invalid_grant', 400);
-      return shouldUseWebSession(request) ? withWebRefreshCookie(request, invalidResponse, null) : invalidResponse;
+      return shouldUseWebSession(c.req.raw) ? withWebRefreshCookie(c.req.raw, invalidResponse, null) : invalidResponse;
     }
 
     const { accessToken, user, device } = result;
     if (device?.identifier) {
-      await deviceRepo(env.DB).touchDeviceLastSeen(user.id, device.identifier);
+      await deviceRepo(c.env.DB).touchDeviceLastSeen(user.id, device.identifier);
     }
-    return tokenResponse(request, user, accessToken, refreshToken);
+    return tokenResponse(c.req.raw, user, accessToken, refreshToken);
   }
 
   return identityErrorResponse('Unsupported grant type', 'unsupported_grant_type', 400);
 }
 
 // POST /identity/accounts/prelogin
-export async function handlePrelogin(request: Request, env: Env): Promise<Response> {
-  const body = await parseBody(request, z.object({ email: requiredText('Email is required').toLowerCase() }));
+export async function handlePrelogin(c: AppContext): Promise<Response> {
+  const body = await parseBody(c.req.raw, z.object({ email: requiredText('Email is required').toLowerCase() }));
   if (body instanceof Response) return body;
   const { email } = body;
 
-  const user = await userRepo(env.DB).getUser(email);
+  const user = await userRepo(c.env.DB).getUser(email);
 
   // Return default KDF settings even if user doesn't exist (to prevent user enumeration)
   const kdfType = user?.kdfType ?? 0;
@@ -1227,28 +1230,28 @@ export async function handlePrelogin(request: Request, env: Env): Promise<Respon
 // POST /identity/connect/revocation
 // Best-effort OAuth token revocation endpoint.
 // RFC 7009 allows returning 200 even if token is unknown.
-export async function handleRevocation(request: Request, env: Env): Promise<Response> {
+export async function handleRevocation(c: AppContext): Promise<Response> {
   let form: unknown;
   try {
-    form = await readFormOrJson(request);
+    form = await readFormOrJson(c.req.raw);
   } catch {
     return new Response(null, { status: 200, headers: { 'Cache-Control': 'no-store', Pragma: 'no-cache' } });
   }
 
   const token =
     z.object({ token: formText }).catch({}).parse(form).token ||
-    (shouldUseWebSession(request)
-      ? parse(request.headers.get('Cookie') ?? '', WEB_REFRESH_COOKIE)[WEB_REFRESH_COOKIE] || ''
+    (shouldUseWebSession(c.req.raw)
+      ? parse(c.req.raw.headers.get('Cookie') ?? '', WEB_REFRESH_COOKIE)[WEB_REFRESH_COOKIE] || ''
       : '');
   if (token) {
-    await sessionRepo(env.DB).deleteRefreshToken(token);
+    await sessionRepo(c.env.DB).deleteRefreshToken(token);
   }
 
   const baseResponse = new Response(null, {
     status: 200,
     headers: { 'Cache-Control': 'no-store', Pragma: 'no-cache' },
   });
-  return shouldUseWebSession(request) ? withWebRefreshCookie(request, baseResponse, null) : baseResponse;
+  return shouldUseWebSession(c.req.raw) ? withWebRefreshCookie(c.req.raw, baseResponse, null) : baseResponse;
 }
 
 export function checkClientCredentialsParam(clientId: string, clientSecret: string, scope: string): boolean {

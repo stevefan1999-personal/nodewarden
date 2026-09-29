@@ -25,23 +25,6 @@ export class AttachmentRepository extends Repository {
     return row ?? null;
   }
 
-  async getAttachmentForUser(id: string, userId: string): Promise<Attachment | null> {
-    const [row] = await this.orm
-      .select({
-        id: attachments.id,
-        cipherId: attachments.cipherId,
-        fileName: attachments.fileName,
-        size: attachments.size,
-        sizeName: attachments.sizeName,
-        key: attachments.key,
-      })
-      .from(attachments)
-      .innerJoin(ciphers, eq(ciphers.id, attachments.cipherId))
-      .where(and(eq(attachments.id, id), eq(ciphers.userId, userId), isNull(ciphers.organizationId)))
-      .limit(1);
-    return row ?? null;
-  }
-
   // The upsert as an unexecuted statement, so callers can batch it with related writes.
   attachmentUpsert(attachment: Attachment) {
     const currentCipher = alias(ciphers, 'current_cipher');
@@ -160,10 +143,6 @@ export class AttachmentRepository extends Repository {
           ownsPersonalCipher(this.orm, userId, attachments.cipherId),
         ),
       );
-  }
-
-  async deleteAllAttachmentsByCipher(cipherId: string): Promise<void> {
-    await this.orm.delete(attachments).where(eq(attachments.cipherId, cipherId));
   }
 
   async updateCipherRevisionDate(cipherId: string): Promise<{ userId: string; revisionDate: string } | null> {

@@ -23,18 +23,6 @@ export interface AuditLogListResult {
   hasMore: boolean;
 }
 
-function mapInvite(row: typeof invites.$inferSelect): Invite {
-  return {
-    code: row.code,
-    createdBy: row.createdBy,
-    usedBy: row.usedBy ?? null,
-    expiresAt: row.expiresAt,
-    status: row.status === 'used' || row.status === 'revoked' || row.status === 'expired' ? row.status : 'active',
-    createdAt: row.createdAt,
-    updatedAt: row.updatedAt,
-  };
-}
-
 export class AdminRepository extends Repository {
   async createInvite(invite: Invite): Promise<void> {
     await this.orm.insert(invites).values({
@@ -48,11 +36,6 @@ export class AdminRepository extends Repository {
     });
   }
 
-  async getInvite(code: string): Promise<Invite | null> {
-    const [row] = await this.orm.select().from(invites).where(eq(invites.code, code)).limit(1);
-    return row ? mapInvite(row) : null;
-  }
-
   async listInvites(includeInactive: boolean = false): Promise<Invite[]> {
     const now = new Date().toISOString();
     const rows = includeInactive
@@ -62,7 +45,15 @@ export class AdminRepository extends Repository {
           .from(invites)
           .where(and(eq(invites.status, 'active'), gt(invites.expiresAt, now)))
           .orderBy(desc(invites.createdAt));
-    return rows.map(mapInvite);
+    return rows.map((row): Invite => ({
+      code: row.code,
+      createdBy: row.createdBy,
+      usedBy: row.usedBy ?? null,
+      expiresAt: row.expiresAt,
+      status: row.status === 'used' || row.status === 'revoked' || row.status === 'expired' ? row.status : 'active',
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+    }));
   }
 
   async markInviteUsed(code: string, userId: string): Promise<boolean> {

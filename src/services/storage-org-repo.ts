@@ -790,11 +790,6 @@ export class OrgRepository extends Repository {
     return map;
   }
 
-  async listOrgCipherIds(orgId: string): Promise<string[]> {
-    const rows = await this.orm.select({ id: ciphers.id }).from(ciphers).where(eq(ciphers.organizationId, orgId));
-    return rows.map((row) => row.id);
-  }
-
   private async listOrgCipherCollectionIds(orgId: string): Promise<Map<string, string[]>> {
     const rows = await this.orm
       .select({
@@ -1115,15 +1110,6 @@ export class OrgRepository extends Repository {
       .select({ userId: ssoUsers.userId, identifier: ssoUsers.identifier })
       .from(ssoUsers)
       .where(eq(ssoUsers.identifier, identifier))
-      .limit(1);
-    return row ?? null;
-  }
-
-  async getSsoUserByUserId(userId: string): Promise<{ userId: string; identifier: string } | null> {
-    const [row] = await this.orm
-      .select({ userId: ssoUsers.userId, identifier: ssoUsers.identifier })
-      .from(ssoUsers)
-      .where(eq(ssoUsers.userId, userId))
       .limit(1);
     return row ?? null;
   }

@@ -104,11 +104,6 @@ export class UserRepository extends Repository {
     return Number(row?.count || 0);
   }
 
-  async getAllUsers(): Promise<User[]> {
-    const rows = await this.orm.select().from(users).orderBy(asc(users.createdAt));
-    return rows.map(mapUserRow);
-  }
-
   async getAllUsersWithTwoFactor(): Promise<Array<User & { hasTwoFactorPasskey: boolean }>> {
     const rows = await this.orm
       .select({ user: users, hasTwoFactorPasskey: hasTwoFactorPasskey(this.orm) })
@@ -162,11 +157,6 @@ export class UserRepository extends Repository {
       .set({ userKeyId, updatedAt: new Date().toISOString() })
       .where(and(eq(users.id, userId), isNull(users.userKeyId)))
       .run();
-    return (result.meta.changes ?? 0) > 0;
-  }
-
-  async deleteUserById(id: string): Promise<boolean> {
-    const result = await this.orm.delete(users).where(eq(users.id, id)).run();
     return (result.meta.changes ?? 0) > 0;
   }
 

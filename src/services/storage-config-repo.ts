@@ -6,15 +6,6 @@ import { config } from '../db/schema';
 const REGISTERED_KEY = 'registered';
 
 export class ConfigRepository extends Repository {
-  async isRegistered(): Promise<boolean> {
-    const [row] = await this.orm
-      .select({ value: config.value })
-      .from(config)
-      .where(eq(config.key, REGISTERED_KEY))
-      .limit(1);
-    return row?.value === 'true';
-  }
-
   async getConfigValue(key: string): Promise<string | null> {
     const [row] = await this.orm.select({ value: config.value }).from(config).where(eq(config.key, key)).limit(1);
     return typeof row?.value === 'string' ? row.value : null;

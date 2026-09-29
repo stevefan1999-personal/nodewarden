@@ -5,7 +5,6 @@ import { Repository, repository } from '../db/client';
 import { session } from '../db/schema';
 import { caseWhen } from '../db/sql';
 import type { RefreshTokenRecord } from '../types';
-import { generateUUID } from '../utils/uuid';
 import { LIMITS } from '../config/limits';
 import { shouldRunPeriodicCleanup } from './periodic-cleanup';
 
@@ -41,7 +40,7 @@ export class SessionRepository extends Repository {
     await this.orm
       .insert(session)
       .values({
-        id: generateUUID(),
+        id: crypto.randomUUID(),
         token: tokenKey,
         userId,
         expiresAt,

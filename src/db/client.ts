@@ -1,11 +1,10 @@
 import { and, eq, exists, getColumns, type SQL, type Table } from 'drizzle-orm';
-import { drizzle } from 'drizzle-orm/d1';
+import { drizzle, type DrizzleD1Database } from 'drizzle-orm/d1';
 
-import { relations } from './relations';
 import { users } from './schema';
 import { SINGLE_ROW, caseWhen, changes, json } from './sql';
 
-export type Orm = ReturnType<typeof drizzle<typeof relations, D1Database>>;
+export type Orm = DrizzleD1Database;
 
 // D1 rejects any statement that binds more than this many parameters.
 export const D1_MAX_BOUND_PARAMETERS = 100;
@@ -34,15 +33,14 @@ export function statementChunks<T>(items: T[], statement: (chunk: T[]) => { toSQ
   return chunkRows(items, two - one, 2 * one - two);
 }
 
-// Constructing the driver is cheap, but the relation graph it derives is not:
-// memoise per binding so a Worker isolate builds it at most once per database.
+// Reuse one driver per database binding within a Worker isolate.
 const ormByBinding = new WeakMap<D1Database, Orm>();
 
 export function getOrm(d1: D1Database): Orm {
   const existing = ormByBinding.get(d1);
   if (existing) return existing;
 
-  const orm = drizzle(d1, { relations });
+  const orm = drizzle(d1);
   ormByBinding.set(d1, orm);
   return orm;
 }

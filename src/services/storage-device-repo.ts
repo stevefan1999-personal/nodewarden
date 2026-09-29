@@ -4,7 +4,6 @@ import { Repository, repository, statementChunks } from '../db/client';
 import { devices, trustedTwoFactorDeviceTokens } from '../db/schema';
 import { caseWhen, coalesce, excluded } from '../db/sql';
 import type { Device, TrustedDeviceTokenSummary } from '../types';
-import { generateUUID } from '../utils/uuid';
 import { hashedTokenKey } from './storage-session-repo';
 import { userRepo } from './storage-user-repo';
 
@@ -36,7 +35,7 @@ export class DeviceRepository extends Repository {
     const existingDevice = await this.getDevice(userId, deviceIdentifier);
     const effectiveSessionStamp = String(sessionStamp || '').trim() || existingDevice?.sessionStamp || '';
     const effectiveName = String(name || '').trim() || String(existingDevice?.name || '').trim();
-    const effectivePushUuid = String(existingDevice?.pushUuid || '').trim() || generateUUID();
+    const effectivePushUuid = String(existingDevice?.pushUuid || '').trim() || crypto.randomUUID();
     await this.orm
       .insert(devices)
       .values({
@@ -89,15 +88,6 @@ export class DeviceRepository extends Repository {
     const result = await this.orm
       .update(devices)
       .set({ lastSeenAt: new Date().toISOString() })
-      .where(deviceKey(userId, deviceIdentifier))
-      .run();
-    return Number(result.meta.changes ?? 0) > 0;
-  }
-
-  async rotateDeviceSessionStamp(userId: string, deviceIdentifier: string, sessionStamp: string): Promise<boolean> {
-    const result = await this.orm
-      .update(devices)
-      .set({ sessionStamp, updatedAt: new Date().toISOString() })
       .where(deviceKey(userId, deviceIdentifier))
       .run();
     return Number(result.meta.changes ?? 0) > 0;

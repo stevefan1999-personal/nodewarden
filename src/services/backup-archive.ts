@@ -523,13 +523,7 @@ export async function writeBackupArchive(
         missingFiles++;
         continue;
       }
-      const reader = object.body.getReader();
-      await addEntry(
-        `attachments/${file.key}.bin`,
-        (async function* () {
-          for (let read = await reader.read(); !read.done; read = await reader.read()) yield read.value;
-        })(),
-      );
+      await addEntry(`attachments/${file.key}.bin`, object.body);
       totalBytes += object.size;
     }
     const manifest: BackupManifest = {

@@ -11,11 +11,6 @@ function folderClearedData() {
 }
 
 export class FolderRepository extends Repository {
-  async getFolder(id: string): Promise<Folder | null> {
-    const [row] = await this.orm.select().from(folders).where(eq(folders.id, id)).limit(1);
-    return row ?? null;
-  }
-
   async getFolderForUser(id: string, userId: string): Promise<Folder | null> {
     const [row] = await this.orm
       .select()

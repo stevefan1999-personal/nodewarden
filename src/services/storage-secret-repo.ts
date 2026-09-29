@@ -259,10 +259,6 @@ export class SecretRepository extends Repository {
     return new Set(chunks.flat().map(({ id }) => id));
   }
 
-  async deleteProject(id: string): Promise<void> {
-    await this.orm.delete(smProjects).where(eq(smProjects.id, id));
-  }
-
   // Saves the secret and replaces its links in one batch with chunked inserts, so a link that fails
   // cannot leave the secret saved with its previous links gone.
   async saveSecret(secret: SmSecret): Promise<void> {

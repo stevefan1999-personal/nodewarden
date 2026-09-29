@@ -106,15 +106,6 @@ export class AccountPasskeyRepository extends Repository {
     return rows.map(mapCredentialRow);
   }
 
-  async getAccountPasskeyCredentialById(userId: string, id: string): Promise<AccountPasskeyCredential | null> {
-    const [row] = await this.orm
-      .select()
-      .from(webauthnCredentials)
-      .where(and(eq(webauthnCredentials.userId, userId), eq(webauthnCredentials.id, id)))
-      .limit(1);
-    return row ? mapCredentialRow(row) : null;
-  }
-
   async getAccountPasskeyCredentialByCredentialId(credentialId: string): Promise<AccountPasskeyCredential | null> {
     const [row] = await this.orm
       .select()

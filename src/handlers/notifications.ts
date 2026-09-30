@@ -7,9 +7,11 @@ import { createWebSocketConnectionToken, verifyWebSocketConnectionToken } from '
 
 const WEBSOCKET_CONNECTION_TOKEN_TTL_MS = 60 * 1000;
 
-async function authenticateAccessToken(request: Request, env: Env): Promise<JWTPayload | null> {
-  const authHeader = String(request.headers.get('Authorization') || '').trim();
-  const accessToken = authHeader.match(/^Bearer\s+(.+)$/i)?.[1]?.trim();
+async function authenticateAccessToken(authHeader: string | null, env: Env): Promise<JWTPayload | null> {
+  const accessToken = authHeader
+    ?.trim()
+    .match(/^Bearer\s+(.+)$/i)?.[1]
+    ?.trim();
   if (!accessToken) return null;
 
   const auth = new AuthService(env);
@@ -17,7 +19,7 @@ async function authenticateAccessToken(request: Request, env: Env): Promise<JWTP
 }
 
 export async function handleNotificationsNegotiate(c: AppContext): Promise<Response> {
-  const payload = await authenticateAccessToken(c.req.raw, c.env);
+  const payload = await authenticateAccessToken(c.req.raw.headers.get('Authorization'), c.env);
   if (!payload?.sub) return errorResponse(c, 'Unauthorized', 401);
 
   // Issue the single-use connection token the WebSocket upgrade presents instead of the access JWT.
@@ -53,14 +55,17 @@ export async function handleNotificationsHub(c: AppContext): Promise<Response> {
   if (c.req.raw.headers.get('Upgrade')?.toLowerCase() !== 'websocket') {
     return errorResponse(c, 'Expected websocket', 426);
   }
-  // Never accept an access JWT from the URL: URLs are routinely retained by logs,
-  // browser history, proxies, monitoring, and error tracking systems.
+  const url = new URL(c.req.raw.url);
   let payload: JWTPayload | null;
   if (c.req.raw.headers.has('Authorization')) {
-    payload = await authenticateAccessToken(c.req.raw, c.env);
+    payload = await authenticateAccessToken(c.req.raw.headers.get('Authorization'), c.env);
+  } else if (url.searchParams.has('access_token')) {
+    // Official browsers skip negotiation and SignalR uses the query because WebSocket cannot set headers.
+    // Invocation logs and tracing must stay off or scrub query strings before retaining request URLs.
+    payload = await authenticateAccessToken(`Bearer ${url.searchParams.get('access_token') || ''}`, c.env);
   } else {
     // Without the header, consume the single-use connection token from negotiate (SignalR sends it as id).
-    const token = String(new URL(c.req.raw.url).searchParams.get('id') || '').trim();
+    const token = String(url.searchParams.get('id') || '').trim();
     const claims = await verifyWebSocketConnectionToken(token, c.env.JWT_SECRET);
     if (!claims) return errorResponse(c, 'Unauthorized', 401);
 
@@ -80,12 +85,15 @@ export async function handleNotificationsHub(c: AppContext): Promise<Response> {
   const userId = payload.sub;
   const id = c.env.NOTIFICATIONS_HUB.idFromName(userId);
   const stub = c.env.NOTIFICATIONS_HUB.get(id);
-  const forwardedUrl = new URL(c.req.raw.url);
-  forwardedUrl.searchParams.set('nw_uid', userId);
+  url.searchParams.delete('access_token');
+  url.searchParams.delete('id');
+  url.searchParams.delete('nw_did');
+  url.searchParams.delete('nw_auth_request_id');
+  url.searchParams.set('nw_uid', userId);
   if (payload.did) {
-    forwardedUrl.searchParams.set('nw_did', payload.did);
+    url.searchParams.set('nw_did', payload.did);
   }
-  return stub.fetch(new Request(forwardedUrl.toString(), c.req.raw));
+  return stub.fetch(new Request(url.toString(), c.req.raw));
 }
 
 export async function handleAnonymousNotificationsHub(c: AppContext): Promise<Response> {

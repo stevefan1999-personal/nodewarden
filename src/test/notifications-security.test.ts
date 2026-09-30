@@ -2,9 +2,11 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { handleNotificationsHub, handleNotificationsNegotiate } from '../handlers/notifications';
+import { AuthService } from '../services/auth';
+import { deviceRepo } from '../services/storage-device-repo';
 import type { Env } from '../types';
-import { createJWT } from '../utils/jwt';
-import { contextFor, createTestEnv, seedUser } from './support/env';
+import { createJWT, signHs256Jwt } from '../utils/jwt';
+import { authedFetch, contextFor, createTestEnv, seedUser } from './support/env';
 
 const { NotificationsHub } = await import('../durable/notifications-hub');
 
@@ -63,33 +65,104 @@ async function validAccessToken(): Promise<string> {
   );
 }
 
-test('query access_token cannot authenticate a websocket', async () => {
+test('official browser query token authenticates the Worker websocket route and verified hub owner', async () => {
+  const { env, durableObjectNames, forwardedHubUrls } = await createNotificationEnv();
+  const user = await seedUser(env);
+  const device = { identifier: 'browser-device', sessionStamp: 'browser-device-stamp' };
+  await deviceRepo(env.DB).upsertDevice(user.id, device.identifier, 'Browser', 10, device.sessionStamp);
+  const token = await new AuthService(env).generateAccessToken(user, device);
+  const response = await authedFetch(env, {
+    path: `/notifications/hub?access_token=${encodeURIComponent(token)}&nw_uid=forged&nw_did=forged&id=unused`,
+    headers: { Upgrade: 'websocket' },
+  });
+
+  assert.equal(response.status, 204);
+  assert.deepEqual(durableObjectNames, [user.id]);
+  const forwardedUrl = new URL(forwardedHubUrls[0]);
+  assert.equal(forwardedUrl.searchParams.get('nw_uid'), user.id);
+  assert.equal(forwardedUrl.searchParams.get('nw_did'), device.identifier);
+  assert.equal(forwardedUrl.searchParams.has('access_token'), false);
+  assert.equal(forwardedUrl.searchParams.has('id'), false);
+});
+
+test('user tokens without a device claim cannot forward caller-supplied hub metadata', async () => {
   const { env, forwardedHubUrls } = await createNotificationEnv();
   const token = await validAccessToken();
-  const response = await handleNotificationsHub(
-    contextFor(
-      env,
-      new Request(`https://vault.example.test/notifications/hub?access_token=${encodeURIComponent(token)}`, {
-        headers: { Upgrade: 'websocket' },
-      }),
-    ),
-  );
+  for (const headers of [
+    new Headers({ Upgrade: 'websocket' }),
+    new Headers({ Upgrade: 'websocket', Authorization: `Bearer ${token}` }),
+  ]) {
+    const response = await authedFetch(env, {
+      path: `/notifications/hub?access_token=${encodeURIComponent(token)}&nw_uid=forged&nw_did=forged&nw_auth_request_id=forged`,
+      headers,
+    });
+    assert.equal(response.status, 204);
+    const forwardedUrl = new URL(forwardedHubUrls.at(-1)!);
+    assert.equal(forwardedUrl.searchParams.get('nw_uid'), userId);
+    assert.equal(forwardedUrl.searchParams.has('nw_did'), false);
+    assert.equal(forwardedUrl.searchParams.has('nw_auth_request_id'), false);
+  }
+});
 
-  assert.equal(response.status, 401);
-  assert.deepEqual(forwardedHubUrls, []);
+test('query tokens cannot authenticate negotiate, REST or non-upgrade hub requests', async () => {
+  const { env, durableObjectNames } = await createNotificationEnv();
+  const query = `access_token=${encodeURIComponent(await validAccessToken())}`;
+  for (const [path, method, status] of [
+    ['/notifications/hub', 'GET', 426],
+    ['/notifications/hub/negotiate', 'POST', 401],
+    ['/api/sync', 'GET', 401],
+  ] as const) {
+    assert.equal((await authedFetch(env, { path: `${path}?${query}`, method })).status, status);
+  }
+  assert.deepEqual(durableObjectNames, []);
+});
+
+test('invalid Authorization never falls back to a valid browser query token', async () => {
+  const { env, durableObjectNames } = await createNotificationEnv();
+  const token = await validAccessToken();
+  for (const authorization of ['', 'Basic invalid', 'Bearer invalid']) {
+    const response = await authedFetch(env, {
+      path: `/notifications/hub?access_token=${encodeURIComponent(token)}`,
+      headers: { Upgrade: 'websocket', Authorization: authorization },
+    });
+    assert.equal(response.status, 401);
+  }
+  assert.deepEqual(durableObjectNames, []);
+});
+
+test('browser query tokens retain signature, expiry, user and device authentication gates', async () => {
+  const { env, durableObjectNames } = await createNotificationEnv();
+  const claims = { sub: userId, email: 'user@example.test', name: 'Test User', sstamp: securityStamp };
+  const inactiveUser = await seedUser(env, { status: 'banned' });
+  await deviceRepo(env.DB).upsertDevice(userId, 'revoked-device', 'Browser', 10, 'current-device-stamp');
+  const tokens = [
+    'invalid',
+    await createJWT(claims, 'wrong-notification-security-test-secret'),
+    await createJWT(claims, secret, -60),
+    await createJWT({ ...claims, sstamp: 'revoked-stamp' }, secret),
+    await createJWT({ ...claims, sub: 'missing-user' }, secret),
+    await new AuthService(env).generateAccessToken(inactiveUser),
+    await createJWT({ ...claims, did: 'missing-device', dstamp: 'device-stamp' }, secret),
+    await createJWT({ ...claims, did: 'revoked-device', dstamp: 'revoked-device-stamp' }, secret),
+    await signHs256Jwt({ ...claims, type: 'ServiceAccount', exp: Math.floor(Date.now() / 1000) + 60 }, secret),
+  ];
+  for (const token of tokens) {
+    const response = await authedFetch(env, {
+      path: `/notifications/hub?access_token=${encodeURIComponent(token)}`,
+      headers: { Upgrade: 'websocket' },
+    });
+    assert.equal(response.status, 401);
+  }
+  assert.deepEqual(durableObjectNames, []);
 });
 
 test('Authorization bearer token still authenticates notifications', async () => {
   const { env, forwardedHubUrls } = await createNotificationEnv();
   const token = await validAccessToken();
-  const response = await handleNotificationsHub(
-    contextFor(
-      env,
-      new Request('https://vault.example.test/notifications/hub', {
-        headers: { Authorization: `Bearer ${token}`, Upgrade: 'websocket' },
-      }),
-    ),
-  );
+  const response = await authedFetch(env, {
+    path: '/notifications/hub?access_token=invalid',
+    headers: { Authorization: `Bearer ${token}`, Upgrade: 'websocket' },
+  });
 
   assert.equal(response.status, 204);
   assert.equal(new URL(forwardedHubUrls[0]).searchParams.get('nw_uid'), userId);

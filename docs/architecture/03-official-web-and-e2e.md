@@ -10,6 +10,8 @@ The official vault (`ghcr.io/bitwarden/web` / `@bitwarden/web-vault` OSS self-ho
 
 Set `WEB_VAULT_ORIGINS` to the Worker origin; mail links and invites use it. Config responses build their environment URLs from the request origin.
 
+Official web connects to `/notifications/hub` with SignalR WebSockets and skips negotiation. Browser WebSockets cannot set an Authorization header, so SignalR sends the access JWT as `access_token` in the query. Only a WebSocket upgrade on this route accepts it, through the same user, security-stamp and device checks as bearer authentication; an Authorization header takes precedence. Clients that negotiate can still use the short-lived, single-use `id` ticket. Both query credentials are removed before forwarding to the notification Durable Object. Keep invocation logs and traces disabled, or scrub query strings before retaining URLs at the Worker, gateway and proxy; the initial upgrade URL still carries credentials.
+
 ## Official signup
 
 Current official clients do **not** POST `/api/accounts/register`. They:

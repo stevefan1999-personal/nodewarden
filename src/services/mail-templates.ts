@@ -8,7 +8,7 @@ export const MAIL_TEMPLATES = {
   emailChangeAlreadyExists: {
     throttle: 'user',
     render: (): MailContent => ({
-      subject: 'Your NodeWarden email change request',
+      subject: 'Your CloudWarden email change request',
       paragraphs: [
         'The requested email address is already used by another account.',
         'Your account email has not changed. Request a different address to continue.',
@@ -18,7 +18,7 @@ export const MAIL_TEMPLATES = {
   emailChanged: {
     throttle: 'exempt',
     render: (model: { utc: string; ip: string }): MailContent => ({
-      subject: 'Your NodeWarden email address changed',
+      subject: 'Your CloudWarden email address changed',
       paragraphs: [
         'Your account email address was changed.',
         `Time (UTC): ${sanitizeForEmail(model.utc)}. IP address: ${sanitizeForEmail(model.ip)}.`,
@@ -29,7 +29,7 @@ export const MAIL_TEMPLATES = {
   verifyDelete: {
     throttle: 'user',
     render: (model: { url: SafeUrl }): MailContent => ({
-      subject: 'Confirm deletion of your NodeWarden account',
+      subject: 'Confirm deletion of your CloudWarden account',
       paragraphs: [
         'An account deletion was requested for this email address.',
         'Use the link to review and confirm deletion within one day. If you did not request this, ignore this message.',
@@ -46,7 +46,7 @@ export const MAIL_TEMPLATES = {
       deviceTypeName: string;
       utc: string;
     }): MailContent => ({
-      subject: 'Your NodeWarden sign-in code',
+      subject: 'Your CloudWarden sign-in code',
       paragraphs: [
         `Your sign-in code is: ${model.code}`,
         `Device: ${sanitizeForEmail(model.deviceTypeName)}. Time (UTC): ${sanitizeForEmail(model.utc)}. IP address: ${sanitizeForEmail(model.ip)}.`,
@@ -60,7 +60,7 @@ export const MAIL_TEMPLATES = {
   verificationCode: {
     throttle: 'user',
     render: (model: { code: string; reason: 'two-factor-setup' | 'email-change' }): MailContent => ({
-      subject: 'Your NodeWarden verification code',
+      subject: 'Your CloudWarden verification code',
       paragraphs: [
         model.reason === 'email-change'
           ? `Use this code to confirm your new email address: ${model.code}`
@@ -72,28 +72,28 @@ export const MAIL_TEMPLATES = {
   passwordHint: {
     throttle: 'user',
     render: (model: { hint: string }): MailContent => ({
-      subject: 'Your NodeWarden password hint',
+      subject: 'Your CloudWarden password hint',
       paragraphs: [
         'You requested your saved master password hint.',
         sanitizeForEmail(model.hint),
-        'NodeWarden cannot recover your master password.',
+        'CloudWarden cannot recover your master password.',
       ],
     }),
   },
   noPasswordHint: {
     throttle: 'user',
     render: (): MailContent => ({
-      subject: 'Your NodeWarden password hint',
+      subject: 'Your CloudWarden password hint',
       paragraphs: [
         'No master password hint is saved for your account.',
-        'NodeWarden cannot recover your master password.',
+        'CloudWarden cannot recover your master password.',
       ],
     }),
   },
   twoFactorRecovered: {
     throttle: 'exempt',
     render: (model: { time: string; ip: string } | { by: 'administrator' }): MailContent => ({
-      subject: 'NodeWarden two-step login was recovered',
+      subject: 'CloudWarden two-step login was recovered',
       paragraphs:
         'by' in model
           ? [
@@ -110,7 +110,7 @@ export const MAIL_TEMPLATES = {
   failedTwoFactor: {
     throttle: 'exempt',
     render: (model: { provider: number; time: string; ip: string }): MailContent => ({
-      subject: 'Unsuccessful two-step sign-in to NodeWarden',
+      subject: 'Unsuccessful two-step sign-in to CloudWarden',
       paragraphs: [
         `A sign-in with your password failed its two-step check (${({ 0: 'Authenticator', 1: 'Email', 3: 'YubiKey', 7: 'Passkey', 8: 'Recovery code' } as Record<number, string>)[model.provider] ?? 'Unknown provider'}).`,
         `Time (UTC): ${sanitizeForEmail(model.time)}. IP address: ${sanitizeForEmail(model.ip)}.`,
@@ -121,7 +121,7 @@ export const MAIL_TEMPLATES = {
   newDeviceLogin: {
     throttle: 'exempt',
     render: (model: { device: string; time: string; ip: string }): MailContent => ({
-      subject: 'New device signed in to NodeWarden',
+      subject: 'New device signed in to CloudWarden',
       paragraphs: [
         `A new ${sanitizeForEmail(model.device)} device signed in to your account.`,
         `Time (UTC): ${sanitizeForEmail(model.time)}. IP address: ${sanitizeForEmail(model.ip)}.`,
@@ -132,7 +132,7 @@ export const MAIL_TEMPLATES = {
   adminSignIn: {
     throttle: 'exempt',
     render: (model: { url: SafeUrl }): MailContent => ({
-      subject: 'Sign in to NodeWarden administration',
+      subject: 'Sign in to CloudWarden administration',
       paragraphs: [
         'Use this link in the browser where you requested it to sign in to administration.',
         'This single-use link expires in 15 minutes. Ignore this email if you did not request it.',
@@ -143,9 +143,9 @@ export const MAIL_TEMPLATES = {
   registerVerification: {
     throttle: 'user',
     render: (model: { vaultOrigin: string; email: string; token: string }): MailContent => ({
-      subject: 'Verify your NodeWarden email',
+      subject: 'Verify your CloudWarden email',
       paragraphs: [
-        'Verify your email to finish creating your NodeWarden account.',
+        'Verify your email to finish creating your CloudWarden account.',
         'This link expires in 30 minutes. If you did not request an account, ignore this email.',
       ],
       action: {
@@ -177,7 +177,7 @@ export const MAIL_TEMPLATES = {
     }): MailContent => ({
       subject: 'Emergency access invitation',
       paragraphs: [
-        `${sanitizeForEmail(model.grantorName)} invited you to be an emergency contact for their NodeWarden account.`,
+        `${sanitizeForEmail(model.grantorName)} invited you to be an emergency contact for their CloudWarden account.`,
         `This invitation expires in ${ORG_INVITE_TTL_DAYS} days.`,
       ],
       action: {
@@ -276,8 +276,8 @@ export const MAIL_TEMPLATES = {
   welcome: {
     throttle: 'user',
     render: (model: { name: string; vaultOrigin: string | null }): MailContent => ({
-      subject: 'Welcome to NodeWarden',
-      paragraphs: [`Welcome, ${sanitizeForEmail(model.name)}. Your NodeWarden account is ready.`],
+      subject: 'Welcome to CloudWarden',
+      paragraphs: [`Welcome, ${sanitizeForEmail(model.name)}. Your CloudWarden account is ready.`],
       ...(model.vaultOrigin ? { action: { label: 'Open vault', url: toSafeUrl(new URL(model.vaultOrigin)) } } : {}),
     }),
   },
@@ -292,7 +292,7 @@ export function renderMail(content: MailContent): { subject: string; text: strin
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, 100);
-  const footer = 'NodeWarden account notification.';
+  const footer = 'CloudWarden account notification.';
   return {
     subject,
     text: [...content.paragraphs, ...(content.action ? [content.action.url] : []), footer].join('\n\n'),

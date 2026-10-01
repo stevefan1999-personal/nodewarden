@@ -1,6 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ENTERPRISE_PLAN_TYPE, buildNodeWardenEnterpriseLicense, parseOrganizationLicense } from './enterprise-license';
+import {
+  ENTERPRISE_PLAN_TYPE,
+  buildCloudWardenEnterpriseLicense,
+  parseOrganizationLicense,
+} from './enterprise-license';
 
 test('parses an official organization license file', () => {
   const parsed = parseOrganizationLicense(
@@ -17,13 +21,14 @@ test('parses an official organization license file', () => {
 });
 
 test('accepts a dummy or empty license as Enterprise', () => {
-  const parsed = parseOrganizationLicense({}, 'NodeWarden');
-  assert.equal(parsed.name, 'NodeWarden');
+  const parsed = parseOrganizationLicense({}, 'CloudWarden');
+  assert.equal(parsed.name, 'CloudWarden');
   assert.equal(parsed.planType, ENTERPRISE_PLAN_TYPE);
 });
 
 test('ships a self-host enterprise license the official web can upload', () => {
-  const license = buildNodeWardenEnterpriseLicense({ name: 'HQ', billingEmail: 'owner@example.com' });
+  const license = buildCloudWardenEnterpriseLicense({ name: 'HQ', billingEmail: 'owner@example.com' });
+  assert.equal(license.licenseKey, 'nodewarden-enterprise');
   assert.equal(license.selfHost, true);
   assert.equal(license.planType, ENTERPRISE_PLAN_TYPE);
   assert.equal(license.useResetPassword, true);

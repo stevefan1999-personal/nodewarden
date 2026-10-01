@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { z } from 'zod';
 
 import { MembershipStatus, MembershipType } from '../services/org-types';
 import type { Env, User } from '../types';
-import { authedFetch, createTestEnv } from './support/env';
+import { authedFetch, createTestEnv, seedUser } from './support/env';
 import { ENCRYPTED_FIELD, ORG_CREATE_PATHS, seedMember, seedSmOrg, TEST_ORG_KEY } from './support/sm';
 
 // Secrets Manager is on for every organization and never reads a license: no license upload may
@@ -11,6 +12,28 @@ import { ENCRYPTED_FIELD, ORG_CREATE_PATHS, seedMember, seedSmOrg, TEST_ORG_KEY 
 const SM_OFF_LICENSE = { useSecretsManager: false, smSeats: 0, smServiceAccounts: 0 };
 // More projects and machine accounts than SM_OFF_LICENSE's zero seats and machine accounts allow.
 const ITEMS_PAST_LICENSE = 3;
+
+test('canonical and legacy enterprise license downloads preserve their compatibility identifier and filename', async () => {
+  const env = await createTestEnv();
+  const user = await seedUser(env, { name: null });
+  for (const path of [
+    '/api/licenses/cloudwarden-enterprise.json',
+    '/licenses/cloudwarden-enterprise.json',
+    '/api/licenses/nodewarden-enterprise.json',
+    '/licenses/nodewarden-enterprise.json',
+  ]) {
+    const response = await authedFetch(env, { path, userId: user.id });
+    assert.equal(response.status, 200, path);
+    assert.equal(
+      response.headers.get('Content-Disposition'),
+      'attachment; filename="bitwarden_organization_license.json"',
+    );
+    const license = z
+      .object({ licenseKey: z.string(), name: z.string(), selfHost: z.boolean() })
+      .parse(await response.json());
+    assert.deepEqual(license, { licenseKey: 'nodewarden-enterprise', name: 'CloudWarden Enterprise', selfHost: true });
+  }
+});
 
 interface ProfileOrganization {
   id: string;

@@ -96,7 +96,7 @@ export const MailSettings = z.object({
     .string()
     .regex(/^[^\p{Cc}\p{Cf}\u2028\u2029]*$/u)
     .optional()
-    .transform((name) => name?.trim() || 'NodeWarden'),
+    .transform((name) => name?.trim() || 'CloudWarden'),
   EMAIL_SENDS_PER_HOUR: z
     .string()
     .regex(/^[1-9][0-9]*$/)

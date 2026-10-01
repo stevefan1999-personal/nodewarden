@@ -197,7 +197,7 @@ export default defineConfig([
     linterOptions: { reportUnusedDisableDirectives: 'error' },
     plugins: {
       '@typescript-eslint': tseslint.plugin,
-      nodewarden: {
+      cloudwarden: {
         rules: {
           'no-raw-sql': noRawSql,
           'no-single-use-function': noSingleUseFunction,
@@ -209,7 +209,7 @@ export default defineConfig([
       // Rest siblings are how a field is dropped from a copy ({ secret: _omitted, ...rest }).
       '@typescript-eslint/no-unused-vars': ['error', { ignoreRestSiblings: true }],
       '@typescript-eslint/no-unused-expressions': 'error',
-      'nodewarden/no-single-use-function': 'error',
+      'cloudwarden/no-single-use-function': 'error',
       // Hand-written SQL lives only in src/db/sql.ts as typed helpers; everything else composes drizzle.
       'no-restricted-imports': [
         'error',
@@ -229,7 +229,7 @@ export default defineConfig([
     // Production code only: tests may print whole errors to debug a failure.
     files: ['src/**/*.ts', 'admin/**/*.ts'],
     ignores: ['src/test/**', '**/*.test.ts'],
-    rules: { 'nodewarden/no-raw-error-log': 'error' },
+    rules: { 'cloudwarden/no-raw-error-log': 'error' },
   },
   // The admin portal's components: Svelte's recommended rules, with TypeScript in their scripts.
   ...svelte.configs.recommended,
@@ -251,7 +251,7 @@ export default defineConfig([
         tsconfigRootDir: import.meta.dirname,
       },
     },
-    rules: { 'nodewarden/no-raw-sql': 'error' },
+    rules: { 'cloudwarden/no-raw-sql': 'error' },
   },
   {
     // The portal type-checks against its own SvelteKit tsconfig, which knows its generated $types and $lib.

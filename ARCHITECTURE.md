@@ -1,4 +1,4 @@
-# NodeWarden architecture
+# CloudWarden architecture
 
 Bitwarden-compatible password manager on Cloudflare Workers.
 
@@ -33,7 +33,7 @@ Hosted provisioning sets `TENANT_OWNER_EMAIL` and reserves the empty vault's fir
 
 `PLATFORM_REQUIRE_GATEWAY=1` requires `X-CloudWarden-Gateway-Secret` to match `PLATFORM_INTERNAL_SECRET` before serving hosted traffic, including static files. The gateway overwrites that header and preserves the vault's `Authorization` header. `PLATFORM_SUBSCRIPTION_STATUS=suspended` refuses vault traffic with 402; `active` resumes it without deleting data. Invalid gateway or subscription settings fail closed. All these settings also work on ordinary standalone Workers, so hosted E2E and UAT need no dispatch namespace or user Worker slot. Self-hosts with the settings absent keep their existing behavior.
 
-When forwarding to an ordinary Worker origin, the authenticated gateway also sets `X-CloudWarden-Original-Origin` to the customer's HTTP(S) origin. NodeWarden accepts it only after gateway authentication and only when the normalized origin is in `WEB_VAULT_ORIGINS`; paths, queries, fragments and credentials are refused. It changes the request origin while preserving path, query, body and vault authorization, then removes both internal headers before app or asset processing. This keeps API self URLs, Better Auth and WebAuthn on the customer's hostname. The provider must maintain the public/custom hostname allowlist. Self-hosts ignore the forwarding header, and maintenance keeps its separately authenticated original request.
+When forwarding to an ordinary Worker origin, the authenticated gateway also sets `X-CloudWarden-Original-Origin` to the customer's HTTP(S) origin. CloudWarden accepts it only after gateway authentication and only when the normalized origin is in `WEB_VAULT_ORIGINS`; paths, queries, fragments and credentials are refused. It changes the request origin while preserving path, query, body and vault authorization, then removes both internal headers before app or asset processing. This keeps API self URLs, Better Auth and WebAuthn on the customer's hostname. The provider must maintain the public/custom hostname allowlist. Self-hosts ignore the forwarding header, and maintenance keeps its separately authenticated original request.
 
 A fleet Worker invokes `POST /api/internal/maintenance` every five minutes with `Authorization: Bearer <PLATFORM_INTERNAL_SECRET>`. The secret must have at least 32 characters. This endpoint bypasses the gateway and suspension gates, authenticates separately, and runs the same eight maintenance jobs as standalone cron. It returns 204 only when every job succeeds; one failure still allows the independent jobs to finish and returns 500. Dispatch provisioning does not attach cron triggers to user Workers.
 
@@ -43,7 +43,7 @@ A fleet Worker invokes `POST /api/internal/maintenance` every five minutes with 
 
 Schema lives in `src/db/schema.ts`. `npm run db:generate` emits nested `migrations/<id>/migration.sql`, starting from the `init` migration of the fork. Wrangler applies pending migrations before every `deploy` and `dev` (`migrations_pattern` in both wrangler configs) and records them in `d1_migrations`, so the Worker runs no DDL. Its once-per-isolate setup only registers the push installation and syncs administrator roles; a database without the schema fails that setup and every request answers 500. Tests build each SQLite database from the same migration files.
 
-Every query is a drizzle builder through `getOrm(db)`; hand-written SQL exists only as the typed helpers in `src/db/sql.ts`, and the `nodewarden/no-raw-sql` lint rule enforces it. Use `db.batch()` for multi-statement work. `db.transaction()` is broken on D1. D1 caps one statement at 100 bound parameters: `statementChunks` sizes id-list chunks by rendering the statement, and multi-row inserts chunk by column count.
+Every query is a drizzle builder through `getOrm(db)`; hand-written SQL exists only as the typed helpers in `src/db/sql.ts`, and the `cloudwarden/no-raw-sql` lint rule enforces it. Use `db.batch()` for multi-statement work. `db.transaction()` is broken on D1. D1 caps one statement at 100 bound parameters: `statementChunks` sizes id-list chunks by rendering the statement, and multi-row inserts chunk by column count.
 
 Personal vault lists and mutations filter `organization_id IS NULL`. Organization ciphers are loaded by id, then membership and collection ACL in `src/handlers/cipher-access.ts`.
 

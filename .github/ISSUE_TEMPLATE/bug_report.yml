@@ -23,7 +23,7 @@ body:
     id: version
     attributes:
       label: Version / 版本
-      description: "Which version of NodeWarden are you using? Please provide the exact version or commit hash."
+      description: "Which version of CloudWarden are you using? Please provide the exact version or commit hash."
       placeholder: "1.0.0"
     validations:
       required: true

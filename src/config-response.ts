@@ -4,7 +4,7 @@ export function buildConfigResponse(origin: string) {
   const fillAssistBase = `${origin}/fill-assist/`;
   return {
     version: LIMITS.compatibility.bitwardenServerVersion,
-    gitHash: 'nodewarden',
+    gitHash: 'cloudwarden',
     server: null,
     environment: {
       cloudRegion: 'self-hosted',

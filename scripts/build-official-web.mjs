@@ -54,4 +54,4 @@ cpSync(buildDir, dest, { recursive: true, filter: (path) => !path.endsWith('.map
 for (const license of ['LICENSE.txt', 'LICENSE_GPL.txt', 'LICENSE_BITWARDEN.txt']) {
   cpSync(join(source, license), join(dest, license));
 }
-console.log(`Built NodeWarden official web from ${release} with name-based organization creation.`);
+console.log(`Built CloudWarden official web from ${release} with name-based organization creation.`);

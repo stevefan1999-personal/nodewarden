@@ -1,4 +1,4 @@
-module nodewarden-sm-e2e
+module cloudwarden-sm-e2e
 
 go 1.21
 

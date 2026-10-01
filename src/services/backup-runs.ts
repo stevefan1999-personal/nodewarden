@@ -6,7 +6,7 @@ import { loadBackupSchedule, updateBackupStatus } from './backup-config';
 import { restoreBackupArchive, type BackupImportResultBody } from './backup-import';
 
 // Archives a run writes, which retention prunes; uploaded archives live under uploads/ and are never pruned.
-const RUN_ARCHIVE_KEY = /^nodewarden_backup_\d{8}_\d{6}_[0-9a-f]{5}\.zip$/;
+const RUN_ARCHIVE_KEY = /^(nodewarden|cloudwarden)_backup_\d{8}_\d{6}_[0-9a-f]{5}\.zip$/;
 // Every key restore and delete accept: one path segment of safe characters, optionally under uploads/.
 const ARCHIVE_KEY = /^(uploads\/)?[A-Za-z0-9][A-Za-z0-9._-]{0,127}\.zip$/;
 

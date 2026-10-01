@@ -22,7 +22,7 @@ try {
   const db = await mf.getD1Database('DB');
   // The migrations wrangler applies to D1, one statement per drizzle-kit breakpoint.
   for (const migration of MIGRATIONS as string[])
-    // eslint-disable-next-line nodewarden/no-raw-sql -- migration execution
+    // eslint-disable-next-line cloudwarden/no-raw-sql -- migration execution
     await db.batch(migration.split('--> statement-breakpoint').map((statement) => db.prepare(statement)));
   const orm = getOrm(db);
   await orm.batch([

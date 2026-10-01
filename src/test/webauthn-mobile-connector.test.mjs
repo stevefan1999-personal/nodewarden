@@ -148,7 +148,7 @@ test('HTML matches the fallback connector visual structure', async () => {
   assert.match(html, /class="brand"/);
   assert.match(html, /class="form"/);
   assert.match(html, /class="msg"/);
-  assert.match(html, /src="\/nodewarden-logo\.svg"/);
+  assert.match(html, /src="\/cloudwarden-logo\.svg" alt="CloudWarden"/);
   assert.match(html, /src="\/webauthn-mobile-connector\.js"/);
   assert.match(html, /default-src 'none'/);
 });

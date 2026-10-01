@@ -21,7 +21,7 @@ export function createAuth(env?: Pick<Env, 'DB' | 'JWT_SECRET' | 'CACHE_KV'>, re
   const orm = env?.DB ? getOrm(env.DB) : undefined;
 
   return betterAuth({
-    appName: 'NodeWarden',
+    appName: 'CloudWarden',
     baseURL: origin,
     secret: env?.JWT_SECRET,
     database: orm

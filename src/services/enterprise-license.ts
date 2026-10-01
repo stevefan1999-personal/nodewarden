@@ -17,18 +17,19 @@ const OrganizationLicense = z.preprocess(
     .catch({ name: '', billingEmail: null, planType: ENTERPRISE_PLAN_TYPE }),
 );
 
-export function buildNodeWardenEnterpriseLicense(options?: {
+export function buildCloudWardenEnterpriseLicense(options?: {
   name?: string;
   billingEmail?: string;
 }): Record<string, unknown> {
   const issued = new Date().toISOString();
   return {
     licenseType: 1,
+    // Keep the exported identifier compatible with previously downloaded self-host licenses.
     licenseKey: 'nodewarden-enterprise',
     installationId: '00000000-0000-0000-0000-000000000001',
-    name: options?.name || 'NodeWarden Enterprise',
+    name: options?.name || 'CloudWarden Enterprise',
     billingEmail: options?.billingEmail || null,
-    businessName: options?.name || 'NodeWarden Enterprise',
+    businessName: options?.name || 'CloudWarden Enterprise',
     enabled: true,
     plan: 'Enterprise (Annually)',
     planType: ENTERPRISE_PLAN_TYPE,

@@ -13,8 +13,8 @@ import { setTimeout as delay } from 'node:timers/promises';
 
 const scriptRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const repo = resolve(process.env.SM_E2E_REPO_ROOT || scriptRoot);
-const tools = join(tmpdir(), 'nodewarden-sm-client-tools');
-const run = mkdtempSync(join(tmpdir(), 'nodewarden-sm-client-run-'));
+const tools = join(tmpdir(), 'cloudwarden-sm-client-tools');
+const run = mkdtempSync(join(tmpdir(), 'cloudwarden-sm-client-run-'));
 const env = { ...process.env, WRANGLER_SEND_METRICS: 'false', CI: 'true' };
 for (const key of Object.keys(env)) if (/proxy/i.test(key)) delete env[key];
 mkdirSync(tools, { recursive: true });
@@ -99,7 +99,7 @@ exec('openssl', [
   '-days',
   '1',
   '-subj',
-  '/CN=NodeWarden local E2E CA',
+  '/CN=CloudWarden local E2E CA',
   '-addext',
   'basicConstraints=critical,CA:TRUE',
 ]);
@@ -146,7 +146,7 @@ const classes = ['NotificationsHub', 'BackupTransferRunner'];
 writeFileSync(
   config,
   JSON.stringify({
-    name: 'nodewarden-sm-client-e2e',
+    name: 'cloudwarden-sm-client-e2e',
     main: join(repo, 'src/index.ts'),
     compatibility_date: '2024-09-23',
     compatibility_flags: ['nodejs_compat'],

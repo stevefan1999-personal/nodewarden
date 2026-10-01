@@ -383,7 +383,7 @@ export class BackupRowValidator {
   }
 }
 
-// nodewarden_backup_<local date>_<local time>_<random>.zip, in the schedule's timezone.
+// cloudwarden_backup_<local date>_<local time>_<random>.zip, in the schedule's timezone.
 export function backupArchiveKey(date: Date, timeZone: string): string {
   const parts = new Intl.DateTimeFormat('en-CA', {
     timeZone,
@@ -397,7 +397,7 @@ export function backupArchiveKey(date: Date, timeZone: string): string {
   }).formatToParts(date);
   const pick = (type: string): string => parts.find((part) => part.type === type)?.value || '';
   const suffix = crypto.getRandomValues(new Uint8Array(ARCHIVE_KEY_SUFFIX_BYTES)).toHex().slice(0, 5);
-  return `nodewarden_backup_${pick('year')}${pick('month')}${pick('day')}_${pick('hour')}${pick('minute')}${pick('second')}_${suffix}.zip`;
+  return `cloudwarden_backup_${pick('year')}${pick('month')}${pick('day')}_${pick('hour')}${pick('minute')}${pick('second')}_${suffix}.zip`;
 }
 
 // Streams an archive of the instance into bucket under key. Every table but events is read in one D1 batch, a

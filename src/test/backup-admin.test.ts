@@ -85,11 +85,18 @@ test('backup settings start from the defaults, merge a partial save and name eac
   assert.equal(forbidden.status, 403);
 });
 
-test('a backup run stores an archive, records it and prunes run archives beyond the retention count', async (t) => {
+test('a backup run prunes both legacy and current run archives while preserving uploads and other ZIPs', async (t) => {
   t.mock.timers.enable({ apis: ['Date'], now: DUE });
   const bucket = memoryR2();
   const { call } = await adminInstance({ BACKUPS: bucket.binding });
   await bucket.binding.put('uploads/kept.zip', 'uploaded archive');
+  const legacyOld = 'nodewarden_backup_20260928_030000_abcde.zip';
+  const legacyNew = 'nodewarden_backup_20260929_030000_bcdef.zip';
+  const otherZip = 'cloudwarden_backup_20260929_030000_abcde-extra.zip';
+  await bucket.binding.put(legacyOld, 'legacy archive');
+  t.mock.timers.tick(1000);
+  await bucket.binding.put(legacyNew, 'legacy archive');
+  await bucket.binding.put(otherZip, 'unmanaged archive');
   await call('PUT', '/api/admin/backup/settings', { masterPasswordHash: PASSWORD, schedule: { retentionCount: 2 } });
 
   const keys: string[] = [];
@@ -98,13 +105,19 @@ test('a backup run stores an archive, records it and prunes run archives beyond 
     const response = await call('POST', '/api/admin/backup/run', { masterPasswordHash: PASSWORD });
     assert.equal(response.status, 200);
     keys.push(((await response.json()) as { archive: { key: string } }).archive.key);
+    assert.match(keys.at(-1)!, /^cloudwarden_backup_\d{8}_\d{6}_[0-9a-f]{5}\.zip$/);
+    if (run === 0) {
+      assert.equal(bucket.objects.has(legacyOld), false);
+      assert.equal(bucket.objects.has(legacyNew), true);
+    }
   }
   assert.equal(new Set(keys).size, 3);
+  assert.equal(bucket.objects.has(legacyNew), false);
 
   const listed = (await (await call('GET', '/api/admin/backup/archives')).json()) as { data: { key: string }[] };
   assert.deepEqual(
     listed.data.map(({ key }) => key),
-    [keys[2], keys[1], 'uploads/kept.zip'],
+    [keys[2], keys[1], otherZip, 'uploads/kept.zip'],
   );
   const { status } = (await (await call('GET', '/api/admin/backup/settings')).json()) as {
     status: { lastSuccessAt: string; lastArchiveKey: string };
@@ -112,7 +125,7 @@ test('a backup run stores an archive, records it and prunes run archives beyond 
   assert.deepEqual([status.lastSuccessAt, status.lastArchiveKey], [new Date().toISOString(), keys[2]]);
 });
 
-test('a restore by key rebuilds a fresh instance from an archive in the bucket', async () => {
+test('a restore by a legacy archive key rebuilds a fresh instance from the same backup format', async () => {
   const bucket = memoryR2();
   const source = await adminInstance({ BACKUPS: bucket.binding });
   await getOrm(source.env.DB)
@@ -120,10 +133,13 @@ test('a restore by key rebuilds a fresh instance from an archive in the bucket',
     .values({ id: 'folder-1', userId: source.admin.id, name: 'enc', createdAt: 'c', updatedAt: 'u' });
   const run = await source.call('POST', '/api/admin/backup/run', { masterPasswordHash: PASSWORD });
   const { key } = ((await run.json()) as { archive: { key: string } }).archive;
+  assert.match(key, /^cloudwarden_backup_/);
+  const legacyKey = 'nodewarden_backup_20260929_030000_abcde.zip';
+  await bucket.binding.put(legacyKey, (await bucket.binding.get(key))!.body);
 
   const target = await adminInstance({ BACKUPS: bucket.binding });
   const restored = await target.call('POST', '/api/admin/backup/archives/restore', {
-    key,
+    key: legacyKey,
     masterPasswordHash: PASSWORD,
   });
   assert.equal(restored.status, 200);

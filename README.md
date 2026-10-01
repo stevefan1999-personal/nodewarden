@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="./NodeWarden.svg" alt="NodeWarden Logo" />
+  <img src="./CloudWarden.svg" alt="CloudWarden Logo" />
 </p>
 
 <p align="center">
@@ -9,30 +9,30 @@
 <p align="center">
   <a href="https://workers.cloudflare.com/"><img src="https://img.shields.io/badge/Powered%20by-Cloudflare-F38020?logo=cloudflare&logoColor=white" alt="Powered by Cloudflare" /></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/License-LGPL--3.0-2ea44f" alt="License: LGPL-3.0" /></a>
-  <a href="https://github.com/shuaiplus/NodeWarden/releases/latest"><img src="https://img.shields.io/github/v/release/shuaiplus/NodeWarden?display_name=tag" alt="Latest Release" /></a>
+  <a href="https://github.com/shuaiplus/NodeWarden/releases/latest"><img src="https://img.shields.io/github/v/release/shuaiplus/NodeWarden?display_name=tag&amp;label=Upstream%20NodeWarden" alt="Upstream NodeWarden release" /></a>
 
 </p>
 
 <p align="center">
-  <a href="https://t.me/NodeWarden_News">Telegram Channel</a> |
-  <a href="https://t.me/NodeWarden_Official">Telegram Group</a>
+  <a href="https://t.me/NodeWarden_News">Upstream NodeWarden Telegram channel</a> |
+  <a href="https://t.me/NodeWarden_Official">Upstream NodeWarden Telegram group</a>
 </p>
 
 <p align="center">
   <a href="./README_ZH.md">中文</a> |
   <a href="./CONTRIBUTING.md">Contributing</a> |
-  <a href="https://nodewarden.app">Official wiki</a>
+  <a href="https://nodewarden.app">Upstream NodeWarden wiki</a>
 </p>
 
 > **Disclaimer**  
 > This project is for learning and discussion purposes only. Please back up your vault regularly.  
-> This project is not affiliated with Bitwarden. Please do not report NodeWarden issues to the official Bitwarden team.
+> This project is not affiliated with Bitwarden. Please do not report CloudWarden issues to the official Bitwarden team.
 
 ---
 
 ## Feature comparison with the official Bitwarden server
 
-| Feature | Bitwarden Free | NodeWarden | Notes |
+| Feature | Bitwarden Free | CloudWarden | Notes |
 |---|---|---|---|
 | Web vault | ✅ | ✅ | Official Bitwarden web, served by the Worker |
 | TOTP | ❌ | ✅ | Authenticator codes in every official client |
@@ -68,7 +68,7 @@
 
 ## Visual quick deploy
 
-1. Fork the NodeWarden repository to your GitHub account
+1. Fork [the CloudWarden repository](https://github.com/stevefan1999-personal/nodewarden) to your GitHub account
 2. Open [Cloudflare Workers & Pages](https://dash.cloudflare.com/?to=/:account/workers-and-pages/create)
 3. Choose **Continue with GitHub** and select your fork
 4. Leave the **build command** empty and set the **deploy command** to `npm run deploy`
@@ -83,7 +83,7 @@
 
 - Optional SSO: set `SSO_ENABLED=1`, `SSO_AUTHORITY`, `SSO_CLIENT_ID`, and `SSO_CLIENT_SECRET`.
 - Attachments and Send files are limited to 100 MiB: official clients upload them through the Worker.
-- Kubernetes: use the official [Bitwarden Secrets Manager operator](https://github.com/bitwarden/sm-kubernetes). See [NodeWarden configuration](#kubernetes-secrets-manager).
+- Kubernetes: use the official [Bitwarden Secrets Manager operator](https://github.com/bitwarden/sm-kubernetes). See [CloudWarden configuration](#kubernetes-secrets-manager).
 
 
 > [!TIP] 
@@ -123,8 +123,8 @@
 ## CLI deploy
 
 ```powershell
-git clone https://github.com/shuaiplus/NodeWarden.git
-cd NodeWarden
+git clone https://github.com/stevefan1999-personal/nodewarden.git
+cd nodewarden
 
 npm install
 npx wrangler login
@@ -150,9 +150,9 @@ npm run dev -- --local-protocol https
 E2E_ORIGIN=https://127.0.0.1:8787 OFFICIAL_WEB_ORIGIN=https://127.0.0.1:8787 npm run test:e2e
 ```
 
-Official clients register through `/identity/accounts/register/*`; set `ALLOW_OPEN_REGISTRATION=1` if you want signups after the first admin without NodeWarden invite codes.
+Official clients register through `/identity/accounts/register/*`; set `ALLOW_OPEN_REGISTRATION=1` if you want signups after the first admin without CloudWarden invite codes.
 
-The web vault built by this repository creates organizations from a name, without a license upload. Its small Bitwarden frontend patch preserves browser-side key generation and opens Secrets Manager when creation starts there. Unmodified self-hosted Bitwarden web builds still use the license-upload dialog; `GET /api/licenses/nodewarden-enterprise.json` remains available for their compatibility flow.
+The web vault built by this repository creates organizations from a name, without a license upload. Its small Bitwarden frontend patch preserves browser-side key generation and opens Secrets Manager when creation starts there. Unmodified self-hosted Bitwarden web builds still use the license-upload dialog; `GET /api/licenses/cloudwarden-enterprise.json` supports their compatibility flow, with the former `/api/licenses/nodewarden-enterprise.json` URL retained as an alias.
 
 `npm run test:e2e` runs the API suite and the official-web signup smoke. `npm run test:e2e:official` is only the signup file. Pass `OFFICIAL_WEB_ORIGIN` when the vault is not on the `E2E_ORIGIN` origin.
 
@@ -181,19 +181,21 @@ LGPL-3.0 License
 
 ## Credits
 
+- [NodeWarden by shuaiplus](https://github.com/shuaiplus/NodeWarden) - Original LGPL-3.0 server project; CloudWarden is maintained in [this repository](https://github.com/stevefan1999-personal/nodewarden).
+- [Sponsor upstream NodeWarden](https://nodewarden.app/sponsor) - Supports the upstream project, separately from CloudWarden.
 - [Bitwarden](https://bitwarden.com/) - Original design and clients
 - [Vaultwarden](https://github.com/dani-garcia/vaultwarden) - Server implementation reference
 - [Cloudflare Workers](https://workers.cloudflare.com/) - Serverless platform
 
 ---
 
-## Contributors
+## Upstream NodeWarden contributors
 
 <a href="https://github.com/shuaiplus/nodewarden/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=shuaiplus/nodewarden" alt="NodeWarden contributors" />
+  <img src="https://contrib.rocks/image?repo=shuaiplus/nodewarden" alt="Upstream NodeWarden contributors" />
 </a>
 
-## Star History
+## Upstream NodeWarden star history
 
 <a href="https://www.star-history.com/?repos=shuaiplus%2FNodeWarden&type=timeline&legend=top-left">
  <picture>
@@ -235,9 +237,9 @@ spec:
       secretKeyName: DATABASE_PASSWORD
 ```
 
-The operator writes the decrypted value to `app-secrets`. Existing NodeWarden machine tokens must be re-issued after upgrading to the upstream token format. The former `operator/` implementation has been removed; replace its resources with the official operator and the `BitwardenSecret` resource above.
+The operator writes the decrypted value to `app-secrets`. Legacy NodeWarden machine tokens must be re-issued after upgrading to the upstream token format. The former `operator/` implementation has been removed; replace its resources with the official operator and the `BitwardenSecret` resource above.
 
-Email delivery uses the Cloudflare `EMAIL` binding. Set `EMAIL_FROM` to an address on your onboarded sending domain and `EMAIL_FROM_NAME` to the sender display name (default `NodeWarden`). A dedicated sending subdomain is recommended. Arbitrary recipients require Workers Paid; Workers Free can send to verified Email Routing destinations. Local development simulates delivery; do not set `remote = true` for email tests.
+Email delivery uses the Cloudflare `EMAIL` binding. Set `EMAIL_FROM` to an address on your onboarded sending domain and `EMAIL_FROM_NAME` to the sender display name (default `CloudWarden`). A dedicated sending subdomain is recommended. Arbitrary recipients require Workers Paid; Workers Free can send to verified Email Routing destinations. Local development simulates delivery; do not set `remote = true` for email tests.
 
 The separate system administrator portal is at `/admin` on the Worker origin. Set `ADMIN_EMAILS` to comma-separated email addresses, optionally `email:stamp`; rotating a stamp revokes that administrator's links and sessions. Administrators need no vault account. Sign-in links must be opened in the requesting browser, expire after 15 minutes, and are consumed only by the confirmation POST. Vault administration remains at `/admin-panel`. When `ADMIN_EMAILS` is configured, vault administrator roles follow the listed, verified email addresses. Check existing users at `/admin/users` before listing an address: accounts created before this change are already marked verified. If no listed, verified, active account exists, roles stay unchanged to prevent lockout. New accounts registered without an emailed verification token need verification before they can gain the derived role; the first registrant retains bootstrap administrator access. With mail disabled, only existing verified accounts or that first registrant can hold the role. On Workers Free, verify administrator addresses as Email Routing destinations. Turn off Cloudflare Email preview because messages contain sign-in links.
 `EMAIL_SENDS_PER_HOUR` caps user-triggered mail per instance (default `100`); keep this value × 24 below your Cloudflare daily quota. Each recipient is also limited to five user-triggered messages per hour. Administrator login and security notices have separate limits and do not consume these budgets.

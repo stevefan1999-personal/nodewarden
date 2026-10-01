@@ -71,7 +71,7 @@ test('first administrator, invite-code signup and open signup each receive one w
   assert.equal((await register(env, openEmail)).status, 200);
   assert.deepEqual(
     capture.sent.map(({ to, subject }) => [to, subject]),
-    [firstEmail, invitedEmail, openEmail].map((email) => [email, 'Welcome to NodeWarden']),
+    [firstEmail, invitedEmail, openEmail].map((email) => [email, 'Welcome to CloudWarden']),
   );
   for (const mail of capture.sent) {
     assert.match(mail.html, /&lt;New&gt; x\[dot\]y \[at\]home/);

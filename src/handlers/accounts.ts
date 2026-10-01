@@ -1909,7 +1909,7 @@ async function apiKey(c: AppContext, userId: string, currentHash: string, rotate
   if (!rotate && isStoredApiKeyHash(user.apiKey)) {
     return errorResponse(
       c,
-      'This API key was created by an older NodeWarden version and cannot be displayed. Rotate it once to use the Bitwarden-compatible readable format.',
+      'This API key was created by an older CloudWarden version and cannot be displayed. Rotate it once to use the Bitwarden-compatible readable format.',
       409,
     );
   }

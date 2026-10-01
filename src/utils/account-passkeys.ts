@@ -22,7 +22,7 @@ import { getConfiguredWebAuthnAllowedOrigins } from './origins';
 const ACCOUNT_PASSKEY_TOKEN_TYPE = 'nodewarden.account-passkey.challenge.v2';
 const ACCOUNT_PASSKEY_TOKEN_TTL_MS = 17 * 60 * 1000;
 const ACCOUNT_PASSKEY_CREATE_TOKEN_TTL_MS = 7 * 60 * 1000;
-const DEFAULT_RP_NAME = 'NodeWarden';
+const DEFAULT_RP_NAME = 'CloudWarden';
 
 interface AccountPasskeyTokenPayload {
   typ: typeof ACCOUNT_PASSKEY_TOKEN_TYPE;

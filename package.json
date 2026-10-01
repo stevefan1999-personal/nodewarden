@@ -1,5 +1,5 @@
 {
-  "name": "nodewarden",
+  "name": "cloudwarden",
   "version": "1.8.0",
   "description": "Minimal Bitwarden-compatible server running on Cloudflare Workers",
   "author": "shuaiplus",

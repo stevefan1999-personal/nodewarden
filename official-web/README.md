@@ -1,7 +1,7 @@
 # Official Bitwarden web vault
 
 This directory builds the Bitwarden self-host web vault (`@bitwarden/web-vault`)
-with a small NodeWarden organization-creation patch. It is the only web vault.
+with a small CloudWarden organization-creation patch. It is the only web vault.
 The Worker serves it as static assets on the same origin as the API, `/admin` and
 the connector pages:
 
@@ -33,12 +33,16 @@ checkout unchanged. The full self-hosted build includes the Secrets Manager
 screens; the OSS entry point includes only their landing page. Upstream license
 files are retained, and source maps are omitted.
 
+The client retains its official Bitwarden branding. CloudWarden branding applies
+to the server, administration and connector pages; the renamed open-source core
+retains its [NodeWarden source attribution](../README.md#credits).
+
 `npm run build:assets` (run by wrangler before `deploy` and `dev`) copies
 `dist/` into `dist/worker-assets/`, overlays our connector pages from `public/`
 and writes the `_headers` file for the files Cloudflare serves directly.
 
 Creating an organization asks for its name, generates and wraps its keys in the
-browser using the existing Bitwarden code, and posts to NodeWarden's ordinary
+browser using the existing Bitwarden code, and posts to CloudWarden's ordinary
 organization API. No license file is needed. Creation from the Secrets Manager
 landing page opens the new organization's Secrets Manager.
 

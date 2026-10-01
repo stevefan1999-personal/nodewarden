@@ -3,7 +3,7 @@ import { z } from 'zod';
 import type { User } from '../types';
 import { errorResponse, type BodyContext } from '../utils/response';
 import { organizationResponse } from '../utils/org-response';
-import { buildNodeWardenEnterpriseLicense, parseOrganizationLicense } from '../services/enterprise-license';
+import { buildCloudWardenEnterpriseLicense, parseOrganizationLicense } from '../services/enterprise-license';
 import { createOwnedOrganization } from './organizations';
 import { orgRepo } from '../services/storage-org-repo';
 import { canDeleteOrganization, isActiveMember } from '../services/org-authz';
@@ -13,8 +13,8 @@ import { jsonText } from '../services/org-types';
 export const LicenseJsonRequest = z.looseObject({ key: z.string().nullish(), collectionName: z.string().nullish() });
 
 export function enterpriseLicenseFileResponse(user: User): Response {
-  const license = buildNodeWardenEnterpriseLicense({
-    name: user.name || 'NodeWarden Enterprise',
+  const license = buildCloudWardenEnterpriseLicense({
+    name: user.name || 'CloudWarden Enterprise',
     billingEmail: user.email,
   });
   return new Response(JSON.stringify(license, null, 2), {

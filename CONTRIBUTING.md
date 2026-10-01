@@ -1,8 +1,8 @@
-# Contributing to NodeWarden
+# Contributing to CloudWarden
 
-Thanks for taking the time to improve NodeWarden.
+Thanks for taking the time to improve CloudWarden.
 
-NodeWarden is a Bitwarden-compatible server on Cloudflare Workers/D1 with
+CloudWarden is a Bitwarden-compatible server on Cloudflare Workers/D1 with
 attachment storage, imports, and scheduled backups; official Bitwarden clients are
 its only web and app clients. Small changes can affect those clients, backups or migrations,
 so please keep changes focused and check the related parts of the project.
@@ -17,7 +17,7 @@ For bug reports, include enough detail for someone else to reproduce the problem
 - Whether the problem happened after sync, import, export, restore, upgrade, or
   a fresh deployment.
 
-Please do not report NodeWarden-specific problems to the official Bitwarden
+Please do not report CloudWarden-specific problems to the official Bitwarden
 team. This project is independent from Bitwarden.
 
 ## Pull Request Guidelines

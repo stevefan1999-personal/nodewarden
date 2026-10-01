@@ -74,7 +74,7 @@ crons = [ "*/5 * * * *" ]
 
 [vars]
 EMAIL_FROM = "noreply@stevefan1999.tech"
-EMAIL_FROM_NAME = "NodeWarden"
+EMAIL_FROM_NAME = "CloudWarden"
 # The BACKUPS bucket_name, for presigned archive transfers; they also need the R2_ACCOUNT_ID, R2_ACCESS_KEY_ID and
 # R2_SECRET_ACCESS_KEY secrets of an R2 API token that reads and writes it.
 BACKUPS_BUCKET_NAME = "nodewarden-backups"

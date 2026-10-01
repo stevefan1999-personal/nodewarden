@@ -58,7 +58,7 @@ export function buildTenantArtifact(root = resolve(import.meta.dirname, '..')) {
     buildConfig,
     JSON.stringify(
       {
-        name: 'nodewarden-tenant',
+        name: 'cloudwarden-tenant',
         main: resolve(root, config.main),
         compatibility_date: config.compatibility_date,
         compatibility_flags: config.compatibility_flags,

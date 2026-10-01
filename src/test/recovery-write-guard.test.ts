@@ -130,7 +130,7 @@ test('the same recovery code can complete only one of two concurrent login/endpo
   const responses = await Promise.all([recoveryRequest(env, user, false), recoveryRequest(env, user, true)]);
   assert.deepEqual(responses.map((response) => response.status).sort(), [200, 400]);
   await drainWaitUntil();
-  assert.equal(mail.sent.filter((message) => message.subject === 'NodeWarden two-step login was recovered').length, 1);
+  assert.equal(mail.sent.filter((message) => message.subject === 'CloudWarden two-step login was recovered').length, 1);
   const loginResponse = (await responses[1].json()) as { access_token?: string };
   if (responses[1].status === 200)
     assert.ok(await new AuthService(env).verifyAccessTokenWithUser(`Bearer ${loginResponse.access_token}`));

@@ -73,7 +73,12 @@ organizationRoutes.on(
 organizationRoutes.on('GET', ['/api/plans', '/plans'], handleGetPlans);
 organizationRoutes.on(
   'GET',
-  ['/api/licenses/nodewarden-enterprise.json', '/licenses/nodewarden-enterprise.json'],
+  [
+    '/api/licenses/cloudwarden-enterprise.json',
+    '/licenses/cloudwarden-enterprise.json',
+    '/api/licenses/nodewarden-enterprise.json',
+    '/licenses/nodewarden-enterprise.json',
+  ],
   (c) => enterpriseLicenseFileResponse(c.get('currentUser')),
 );
 organizationRoutes.on(

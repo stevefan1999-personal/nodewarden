@@ -1,6 +1,6 @@
 # CloudWarden rename and upgrade compatibility
 
-CloudWarden names both the open-source core and the managed service. The core remains derived from NodeWarden by shuaiplus, under its existing LGPL-3.0 license. The official Bitwarden web vault and clients retain their own branding.
+CloudWarden names both the open-source core and the managed service. It is an independently maintained hard fork of NodeWarden by shuaiplus, under its existing LGPL-3.0 license. Original-source links provide attribution; CloudWarden changes are maintained directly in this repository. The official Bitwarden web vault and clients retain their own branding.
 
 The inspection covered application pages, mail, authentication, WebAuthn, SSO, licenses, archives, resource bindings, build tooling, documentation and the hosted provisioner. A text replacement across the repository would break several existing contracts.
 

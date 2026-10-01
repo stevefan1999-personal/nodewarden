@@ -6,6 +6,8 @@
   Bitwarden-compatible server running on Cloudflare Workers
 </p>
 
+CloudWarden is an independently maintained hard fork of [NodeWarden](https://github.com/shuaiplus/NodeWarden). Original-source links below provide attribution; CloudWarden development happens in this repository.
+
 <p align="center">
   <a href="https://workers.cloudflare.com/"><img src="https://img.shields.io/badge/Powered%20by-Cloudflare-F38020?logo=cloudflare&logoColor=white" alt="Powered by Cloudflare" /></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/License-LGPL--3.0-2ea44f" alt="License: LGPL-3.0" /></a>

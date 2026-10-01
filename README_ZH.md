@@ -2,6 +2,8 @@
   <img src="./CloudWarden.svg" alt="CloudWarden Logo" />
 </p>
 
+CloudWarden 是 [NodeWarden](https://github.com/shuaiplus/NodeWarden) 的独立维护硬分叉。下方原项目链接用于来源说明；CloudWarden 的开发在本仓库进行。
+
 <p align="center">
   运行在 Cloudflare Workers 上的 Bitwarden 兼容服务端
 </p>
